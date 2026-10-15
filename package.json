@@ -1,0 +1,14 @@
+{
+  "name": "branch-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:live": "node test/live.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

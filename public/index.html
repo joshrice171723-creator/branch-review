@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Branch Review · Meta Clinic</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Branch Review home"
+        ><span class="mark">⑂</span> Branch Review
+        <span class="edition">LOCAL / 01</span></a
+      >
+      <div class="project">
+        <span class="dot"></span> Meta Clinic
+        <span class="divider">/</span> Review workspace
+      </div>
+      <div class="header-actions">
+        <button id="focus" class="quiet" aria-pressed="false">
+          Expand preview</button
+        ><button id="stop" class="quiet" disabled>Stop previews</button>
+      </div>
+    </header>
+    <main>
+      <aside class="branches">
+        <div class="rail-heading">
+          <div>
+            <p class="eyebrow">YOUR REPOSITORY</p>
+            <h1>Changes</h1>
+          </div>
+          <button
+            id="refresh"
+            class="icon"
+            title="Fetch branches from origin"
+            aria-label="Fetch branches from origin"
+          >
+            ↻
+          </button>
+        </div>
+        <label class="search"
+          ><span>⌕</span
+          ><input
+            id="search"
+            type="search"
+            placeholder="Find a branch…"
+            aria-label="Find a branch"
+        /></label>
+        <div class="list-heading">
+          <span>BRANCHES</span><span id="count">—</span>
+        </div>
+        <div id="branches" class="branch-list" aria-label="Git branches"></div>
+        <div class="rail-footer">
+          <span class="dot"></span> Runs on your machine<br /><small
+            >Committed revisions · isolated data</small
+          >
+        </div>
+      </aside>
+      <section class="workspace" aria-label="Application preview">
+        <div class="preview-toolbar">
+          <div class="preview-label">
+            <span class="small-mark">▣</span><span>Meta Clinic</span
+            ><span id="preview-status" class="badge">Not running</span>
+          </div>
+          <div class="segmented" role="group" aria-label="Compare versions">
+            <button id="original" aria-pressed="false" disabled>
+              Original <code id="original-sha">—</code></button
+            ><button id="changed" aria-pressed="true" disabled>
+              Changed <code id="changed-sha">—</code>
+            </button>
+          </div>
+          <button
+            id="reopen"
+            class="quiet"
+            disabled
+            title="Return both previews to the intake scenario; unsaved edits will be lost"
+          >
+            ↗ Reopen intake
+          </button>
+        </div>
+        <div id="preview-area">
+          <div id="empty" class="empty">
+            <span class="empty-mark">⑂</span>
+            <p class="eyebrow">SEE WHAT CHANGED</p>
+            <h2>From branch<br />to a real workflow.</h2>
+            <p>
+              Select a branch to open two independent<br />versions of Meta
+              Clinic, ready for review.
+            </p>
+            <div class="steps">
+              <span>01 &nbsp; Choose</span><span>02 &nbsp; Compare</span
+              ><span>03 &nbsp; Test</span>
+            </div>
+          </div>
+          <div id="loading" class="loading" hidden>
+            <div class="loader"></div>
+            <p class="eyebrow">PREPARING YOUR WORKSPACE</p>
+            <h2 id="phase">Preparing previews</h2>
+            <p>
+              First startup installs dependencies and prepares a database for
+              each version.
+            </p>
+            <pre id="progress"></pre>
+          </div>
+          <div id="frames" hidden></div>
+        </div>
+        <footer class="preview-footer">
+          <span id="context">One scenario. Two independent environments.</span
+          ><span id="connection">LOCAL PREVIEW</span>
+        </footer>
+      </section>
+      <aside class="review">
+        <p class="eyebrow">REVIEW BRIEF</p>
+        <h2 id="title">Choose a change</h2>
+        <p id="branch-name" class="muted">
+          Your branch’s latest commit appears here.
+        </p>
+        <label class="field-label" for="baseline">Compare against</label
+        ><select id="baseline">
+          <option value="parent">Previous commit</option>
+          <option value="merge-base">Common ancestor with main</option>
+        </select>
+        <p id="comparison-note" class="small muted">
+          Previous commit isolates the latest change.
+        </p>
+        <button id="start" class="primary" disabled>
+          Open review <span>↗</span>
+        </button>
+        <div id="error" role="alert" hidden></div>
+        <section class="scenario">
+          <div class="section-label">
+            <span>01 / TEST SCENARIO</span><span class="pill">INTAKE</span>
+          </div>
+          <h3>Meet Jordan Review</h3>
+          <p>
+            A partially completed intake, with visit reason and goals already
+            recorded.
+          </p>
+          <div class="scenario-meta">
+            <span>ROLE</span><strong>Clinic staff</strong><span>START</span
+            ><strong>Encounter → Intake</strong>
+          </div>
+          <ol>
+            <li>Compare the available answer controls.</li>
+            <li>Edit an answer in Changed.</li>
+            <li>Switch to Original. Its answers should stay unchanged.</li>
+            <li>Save, then reopen Changed to check persistence.</li>
+          </ol>
+          <p class="small muted">
+            Switching keeps each version open. Reopen returns to the saved
+            scenario; unsaved edits are not copied between versions.
+          </p>
+        </section>
+        <details class="files" open>
+          <summary>
+            <span>Changed files</span><span id="file-count">0</span>
+          </summary>
+          <ul id="files"></ul>
+        </details>
+        <p class="scope-note">
+          This first slice opens previews for testing. Approval and publishing
+          come next.
+        </p>
+      </aside>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
