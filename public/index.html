@@ -46,6 +46,11 @@
             placeholder="Find a branch…"
             aria-label="Find a branch"
         /></label>
+        <label for="branch-filter" class="repository-path">Show branches</label>
+        <select id="branch-filter">
+          <option value="unmerged">Unmerged into main</option>
+          <option value="all">All branches, including merged</option>
+        </select>
         <div class="list-heading">
           <span>BRANCHES</span><span id="count">—</span>
         </div>

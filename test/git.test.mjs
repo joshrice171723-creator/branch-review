@@ -26,6 +26,10 @@ git("checkout", "-b", "intake-controls");
 writeFileSync(path.join(fixture, "intake.txt"), "changed");
 git("commit", "-am", "Improve intake controls");
 const candidate = git("rev-parse", "HEAD");
+git('update-ref','refs/remotes/origin/intake-controls',candidate);
+git('update-ref','refs/heads/already-merged',base);
+git('update-ref','refs/heads/diverged',candidate);
+git('update-ref','refs/remotes/origin/diverged',base);
 process.env.META_CLINIC_REPO = fixture;
 const { branches, comparison } = await import("../adapter.mjs");
 
@@ -49,4 +53,14 @@ test("unknown refs and unsupported baselines cannot enter the lifecycle", async 
     comparison("refs/heads/intake-controls", "arbitrary"),
     /listed baseline/,
   );
+});
+test('merged refs are classified and identical local/remote copies collapse without hiding divergent versions', async () => {
+  const list = await branches();
+  assert.equal(list.find(b=>b.name==='already-merged').merged,true);
+  assert.equal(list.find(b=>b.name==='intake-controls').merged,false);
+  assert.deepEqual(list.find(b=>b.name==='intake-controls').aliases,['refs/remotes/origin/intake-controls']);
+  assert.equal(list.some(b=>b.ref==='refs/remotes/origin/intake-controls'),false);
+  assert.equal(list.filter(b=>b.name==='diverged'||b.name==='origin/diverged').length,2);
+  const remote = await comparison('refs/remotes/origin/intake-controls','parent');
+  assert.equal(remote.branch.sha,candidate);assert.equal(remote.branch.ref,'refs/remotes/origin/intake-controls');
 });

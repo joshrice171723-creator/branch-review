@@ -16,7 +16,7 @@ npm run desktop
 
 `npm run package:desktop` builds the Windows executable. `npm start` provides the browser interface at http://127.0.0.1:4310 instead; close that server before opening the desktop app. Only one controller can own the fixed ports.
 
-**Open repository** selects a local Git folder. Branch listing works with Git repositories; previews and publishing currently support Meta Clinic. Search a branch, choose Previous commit or Common ancestor with main, then **Open review**. First setup installs dependencies and migrates a separate database for each revision.
+**Open repository** selects a local Git folder. Branch listing works with Git repositories; previews and publishing currently support Meta Clinic. The branch list defaults to **Unmerged into main**, based on commit ancestry against origin/main. Identical local/remote copies are combined; divergent copies remain separate. **All branches, including merged** shows historical work. Use Refresh to fetch current remote refs. This is merge status, not a claim that a revision has been published. Search a branch, choose Previous commit or Common ancestor with main, then **Open review**. First setup installs dependencies and migrates a separate database for each revision.
 
 Original and Changed stay mounted while toggling, preserving their own forms and scroll positions. Reopen returns both to the saved scenario; save edits first. Stop previews stops the owned stacks and preserves databases. Closing the desktop app keeps previews running and is blocked during active operations.
 

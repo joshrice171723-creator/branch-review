@@ -651,6 +651,7 @@ li::marker {
 }
 
 .repository-path {margin:0 20px 14px;font-size:10px;color:#67766a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#branch-filter {width:calc(100% - 32px);margin:0 16px 18px}
 .active-review {padding:10px;background:#e8efe4;border-radius:6px;font-size:11px;overflow-wrap:anywhere;line-height:1.6}
 .check {display:flex;gap:9px;font-size:11px;line-height:1.7;margin:12px 0;align-items:flex-start}
 .check input {margin-top:4px;accent-color:#244f3e}

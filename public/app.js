@@ -32,7 +32,7 @@ function error(message) {
 }
 function branchList() {
   const query = $("search").value.toLowerCase();
-  const items = allBranches.filter((branch) =>
+  const items = visibleBranches().filter((branch) =>
     `${branch.name} ${branch.subject}`.toLowerCase().includes(query),
   );
   $("count").textContent = items.length;
@@ -50,7 +50,7 @@ function branchList() {
       ref.className = "branch-ref";
       ref.textContent = branch.name;
       const sha = document.createElement("code");
-      sha.textContent = branch.sha.slice(0, 7);
+      sha.textContent = branch.merged ? 'Merged' : branch.sha.slice(0, 7);
       meta.append(ref, sha);
       button.append(title, meta);
       button.title = `${branch.name}\n${branch.sha}`;
@@ -58,18 +58,23 @@ function branchList() {
       return button;
     }),
   );
+  if (!items.length) {
+    const empty = document.createElement('p'); empty.className = 'repository-path'; empty.textContent = query ? 'No matching branches.' : 'No unmerged branches.'; $('branches').append(empty);
+  }
 }
+function visibleBranches() { return allBranches.filter(b => $('branch-filter').value === 'all' || !b.merged); }
 async function loadBranches() {
   allBranches = await api("/api/branches");
+  await chooseVisibleBranch();
+}
+async function chooseVisibleBranch() {
+  const visible = visibleBranches();
   selected =
-    allBranches.find((b) => b.ref === selected?.ref) ||
-    allBranches.find((b) => b.ref === currentState.comparison?.branch.ref) ||
-    allBranches.find(
-      (b) => b.ref === "refs/heads/codex/intake-completion-ui",
-    ) ||
-    allBranches[0];
+    visible.find((b) => b.ref === selected?.ref) ||
+    visible.find((b) => b.ref === currentState.comparison?.branch.ref || b.aliases.includes(currentState.comparison?.branch.ref)) ||
+    visible[0];
   if (selected) await select(selected);
-  else branchList();
+  else { branchList(); $('start').disabled = true; $('title').textContent = 'No branches needing review'; $('branch-name').textContent = 'Choose All branches to inspect merged work.'; $('files').replaceChildren(); $('file-count').textContent = '0'; $('comparison-note').textContent = ''; }
 }
 async function select(branch) {
   selected = branch;
@@ -183,6 +188,7 @@ async function poll() {
   }
 }
 $("search").oninput = branchList;
+$('branch-filter').onchange = chooseVisibleBranch;
 $("baseline").onchange = () => selected && select(selected);
 $("original").onclick = () => toggle("original");
 $("changed").onclick = () => toggle("changed");

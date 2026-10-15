@@ -86,6 +86,7 @@ async function assertOwner() {
   }
 }
 export async function branches() {
+  const merged = new Set((await git('for-each-ref', '--merged=refs/remotes/origin/main', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin')).split('\n'));
   const output = await git(
     "for-each-ref",
     "--sort=-committerdate",
@@ -93,7 +94,7 @@ export async function branches() {
     "refs/heads",
     "refs/remotes/origin",
   );
-  return output
+  const inventory = output
     .split("\n")
     .filter(Boolean)
     .filter((line) => !line.startsWith("refs/remotes/origin/HEAD\t"))
@@ -106,13 +107,22 @@ export async function branches() {
         date,
         name: ref.replace(/^refs\/(heads\/|remotes\/)/, ""),
         remote: ref.startsWith("refs/remotes/"),
+        merged: merged.has(ref),
+        aliases: [],
       };
     });
+  const locals = new Map(inventory.filter(b => !b.remote).map(b => [b.name, b]));
+  return inventory.filter(branch => {
+    const localBranch = branch.remote && locals.get(branch.name.replace(/^origin\//, ''));
+    if (localBranch && localBranch.sha === branch.sha) { localBranch.aliases.push(branch.ref); return false; }
+    return true;
+  });
 }
 export async function comparison(ref, baseline) {
   if (!["merge-base", "parent"].includes(baseline))
     throw new Error("Choose a listed baseline.");
-  const branch = (await branches()).find((b) => b.ref === ref);
+  const entry = (await branches()).find((b) => b.ref === ref || b.aliases.includes(ref));
+  const branch = entry && {...entry, ref};
   if (!branch)
     throw new Error("Branch no longer exists. Refresh the branch list.");
   const main = await git("rev-parse", "refs/remotes/origin/main");
