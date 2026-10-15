@@ -60,11 +60,11 @@ test('re-enabling linked scrolling can request the current visible row immediate
 });
 
 test('guided focus waits for a matching heading without accepting outside messages',()=>{
-  const handlers={},parent={},scrolls=[];let available=false,observer,disconnected=0;
+  const handlers={},parent={postMessage(){}},scrolls=[];let available=false,observer,disconnected=0,timeout;
   const heading={textContent:'Guided intake · staff assisted',scrollIntoView:options=>scrolls.push(options.block)};
   const document={documentElement:{},querySelectorAll:selector=>selector==='tbody tr'?[]:available?[heading]:[]};
   vm.runInNewContext(`(${scrollBridge.toString()})('http://127.0.0.1:4310')`,{
-    document,parent,addEventListener:(name,fn)=>handlers[name]=fn,clearTimeout(){},setTimeout(){},requestAnimationFrame:fn=>fn(),
+    document,parent,addEventListener:(name,fn)=>handlers[name]=fn,clearTimeout(){},setTimeout(fn,ms){timeout=ms;},requestAnimationFrame:fn=>fn(),
     MutationObserver:class{constructor(fn){observer=fn;}observe(){}disconnect(){disconnected++;}}
   });
   const event={source:parent,origin:'https://outside.example',data:{type:'review:focus',key:heading.textContent}};
@@ -73,4 +73,8 @@ test('guided focus waits for a matching heading without accepting outside messag
   handlers.message({...event,origin:'http://127.0.0.1:4310',data:{type:'review:scroll',snapshot:{route:'/clinic',positions:[]}}});
   handlers.scroll(); // Pending focus must not exchange initial page-top positions.
   available=true;observer();assert.deepEqual(scrolls,['start']);assert.equal(disconnected,1);
+  assert.equal(timeout,60000,'slow startup must have time to render the target');
+  available=false;handlers.message({...event,origin:'http://127.0.0.1:4310'});
+  handlers.wheel({type:'wheel'});available=true;observer();
+  assert.deepEqual(scrolls,['start'],'manual navigation cancels a pending jump');
 });

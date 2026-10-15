@@ -2,10 +2,11 @@
 export function scrollBridge(appOrigin, shortcut) {
   let applying = false, focusing = false;
   let focusObserver, focusTimer;
+  function cancelFocus() { focusObserver?.disconnect(); clearTimeout(focusTimer); focusing=false; }
   const route = () => location.pathname + location.search;
-  const activate = () => parent.postMessage({type:'review:active'},appOrigin);
+  const activate = event => {if(event?.type!=='focusin')cancelFocus();parent.postMessage({type:'review:active'},appOrigin);};
   addEventListener('pointerdown',activate,true);addEventListener('focusin',activate,true);addEventListener('wheel',activate,{passive:true});
-  addEventListener('keydown',event=>{const command=shortcut?.(event);if(command){event.preventDefault();parent.postMessage({type:'review:shortcut',command},appOrigin);}});
+  addEventListener('keydown',event=>{if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End','Tab',' '].includes(event.key))cancelFocus();const command=shortcut?.(event);if(command){event.preventDefault();parent.postMessage({type:'review:shortcut',command},appOrigin);}});
   function selector(element) {
     if (element === document.scrollingElement) return ':root';
     if (element.id) return '#' + CSS.escape(element.id);
@@ -62,7 +63,7 @@ export function scrollBridge(appOrigin, shortcut) {
     if(event.source===parent && event.origin===appOrigin && event.data?.type==='review:request-scroll')parent.postMessage({type:'review:scroll',snapshot:capture()},appOrigin);
     if (event.source === parent && event.origin === appOrigin && event.data?.type === 'review:scroll') restore(event.data.snapshot);
     if(event.source === parent && event.origin === appOrigin && event.data?.type === 'review:focus' && typeof event.data.key === 'string') {
-      focusObserver?.disconnect();clearTimeout(focusTimer);
+      cancelFocus();
       focusing=true;
       const find = () => {
         const row=Array.from(document.querySelectorAll('tbody tr')).find(row=>row.cells[0]?.textContent.trim()===event.data.key);
@@ -73,8 +74,8 @@ export function scrollBridge(appOrigin, shortcut) {
         requestAnimationFrame(()=>{applying=false;});return true;
       };
       if(!find()) {
-        focusObserver=new MutationObserver(()=>{if(find())focusObserver.disconnect();});
-        focusObserver.observe(document.documentElement,{childList:true,subtree:true});focusTimer=setTimeout(()=>{focusObserver.disconnect();focusing=false;},10000);
+        focusObserver=new MutationObserver(()=>{if(focusing && find())focusObserver.disconnect();});
+        focusObserver.observe(document.documentElement,{childList:true,subtree:true});focusTimer=setTimeout(cancelFocus,60000);
       }
     }
   });
