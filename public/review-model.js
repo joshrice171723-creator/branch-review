@@ -9,7 +9,7 @@ export function itemStatus(record, item) {
 export const isComplete = status => status === 'passed' || status === 'not-applicable';
 export function matchesItem(record,item,query='',filter='all') {
   const status=itemStatus(record,item);
-  return `${item.title} ${item.id} ${item.description || ''}`.toLowerCase().includes(query.toLowerCase().trim()) &&
+  return `${item.title} ${item.id} ${item.description || ''} ${item.instructions || ''} ${item.expected || ''} ${item.steps.join(' ')}`.toLowerCase().includes(query.toLowerCase().trim()) &&
     (filter==='all' || filter==='remaining' && !isComplete(status) || filter==='attention' && ['needs-fixes','blocked'].includes(status) || filter==='complete' && isComplete(status));
 }
 export function reviewCounts(record) {

@@ -7,3 +7,9 @@ export async function loadPlan(git,sha,files) {
   if(Buffer.byteLength(raw)>64000)throw new Error('Review manifest is too large.');
   try{return validateManifest(JSON.parse(raw));}catch(error){throw new Error(`Invalid .branch-review.json: ${error.message}`);}
 }
+
+export async function candidateComparison(git,comparison,candidate) {
+  const files=(await git('diff','--name-only','-z',candidate.main,candidate.sha,'--')).split('\0').filter(Boolean);
+  const plan=await loadPlan(git,candidate.sha,files);
+  return {...comparison,base:candidate.main,main:candidate.main,files,plan};
+}

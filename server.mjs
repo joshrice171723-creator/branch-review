@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, startReview, stopReview, restoreReview, prepare } from './adapter.mjs';
 import { previewProxy } from './proxy.mjs';
 import { ReviewStore, scenarioRecipe, digest } from './reviews.mjs';
-import { loadPlan } from './plans.mjs';
+import { loadPlan, candidateComparison } from './plans.mjs';
 import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
@@ -62,11 +62,12 @@ async function mutate(endpoint, data) {
   if (endpoint === '/api/approve') return store.approve(record.id,data.reviewer);
   if (endpoint === '/api/candidate') {
     const candidate = await delivery.candidate(record);
+    state.comparison = await candidateComparison(git,state.comparison,candidate);
     if (state.changed.sha === candidate.sha && state.original.sha === candidate.main) { state.integration=candidate; await activate(); return; }
     state.status='preparing'; state.integration=candidate;
     state.original = await prepare('original',candidate.main);
     state.changed = await prepare('changed',candidate.sha);
-    state.status='ready'; state.comparison={...state.comparison,base:candidate.main,main:candidate.main};
+    state.status='ready';
     await activate(); return;
   }
   if (endpoint === '/api/ship') {

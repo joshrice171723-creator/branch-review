@@ -59,6 +59,7 @@ export function scrollBridge(appOrigin, shortcut) {
     if (!applying) parent.postMessage({type: 'review:scroll', snapshot: capture()}, appOrigin);
   }, true);
   addEventListener('message', event => {
+    if(event.source===parent && event.origin===appOrigin && event.data?.type==='review:request-scroll')parent.postMessage({type:'review:scroll',snapshot:capture()},appOrigin);
     if (event.source === parent && event.origin === appOrigin && event.data?.type === 'review:scroll') restore(event.data.snapshot);
     if(event.source === parent && event.origin === appOrigin && event.data?.type === 'review:focus' && typeof event.data.key === 'string') {
       focusObserver?.disconnect();clearTimeout(focusTimer);

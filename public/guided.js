@@ -57,7 +57,8 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
   $('item-previous').onclick=()=>{const items=getState().record.manifest.scenarios,index=items.findIndex(item=>item.id===itemId);if(index>0)void navigate(items[index-1].id);};
   $('show-results').onclick=()=>navigate(itemId,'results');
   $('resume-review').onclick=()=>{const r=getState().record;void navigate(r.manifest.scenarios.find(item=>!isComplete(itemStatus(r,item)))?.id || itemId);};
-  $('item-notes').oninput=$('item-reason').oninput=$('item-outcome').onchange=edited;
+  $('item-notes').oninput=$('item-reason').oninput=edited;
+  $('item-outcome').onchange=()=>{if(!$('item-outcome').value)$('item-reason').value='';edited();};
   $('retry-item-save').onclick=()=>flush();
   $('prepare-handoff').onclick=async()=>{if(!await flush())return;$('handoff-text').value=fixRequest(getState().record);$('handoff-panel').hidden=false;};
   $('copy-handoff').onclick=async()=>{try{await navigator.clipboard.writeText($('handoff-text').value);$('handoff-status').textContent='Copied. Paste this into the Codex chat working on the branch.';}catch{$('handoff-text').focus();$('handoff-text').select();$('handoff-status').textContent='Select and copy the request below.';}};

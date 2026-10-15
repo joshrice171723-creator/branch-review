@@ -20,7 +20,7 @@ function preview(rowY) {
     getComputedStyle: () => ({overflow: 'auto', overflowX: 'auto', overflowY: 'auto'}),
     addEventListener: (name, fn) => { handlers[name] = fn; }, requestAnimationFrame: fn => frames.push(fn)};
   vm.runInNewContext(`(${scrollBridge.toString()})('http://127.0.0.1:4310')`, context);
-  return {root, pane, sent, frames, handlers, receive(snapshot, origin = 'http://127.0.0.1:4310', source = parent) {
+  return {root, pane, sent, frames, handlers, request(origin='http://127.0.0.1:4310'){handlers.message({origin,source:parent,data:{type:'review:request-scroll'}});}, receive(snapshot, origin = 'http://127.0.0.1:4310', source = parent) {
     handlers.message({origin, source, data: {type: 'review:scroll', snapshot}});
   }};
 }
@@ -51,4 +51,10 @@ test('scroll messages reject other origins, other windows and different routes; 
   assert.equal(target.root.scrollTop, 0);
   target.receive(snapshot);
   assert.equal(target.root.scrollTop, 900);
+});
+
+test('re-enabling linked scrolling can request the current visible row immediately',()=>{
+  const source=preview(1500);source.root.scrollTop=1400;
+  source.request('https://outside.example');assert.equal(source.sent.length,0);
+  source.request();assert.equal(source.sent[0].snapshot.anchor.key,'WF-011');assert.equal(source.sent[0].snapshot.anchor.top,100);
 });

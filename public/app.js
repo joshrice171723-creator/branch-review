@@ -71,7 +71,7 @@ function branchList() {
       meta.append(ref, sha);
       button.append(title, meta);
       button.title = `${branch.name}\n${branch.sha}`;
-      button.onclick = () => select(branch);
+      button.onclick = () => select(branch,true);
       return button;
     }),
   );
@@ -115,9 +115,10 @@ async function chooseVisibleBranch() {
   if (selected) await select(selected);
   else { branchList(); $('start').disabled = true; $('title').textContent = 'No branches needing review'; $('branch-name').textContent = 'Choose All branches to inspect merged work.'; $('files').replaceChildren(); $('file-count').textContent = '0'; $('comparison-note').textContent = ''; }
 }
-async function select(branch) {
+async function select(branch,reveal=false) {
   selected = branch;
-  $('branch-brief').open = !currentState.record || ![branch.ref,...branch.aliases].includes(currentState.comparison?.branch.ref);
+  $('branch-brief').open = reveal || !currentState.record || ![branch.ref,...branch.aliases].includes(currentState.comparison?.branch.ref);
+  if(reveal)$('branch-brief').scrollIntoView({block:'start'});
   branchList();
   $("title").textContent = branch.subject;
   $("branch-name").textContent = branch.name;
@@ -213,7 +214,8 @@ function applyLayout() {
   try{localStorage.setItem('branch-review:layout',JSON.stringify({mode:$('layout-mode').value,sync:$('sync-scroll').checked,split:$('split-position').value}));}catch{}
 }
 try{const layout=JSON.parse(localStorage.getItem('branch-review:layout')||'{}');if(['toggle','side-by-side'].includes(layout.mode))$('layout-mode').value=layout.mode;if(typeof layout.sync==='boolean')$('sync-scroll').checked=layout.sync;if(Number(layout.split)>=30 && Number(layout.split)<=70)$('split-position').value=layout.split;}catch{}
-$('layout-mode').onchange=$('sync-scroll').onchange=$('split-position').oninput=applyLayout;
+$('layout-mode').onchange=$('split-position').oninput=applyLayout;
+$('sync-scroll').onchange=()=>{applyLayout();if($('sync-scroll').checked)$(`frame-${active}`)?.contentWindow.postMessage({type:'review:request-scroll'},`http://127.0.0.1:${currentState[active].proxy}`);};
 let focusedItem = '';
 function focusItem(item) {
   if(!item?.focus)return;
@@ -303,8 +305,8 @@ async function poll() {
 }
 $("search").oninput = branchList;
 $('branch-filter').onchange = chooseVisibleBranch;
-$("baseline").onchange = () => { $('commit-choice').hidden=$('baseline').value!=='commit';if(selected)void select(selected); };
-$('baseline-commit').onchange=()=>selected && select(selected);
+$("baseline").onchange = () => { $('commit-choice').hidden=$('baseline').value!=='commit';if(selected)void select(selected,true); };
+$('baseline-commit').onchange=()=>selected && select(selected,true);
 $("original").onclick = () => toggle("original");
 $("changed").onclick = () => toggle("changed");
 $("focus").onclick = () => {
