@@ -133,7 +133,8 @@ async function select(branch,reveal=false) {
   branchList();
   $("title").textContent = branch.subject;
   $("branch-name").textContent = branch.name;
-  $("start").disabled = currentState.busy;
+  $("start").disabled = true;
+  $('comparison-note').textContent='Loading comparison…';$('files').replaceChildren();$('file-count').textContent='—';$('plan-count').textContent='Loading review plan…';
   const generation = ++selectionGeneration;
   try {
     selectedComparison=null;$('view-diff').disabled=true;$('download-plan').disabled=true;$('plan-summary').textContent='Loading review plan…';$('plan-items').replaceChildren();
@@ -146,7 +147,7 @@ async function select(branch,reveal=false) {
       `/api/comparison?ref=${encodeURIComponent(branch.ref)}&baseline=${$("baseline").value}&commit=${$('baseline-commit').value}`,
     );
     if (generation !== selectionGeneration) return;
-    selectedComparison=result;$('view-diff').disabled=!result.files.length;
+    selectedComparison=result;$('start').disabled=currentState.busy;$('view-diff').disabled=!result.files.length;
     $('download-plan').disabled=false;$('plan-count').textContent=`Review plan · ${result.plan.scenarios.length} items`;
     $('plan-summary').textContent=result.plan.summary || result.plan.title;$('plan-source').textContent=result.plan.source;
     $('plan-items').replaceChildren(...result.plan.scenarios.map(item=>{const entry=document.createElement('li');entry.textContent=item.title;entry.title=item.instructions || item.steps.join('\n');return entry;}));
@@ -163,6 +164,7 @@ async function select(branch,reveal=false) {
         ? "This branch is already contained in main. Choose Previous commit to inspect its latest change."
         : `${result.base.slice(0, 7)} → ${result.branch.sha.slice(0, 7)} · ${result.files.length} changed files`;
   } catch (e) {
+    if(generation!==selectionGeneration)return;
     $('plan-summary').textContent=e.message;
     error(e.message);
   }
@@ -271,6 +273,8 @@ async function poll() {
     $("loading").hidden = !preparing;
     $("frames").hidden = !ready;
     $("phase").textContent = currentState.phase;
+    $('loading-label').textContent=currentState.status==='stopping'?'STOPPING PREVIEWS':'PREPARING YOUR WORKSPACE';
+    $('loading-description').textContent=currentState.status==='stopping'?'Saved reviews and preview databases will be kept.':'First startup installs dependencies and prepares a database for each version.';
     $('diagnostic-log').textContent=currentState.log.map(entry=>`${entry.at} ${entry.message}`).join('\n')+(currentState.error?`\n${currentState.error}`:'');
     $("progress").textContent =
       currentState.log.map((entry) => entry.message).join("\n") +
@@ -280,11 +284,11 @@ async function poll() {
     $("preview-status").textContent = ready
       ? healthResult?.key===healthKey() && !healthResult.healthy ? 'Needs attention' : "Running"
       : preparing
-        ? "Preparing"
+        ? currentState.status==='stopping'?'Stopping':"Preparing"
         : currentState.status === "error"
           ? "Needs attention"
           : "Not running";
-    $("start").disabled = !selected || currentState.busy;
+    $("start").disabled = !selectedComparison || currentState.busy;
     $("start").textContent = currentState.busy
       ? "Preparing…"
       : ready
@@ -334,6 +338,7 @@ $("reopen").onclick = () => {
     mountFrames(currentState, true);
 };
 $("start").onclick = async () => {
+  if(!selectedComparison || currentState.busy)return;
   if(!await reviewWorkflow.flush())return;
   if (
     frameKey &&

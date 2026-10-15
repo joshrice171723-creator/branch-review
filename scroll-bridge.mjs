@@ -65,8 +65,9 @@ export function scrollBridge(appOrigin, shortcut) {
       focusObserver?.disconnect();clearTimeout(focusTimer);
       const find = () => {
         const row=Array.from(document.querySelectorAll('tbody tr')).find(row=>row.cells[0]?.textContent.trim()===event.data.key);
-        if(!row)return false;
-        row.scrollIntoView({block:'center',behavior:'instant'});return true;
+        const target=row || Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]')).find(heading=>heading.textContent.trim()===event.data.key);
+        if(!target)return false;
+        target.scrollIntoView({block:row?'center':'start',behavior:'instant'});return true;
       };
       if(!find()) {
         focusObserver=new MutationObserver(()=>{if(find())focusObserver.disconnect();});

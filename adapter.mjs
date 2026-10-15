@@ -262,6 +262,8 @@ export async function startReview(ref, baseline, baselineCommit) {
   state.original = null;
   state.changed = null;
   state.log = [];
+  state.lastOutput = '';
+  progress('Checking the selected branch and review plan');
   try {
     const selected = await comparison(ref, baseline, baselineCommit);
     Object.assign(state, { comparison: selected });
@@ -289,6 +291,8 @@ export async function startReview(ref, baseline, baselineCommit) {
 }
 export async function stopReview() {
   state.status = "stopping";
+  state.lastOutput = '';
+  progress('Stopping both previews; saved review data will be kept');
   try {
     await assertOwner();
     for (const side of ["original", "changed"]) {

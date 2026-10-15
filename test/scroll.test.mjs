@@ -58,3 +58,17 @@ test('re-enabling linked scrolling can request the current visible row immediate
   source.request('https://outside.example');assert.equal(source.sent.length,0);
   source.request();assert.equal(source.sent[0].snapshot.anchor.key,'WF-011');assert.equal(source.sent[0].snapshot.anchor.top,100);
 });
+
+test('guided focus waits for a matching heading without accepting outside messages',()=>{
+  const handlers={},parent={},scrolls=[];let available=false,observer,disconnected=0;
+  const heading={textContent:'Guided intake · staff assisted',scrollIntoView:options=>scrolls.push(options.block)};
+  const document={documentElement:{},querySelectorAll:selector=>selector==='tbody tr'?[]:available?[heading]:[]};
+  vm.runInNewContext(`(${scrollBridge.toString()})('http://127.0.0.1:4310')`,{
+    document,parent,addEventListener:(name,fn)=>handlers[name]=fn,clearTimeout(){},setTimeout(){},
+    MutationObserver:class{constructor(fn){observer=fn;}observe(){}disconnect(){disconnected++;}}
+  });
+  const event={source:parent,origin:'https://outside.example',data:{type:'review:focus',key:heading.textContent}};
+  handlers.message(event);assert.equal(observer,undefined);
+  handlers.message({...event,origin:'http://127.0.0.1:4310'});assert.equal(scrolls.length,0);
+  available=true;observer();assert.deepEqual(scrolls,['start']);assert.equal(disconnected,1);
+});

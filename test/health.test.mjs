@@ -10,3 +10,11 @@ test('health distinguishes exact ready builds, stopped services and stale revisi
   fail=false;dirty=true;assert.equal((await previewHealth(snapshot,fetcher)).sides.original.ok,false);
   assert.equal((await previewHealth({...snapshot,status:'idle'},()=>{throw Error('Should not fetch');})).sides.original.ok,false);
 });
+
+test('older previews without build metadata explain the limitation and never pass approval health',async()=>{
+  const snapshot={status:'ready',original:{api:1,web:2,sha:'a'},changed:{api:3,web:4,sha:'b'}};
+  const html=await previewHealth(snapshot,async()=>({ok:true,json:async()=>{throw new SyntaxError('Unexpected token <');}}));
+  assert.equal(html.sides.original.ok,false);assert.match(html.sides.original.message,/cannot be verified for approval/);
+  const missing=await previewHealth(snapshot,async()=>({ok:true,json:async()=>({})}));
+  assert.equal(missing.sides.changed.ok,false);assert.match(missing.sides.changed.message,/identity is missing/);
+});

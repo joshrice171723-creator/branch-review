@@ -4,7 +4,7 @@ import path from 'node:path';
 import { qaManifest } from './qa-manifest.mjs';
 import { canApprove, reviewCounts } from './public/review-model.js';
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export const defaultManifest = { version: 1, title: 'Jordan Review · intake', scenarios: [{ id: 'intake', title: 'Partially completed intake', path: ':intake', steps: ['Compare the answer controls in Original and Changed.', 'Edit and save an answer in Changed.', 'Confirm Original retains its previous answer.', 'Reopen Changed and confirm the saved answer persists.'] }] };
+export const defaultManifest = { version: 1, title: 'Jordan Review · intake', scenarios: [{ id: 'intake', title: 'Partially completed intake', path: ':intake', focus: 'Guided intake · staff assisted', steps: ['Compare the answer controls in Original and Changed.', 'Edit and save an answer in Changed.', 'Confirm Original retains its previous answer.', 'Reopen Changed and confirm the saved answer persists.'] }] };
 export function scenarioRecipe(files = []) { return files.includes('apps/api/app/services/qa/office_qa.rb') ? 'qa-scenario.rb' : 'scenario.rb'; }
 export function manifestForFiles(files = []) {
   return scenarioRecipe(files) === 'qa-scenario.rb' ? qaManifest : {...defaultManifest,summary:'Starter intake comparison. Confirm these checks cover this branch before approving it.',source:'Built-in intake scenario. No branch-specific review plan was supplied.'};
@@ -20,7 +20,7 @@ export function validateManifest(value) {
     if (item.path !== ':intake' && !/^(?:\/clinic(?:\/|$)|\/qa$)/.test(new URL(item.path, 'http://localhost').pathname)) throw new Error('Scenario destinations must stay inside /clinic or /qa.');
     if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 20 || item.steps.some(s => typeof s !== 'string' || !s.trim() || s.length > 500)) throw new Error('Each scenario needs 1–20 short test steps.');
     for (const field of ['description','instructions','expected']) if (item[field] !== undefined && (typeof item[field] !== 'string' || item[field].length > 2000)) throw new Error('Item descriptions must be text up to 2,000 characters.');
-    if (item.focus !== undefined && (typeof item.focus !== 'string' || item.focus.length > 160)) throw new Error('Item focus must be a short row identifier.');
+    if (item.focus !== undefined && (typeof item.focus !== 'string' || item.focus.length > 160)) throw new Error('Item focus must be a short row identifier or heading.');
     if (item.originalPath !== undefined) validateManifest({version:1,scenarios:[{id:'original',title:'Original',path:item.originalPath,steps:['Open']}]});
   }
   return { version: value.version, title: String(value.title || 'Branch review').slice(0, 160), summary:String(value.summary || '').slice(0,2000), source:String(value.source || 'Committed review manifest').slice(0,300), scenarios: value.scenarios.map(({id,title,path,steps,description='',instructions='',expected='',focus='',originalPath}) => ({id,title,path,steps,description,instructions,expected,focus,...(originalPath?{originalPath}:{})})) };
