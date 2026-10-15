@@ -1,6 +1,6 @@
 // Runs inside each isolated preview; only its review parent can exchange positions.
 export function scrollBridge(appOrigin, shortcut) {
-  let applying = false;
+  let applying = false, focusing = false;
   let focusObserver, focusTimer;
   const route = () => location.pathname + location.search;
   const activate = () => parent.postMessage({type:'review:active'},appOrigin);
@@ -32,7 +32,7 @@ export function scrollBridge(appOrigin, shortcut) {
     } : null};
   }
   function restore(snapshot) {
-    if (snapshot?.route !== route() || !Array.isArray(snapshot.positions)) return;
+    if (focusing || snapshot?.route !== route() || !Array.isArray(snapshot.positions)) return;
     applying = true;
     for (const position of snapshot.positions.slice(0, 200)) {
       if (typeof position.selector !== 'string' || !Number.isFinite(position.x) || !Number.isFinite(position.y)) continue;
@@ -56,22 +56,25 @@ export function scrollBridge(appOrigin, shortcut) {
     requestAnimationFrame(() => { applying = false; });
   }
   addEventListener('scroll', () => {
-    if (!applying) parent.postMessage({type: 'review:scroll', snapshot: capture()}, appOrigin);
+    if (!applying && !focusing) parent.postMessage({type: 'review:scroll', snapshot: capture()}, appOrigin);
   }, true);
   addEventListener('message', event => {
     if(event.source===parent && event.origin===appOrigin && event.data?.type==='review:request-scroll')parent.postMessage({type:'review:scroll',snapshot:capture()},appOrigin);
     if (event.source === parent && event.origin === appOrigin && event.data?.type === 'review:scroll') restore(event.data.snapshot);
     if(event.source === parent && event.origin === appOrigin && event.data?.type === 'review:focus' && typeof event.data.key === 'string') {
       focusObserver?.disconnect();clearTimeout(focusTimer);
+      focusing=true;
       const find = () => {
         const row=Array.from(document.querySelectorAll('tbody tr')).find(row=>row.cells[0]?.textContent.trim()===event.data.key);
         const target=row || Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]')).find(heading=>heading.textContent.trim()===event.data.key);
         if(!target)return false;
-        target.scrollIntoView({block:row?'center':'start',behavior:'instant'});return true;
+        applying=true;focusing=false;
+        target.scrollIntoView({block:row?'center':'start',behavior:'instant'});
+        requestAnimationFrame(()=>{applying=false;});return true;
       };
       if(!find()) {
         focusObserver=new MutationObserver(()=>{if(find())focusObserver.disconnect();});
-        focusObserver.observe(document.documentElement,{childList:true,subtree:true});focusTimer=setTimeout(()=>focusObserver.disconnect(),10000);
+        focusObserver.observe(document.documentElement,{childList:true,subtree:true});focusTimer=setTimeout(()=>{focusObserver.disconnect();focusing=false;},10000);
       }
     }
   });

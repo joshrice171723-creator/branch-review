@@ -8,7 +8,11 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   let scenario = 'intake', rendered = '', screenshot = null, screenshotKey = null, screenshotContext = null, draftKey = '', savingFinding = false, capturing = false;
   const retestNotes = new Map();
   const contexts = {original:{}, changed:{}};
-  const needsNavigation=item=>['original','changed'].some(side=>contexts[side].location && contexts[side].location!==previewDestination(item,side,getState()));
+  const needsNavigation=item=>['original','changed'].some(side=>{
+    const actual=contexts[side].location;if(!actual)return false;
+    const expected=previewDestination(item,side,getState());
+    return item.focus?actual.split('#')[0]!==expected.split('#')[0]:actual!==expected;
+  });
   const guide = guided({api,getState,poll,error,needsNavigation,onSelect:next=>{scenario=next;rendered='';render(getState());reopen(needsNavigation(getState().record.manifest.scenarios.find(item=>item.id===next)));}});
   const currentKey = () => findingKey(getState().record?.id, scenario, getSide());
   const notice = message => { $('review-notice').textContent = message; };

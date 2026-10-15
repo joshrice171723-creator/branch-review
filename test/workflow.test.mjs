@@ -69,6 +69,16 @@ test('broken or unavailable local draft storage does not break review controls',
   assert.equal(saveDraft({setItem(){throw Error('Full');}},'key',{expected:'a',actual:'b'}),false);
 });
 
+test('heading focus does not reload an intake screen merely because the app removed its anchor',t=>{
+  const h=harness(t),item=h.state.record.manifest.scenarios[0];
+  h.state.original={scenario:{path:'/clinic/patients/1/encounters/2#nurse-workspace'}};
+  h.state.changed={scenario:{path:'/clinic/patients/1/encounters/2#nurse-workspace'}};
+  h.view.context('changed',{location:'/clinic/patients/1/encounters/2'});
+  assert.equal(h.view.needsNavigation(item),false);
+  h.view.context('changed',{location:'/clinic/patients/1'});
+  assert.equal(h.view.needsNavigation(item),true);
+});
+
 test('Next leaves unchecked items unfinished and requires an explicit continue choice', async t => {
   let h;
   h=harness(t,{api:async(path,data)=>{if(path==='/api/cursor')h.state.record.cursor={itemId:data.itemId,view:data.view};}});

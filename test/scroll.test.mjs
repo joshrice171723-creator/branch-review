@@ -64,11 +64,13 @@ test('guided focus waits for a matching heading without accepting outside messag
   const heading={textContent:'Guided intake · staff assisted',scrollIntoView:options=>scrolls.push(options.block)};
   const document={documentElement:{},querySelectorAll:selector=>selector==='tbody tr'?[]:available?[heading]:[]};
   vm.runInNewContext(`(${scrollBridge.toString()})('http://127.0.0.1:4310')`,{
-    document,parent,addEventListener:(name,fn)=>handlers[name]=fn,clearTimeout(){},setTimeout(){},
+    document,parent,addEventListener:(name,fn)=>handlers[name]=fn,clearTimeout(){},setTimeout(){},requestAnimationFrame:fn=>fn(),
     MutationObserver:class{constructor(fn){observer=fn;}observe(){}disconnect(){disconnected++;}}
   });
   const event={source:parent,origin:'https://outside.example',data:{type:'review:focus',key:heading.textContent}};
   handlers.message(event);assert.equal(observer,undefined);
   handlers.message({...event,origin:'http://127.0.0.1:4310'});assert.equal(scrolls.length,0);
+  handlers.message({...event,origin:'http://127.0.0.1:4310',data:{type:'review:scroll',snapshot:{route:'/clinic',positions:[]}}});
+  handlers.scroll(); // Pending focus must not exchange initial page-top positions.
   available=true;observer();assert.deepEqual(scrolls,['start']);assert.equal(disconnected,1);
 });
