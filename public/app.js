@@ -82,12 +82,21 @@ function branchList() {
   }
 }
 function visibleBranches() { return allBranches.filter(b => $('branch-filter').value === 'all' || !b.merged); }
-async function loadBranches() {
+let inventoryLoading=false;
+async function loadBranches(refreshSelection=true) {
+  if(inventoryLoading)return;
+  inventoryLoading=true;
+  try {
+  const previous=JSON.stringify(allBranches);
   allBranches = await api("/api/branches");
+  if(!refreshSelection && JSON.stringify(allBranches)===previous)return;
   const reviewed=currentState.record?.identity, latest=reviewed && allBranches.find(branch=>[branch.ref,...branch.aliases].includes(reviewed.ref));
   $('revision-warning').hidden=!reviewed || latest?.sha===reviewed.source;
   $('revision-warning').textContent=reviewed && latest?.sha!==reviewed.source ? latest?`This branch has a new commit (${latest.sha.slice(0,7)}). You are reviewing ${reviewed.source.slice(0,7)}. Open the latest branch to retest; saved results stay attached to their original version.`:'The reviewed branch is no longer listed. Saved evidence remains available.':'';
-  await chooseVisibleBranch();
+  const latestSelection=selected && allBranches.find(branch=>branch.ref===selected.ref);
+  if(refreshSelection || selected && latestSelection?.sha!==selected.sha)await chooseVisibleBranch();
+  else branchList();
+  }finally{inventoryLoading=false;}
 }
 let healthChecking=false, lastHealth=0, healthResult=null;
 const healthKey=()=>`${currentState.status}:${currentState.original?.sha}:${currentState.changed?.sha}`;
@@ -389,3 +398,4 @@ window.addEventListener("message", (event) => {
 await poll();
 await loadBranches().catch((e) => error(e.message));
 setInterval(poll, 2000);
+setInterval(()=>{if(!currentState.busy)void loadBranches(false).catch(e=>error(e.message));},30000);
