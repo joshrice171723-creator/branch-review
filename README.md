@@ -1,50 +1,94 @@
 # Branch Review
 
-A separate local app for reviewing Meta Clinic branches in two interactive, isolated previews.
+A Windows desktop app for reviewing local Git branches. Meta Clinic is the first supported preview adapter.
 
-## Run
+## Open
+
+Run `../desktop/Branch Review-win32-x64/Branch Review.exe`. Keep the executable with the rest of that folder. The current pilot uses the saved configuration for this workspace and restores the running intake previews. This is a local unsigned build; Meta Clinic's development prerequisites remain required.
+
+From source:
 
 ```powershell
-node server.mjs
+npm ci
+node node_modules/electron/install.js
+npm run desktop
 ```
 
-Open <http://127.0.0.1:4310>. The review app itself has no package dependencies. Meta Clinic previews need its pinned Ruby, Node, pnpm, PostgreSQL client tools, Python, and Docker prerequisites.
+`npm run package:desktop` builds the Windows executable. `npm start` provides the browser interface at http://127.0.0.1:4310 instead; close that server before opening the desktop app. Only one controller can own the fixed ports.
 
-Search the branch list, choose a baseline, and select **Open review**. **Original** and **Changed** remain mounted while toggling, so each retains its own form and scroll state. **Reopen intake** signs into the seeded staff account and returns both versions to Jordan Review's encounter; save first. **Stop previews** stops only the owned Meta Clinic stacks and preserves their databases.
+**Open repository** selects a local Git folder. Branch listing works with Git repositories; previews and publishing currently support Meta Clinic. Search a branch, choose Previous commit or Common ancestor with main, then **Open review**. First setup installs dependencies and migrates a separate database for each revision.
 
-The first pilot uses `codex/intake-completion-ui` and **Previous commit**: `8968d0b8` versus `a4948139`. It compares the real structured-intake control change. The intake scenario is available for other compatible branches, but automatic impact discovery is not implemented; a branch changing billing still opens the explicit intake scenario.
+Original and Changed stay mounted while toggling, preserving their own forms and scroll positions. Reopen returns both to the saved scenario; save edits first. Stop previews stops the owned stacks and preserves databases. Closing the desktop app keeps previews running and is blocked during active operations.
 
 ## Local configuration
 
-Defaults target `C:/Users/joshr/Desktop/meta_clinic`. Optional `.local/config.json` accepts `repository`, `previewRoot`, and `toolchain` (directory containing the pinned `pnpm.cmd`). `META_CLINIC_REPO` is an alternative when no repository override is configured. Never commit local configuration or runtime records.
+The pilot repository is `C:/Users/joshr/Desktop/meta_clinic`. `.local/config.json` accepts `repository`, `previewRoot`, and `toolchain` (the directory containing pinned pnpm.cmd). The desktop app stores its selected data directory in its user-data `desktop.json`. `BRANCH_REVIEW_HOME` overrides the data directory; `META_CLINIC_REPO` overrides the repository. Configuration, screenshots and review records are never committed.
 
-The current workspace keeps previews under `../../work/previews` and pnpm 11.19.0 under `../../work/toolchain/node_modules/.bin`. To prepare that private package manager on a fresh workspace:
+This workspace uses `../../work/previews` and `../../work/toolchain/node_modules/.bin`. The private package manager can be prepared with:
 
 ```powershell
 npm install --prefix ../../work/toolchain pnpm@11.19.0 --no-audit --no-fund
 ```
 
-Choose a new, nonexistent previewRoot for a new installation. The app creates an ownership marker there and refuses to adopt unrelated existing directories. Repository worktrees and databases are created on demand; the developer's primary checkout is never switched or merged.
+Meta Clinic also needs its pinned Ruby, Node, PostgreSQL client tools, Python and Docker prerequisites. Choose a new nonexistent previewRoot for a new installation. The app writes an ownership marker and refuses unrelated directories. It never switches the primary checkout or discards worktree edits.
 
-| Resource        | Original              | Changed              |
-| --------------- | --------------------- | -------------------- |
-| Preview gateway | 4311                  | 4312                 |
-| Meta Clinic web | 3410                  | 3420                 |
-| Meta Clinic API | 3411                  | 3421                 |
-| PostgreSQL port | 54541                 | 54542                |
-| Container       | apply-review-original | apply-review-changed |
+| Resource | Original | Changed |
+| --- | --- | --- |
+| Gateway | 4311 | 4312 |
+| Web | 3410 | 3420 |
+| API | 3411 | 3421 |
+| PostgreSQL | 54541 | 54542 |
+| Container | apply-review-original | apply-review-changed |
 
-All listeners use loopback. Database names include side and commit, so older revisions never migrate a newer revision's database backwards. Worktree-local files and browser local storage are independent. Gateways namespace and filter cookies by side and revision, including older Meta Clinic versions with a shared cookie name. Preview pages can only be framed by the review app. Mutating control requests require the app's origin and a per-process token.
+Listeners use loopback. Database names include side and revision; an older revision never migrates a newer revision's database backwards. Gateways namespace cookies by side and revision. Preview origins have separate browser storage. Control requests require the workspace origin and a per-process token. The Electron renderer is sandboxed with context isolation and no Node integration; only the main review frame can request the narrow desktop actions.
 
-Only one preview operation can run at a time. Setup/start/stop use Meta Clinic's lifecycle through its shared heavy-job queue. Worktree edits block switching. Errors remain visible with a retry through **Open review**; `.local/original.log` and `.local/changed.log` hold diagnostic output. Databases and worktrees are retained for reuse. Quit the review server after stopping previews if you want all application services stopped.
+Setup/start/stop use Meta Clinic's lifecycle through its shared resource queue. Worktree edits block switching. Diagnostic files are stored in the local data directory. Databases and worktrees are retained for reuse.
 
-## Checks
+## Saved reviews
+
+1. Open a branch, compare versions, and complete each scenario check.
+2. Record expected and actual behavior. Capture screenshot attaches the desktop window. Findings also include the side, revision, scenario, current route and captured browser errors. These are local records, not GitHub issues.
+3. Saved reviews can reopen the latest branch commit for retesting. Unresolved findings carry forward; new revisions reset checks and approval. Resolving a finding requires a retest note.
+4. Approval binds the source, baseline, candidate, manifest and seed recipe. Checklist or finding edits invalidate approval.
+
+Records are in `reviews.json`; images are under `screenshots/` in the configured local directory.
+
+## Merge and publish
+
+Prepare integration candidate fetches current main and constructs the merge result without switching the primary checkout. Original becomes main, Changed becomes the candidate. Conflicts stop preparation. Test and approve this exact result before Merge and push to main. Source or main changes block shipping; pushes are ordinary fast-forward pushes, never force pushes. An uncertain push can be retried to reconcile the remote revision.
+
+Publish settings selects the existing SSH key and encrypted recovery directory. Publish separately confirms the exact commit and https://aimetaclinic.com. It invokes Meta Clinic's existing `ops/lightsail/release.ps1` from a dedicated clean clone on main, using its backup, migration and release checks. Publishing is restricted to the Meta Clinic origin. Failed/interrupted deployment requires an inspection note before retrying; do not blindly remove recovery artifacts.
+
+The app checks hosted build identity and health before recording Published. Test the hosted workflow yourself and record its result to mark Verified. Push, deployment and workflow acceptance are separate states.
+
+The pilot branch `codex/intake-completion-ui` compares `8968d0b8` with `a4948139`. It is already included in main and is blocked from merging again.
+
+## Explicit scenario manifest
+
+Add `.branch-review.json` to a branch to name affected routes and checks. It is read from the committed candidate. Without a manifest, every branch opens the intake scenario; automatic impact discovery is not implemented. Up to 12 scenarios with 20 steps each are supported. Paths stay under `/clinic`. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers.
+
+```json
+{
+  "version": 1,
+  "title": "Intake controls",
+  "scenarios": [{
+    "id": "intake",
+    "title": "Partially completed intake",
+    "path": ":intake",
+    "steps": ["Save an answer in Changed", "Confirm Original stays unchanged"]
+  }]
+}
+```
+
+## Validation
 
 ```powershell
 npm test
 npm run test:live
 ```
 
-Unit checks cover exact Git comparisons, invalid refs, session separation, and gateway request boundaries. The live check requires a ready pair. It signs into both with one cookie jar, saves a synthetic draft answer in Changed, verifies persistence and an unchanged Original, then restores the answer. It does not replace a browser walkthrough.
+Unit tests cover Git comparisons, invalid refs, session separation, gateway boundaries, persisted findings, approval invalidation, merge candidates, moving refs and simulated release results. Delivery tests push only to disposable local bare repositories. Release tests never contact the hosted application.
 
-This slice does not approve, merge, push Meta Clinic changes, or deploy. The review app repository can be committed and pushed independently.
+The live check requires a ready preview pair. It signs into both with one cookie jar, saves and reloads a synthetic answer in Changed, verifies Original stays unchanged, then restores the answer.
+
+The Windows build launches and restores the pinned preview pair. Unit tests and the live persistence/isolation check pass. Screenshot capture, folder-picker interaction, rendered toggle behavior and the complete click-through still need visual acceptance: the available Codex UI-control connection times out. This implementation task has not merged or deployed Meta Clinic changes.

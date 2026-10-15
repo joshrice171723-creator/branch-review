@@ -4,14 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
+export const local = process.env.BRANCH_REVIEW_HOME || path.join(root, ".local");
 const config = JSON.parse(
-  await readFile(path.join(root, ".local/config.json"), "utf8").catch(
+  await readFile(path.join(local, "config.json"), "utf8").catch(
     () => "{}",
   ),
 );
 export const repo =
-  config.repository ||
   process.env.META_CLINIC_REPO ||
+  config.repository ||
   "C:/Users/joshr/Desktop/meta_clinic";
 export const previewRoot = path.resolve(
   config.previewRoot || path.join(root, "../../work/previews"),
@@ -31,7 +32,6 @@ export const state = {
   changed: null,
   error: null,
 };
-const local = path.join(root, ".local");
 await mkdir(local, { recursive: true });
 const exists = async (p) =>
   access(p).then(
@@ -76,13 +76,13 @@ async function assertOwner() {
   const marker = path.join(previewRoot, ".branch-review-owner.json");
   if (await exists(previewRoot)) {
     const owner = JSON.parse(await readFile(marker, "utf8").catch(() => "{}"));
-    if (owner.app !== root || owner.repository !== repo)
+    if (![root, "branch-review/v1"].includes(owner.app) || owner.repository !== repo)
       throw new Error(
         "Preview directory is not owned by this app. Choose a new empty previewRoot in .local/config.json.",
       );
   } else {
     await mkdir(previewRoot, { recursive: true });
-    await writeFile(marker, JSON.stringify({ app: root, repository: repo }));
+    await writeFile(marker, JSON.stringify({ app: "branch-review/v1", repository: repo }));
   }
 }
 export async function branches() {
@@ -169,7 +169,7 @@ async function lifecycle(side, sha, action) {
   });
   await writeFile(logfile, output);
 }
-async function prepare(side, sha) {
+export async function prepare(side, sha) {
   const cwd = path.join(previewRoot, side);
   await assertOwner();
   if (!(await exists(cwd))) await git("worktree", "add", "--detach", cwd, sha);

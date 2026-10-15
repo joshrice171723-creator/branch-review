@@ -17,7 +17,7 @@
         <span class="divider">/</span> Review workspace
       </div>
       <div class="header-actions">
-        <button id="focus" class="quiet" aria-pressed="false">
+        <button id="choose-repository" class="quiet" hidden>Open repository</button><button id="focus" class="quiet" aria-pressed="false">
           Expand preview</button
         ><button id="stop" class="quiet" disabled>Stop previews</button>
       </div>
@@ -38,7 +38,7 @@
             ↻
           </button>
         </div>
-        <label class="search"
+        <p id="repository-path" class="repository-path"></p><label class="search"
           ><span>⌕</span
           ><input
             id="search"
@@ -127,30 +127,50 @@
           Open review <span>↗</span>
         </button>
         <div id="error" role="alert" hidden></div>
-        <section class="scenario">
-          <div class="section-label">
-            <span>01 / TEST SCENARIO</span><span class="pill">INTAKE</span>
-          </div>
-          <h3>Meet Jordan Review</h3>
-          <p>
-            A partially completed intake, with visit reason and goals already
-            recorded.
-          </p>
-          <div class="scenario-meta">
-            <span>ROLE</span><strong>Clinic staff</strong><span>START</span
-            ><strong>Encounter → Intake</strong>
-          </div>
-          <ol>
-            <li>Compare the available answer controls.</li>
-            <li>Edit an answer in Changed.</li>
-            <li>Switch to Original. Its answers should stay unchanged.</li>
-            <li>Save, then reopen Changed to check persistence.</li>
-          </ol>
-          <p class="small muted">
-            Switching keeps each version open. Reopen returns to the saved
-            scenario; unsaved edits are not copied between versions.
-          </p>
+        <section id="review-workflow" hidden>
+          <p id="active-review" class="active-review"></p>
+          <label class="field-label" for="scenario-select">Test scenario</label>
+          <select id="scenario-select"></select>
+          <p class="small muted">Both versions keep their own state. Save edits before reopening or changing scenarios.</p>
+          <div id="checks"></div>
+          <details class="workflow-section">
+            <summary>Report a finding</summary>
+            <form id="finding-form">
+              <label class="field-label" for="expected">Expected behavior</label>
+              <textarea id="expected" required maxlength="4000"></textarea>
+              <label class="field-label" for="actual">Actual behavior</label>
+              <textarea id="actual" required maxlength="4000"></textarea>
+              <button id="capture" type="button" class="secondary" hidden>Capture screenshot</button>
+              <img id="attachment" alt="Screenshot attached to this finding" hidden />
+              <button id="remove-attachment" type="button" class="quiet" hidden>Remove screenshot</button>
+              <button id="report" class="secondary">Save finding</button>
+            </form>
+          </details>
+          <details class="workflow-section"><summary>Findings and retests</summary><div id="findings"></div></details>
+          <section class="workflow-section">
+            <h3>Approve this version</h3>
+            <label class="field-label" for="reviewer">Reviewer</label><input id="reviewer" maxlength="100" placeholder="Your name" autocomplete="name" />
+            <p id="approval-state" class="small"></p>
+            <button id="approve" class="secondary">Approve tested commit</button>
+          </section>
+          <details class="workflow-section">
+            <summary>Merge and publish</summary>
+            <p class="small">Prepare → test → approve → merge and push → publish → verify the published workflow.</p>
+            <p id="delivery-state" class="small"></p>
+            <button id="candidate" class="secondary">Prepare integration candidate</button>
+            <button id="ship" class="secondary">Merge and push to main</button>
+            <button id="release-settings" class="quiet" hidden>Publish settings</button>
+            <button id="publish" class="secondary">Publish to aimetaclinic.com</button>
+            <label class="field-label" for="release-note">Published workflow result / recovery inspection</label>
+            <textarea id="release-note" maxlength="2000" placeholder="Record what you tested and the result"></textarea>
+            <button id="smoke" class="secondary">Record published verification</button>
+            <button id="retry-publish" class="secondary" hidden>Enable retry after inspection</button>
+          </details>
         </section>
+        <details class="workflow-section"><summary>Saved reviews</summary>
+          <label class="field-label" for="history">Review history</label><select id="history"></select>
+          <button id="retest" class="secondary" disabled>Retest latest branch commit</button>
+        </details>
         <details class="files" open>
           <summary>
             <span>Changed files</span><span id="file-count">0</span>
@@ -158,8 +178,7 @@
           <ul id="files"></ul>
         </details>
         <p class="scope-note">
-          This first slice opens previews for testing. Approval and publishing
-          come next.
+          Local previews and saved reviews. Publishing requires a separate confirmation of the exact commit and destination.
         </p>
       </aside>
     </main>

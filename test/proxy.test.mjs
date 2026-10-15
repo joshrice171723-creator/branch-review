@@ -32,6 +32,7 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
   const upstream = http.createServer((req, res) => {
     captured = req.headers;
     res.setHeader("Set-Cookie", "_apply_session=returned; Path=/; HttpOnly");
+    if (req.url === '/document') { res.setHeader('Content-Type','text/html'); res.end('<html><head></head><body>Clinic</body></html>'); return; }
     res.end("preview");
   });
   await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
@@ -86,6 +87,13 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
     response.headers.get("content-security-policy"),
     "frame-ancestors http://127.0.0.1:4310",
   );
+  state.original.scenario.path='/clinic/patients/3/encounters/1';
+  state.manifest={scenarios:[{id:'chart',path:'/clinic/patients/:patientId#chart'}]};
+  const bootstrap=await fetch(origin+'/__review/start?scenario=chart').then(r=>r.text());
+  assert.match(bootstrap,/\/clinic\/patients\/3#chart/);
+  assert.equal((await fetch(origin+'/__review/start?scenario=unknown')).status,400);
+  const document=await fetch(origin+'/document').then(r=>r.text());
+  assert.match(document,/review:context/);assert.match(document,/<body>Clinic<\/body>/);
   state.status = "preparing";
   assert.equal((await fetch(origin)).status, 503);
 });

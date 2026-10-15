@@ -1,0 +1,23 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import path from 'node:path';
+import {publish,target} from '../publish.mjs';
+test('publish requires exact confirmation, checks build identity and persists failures',async()=>{
+  await mkdir('.local',{recursive:true});const local=path.resolve(await mkdtemp('.local/publish-test-'));
+  const sha='a'.repeat(40), record={identity:{changed:sha},approval:{},delivery:{stage:'pushed'}};
+  const checkout=path.join(local,'release-checkout');await mkdir(checkout);
+  await writeFile(path.join(checkout,'.branch-review-owner'),'branch-review-release/v1');
+  const key=path.join(local,'test-key');await writeFile(key,'synthetic');
+  await writeFile(path.join(local,'release.json'),JSON.stringify({keyPath:key,recoveryDirectory:local}));
+  let deploys=0, mismatch=false;
+  const options={local,repo:'unused',confirmation:`PUBLISH ${sha} TO ${target}`,
+    git:async(...args)=>args[0]==='remote'?'https://github.com/joshrice171723-creator/meta_clinic.git':`${sha}\trefs/heads/main`,
+    run:async(command,args)=>{if(command==='pwsh'){deploys++;return 'release complete';}return args[0]==='rev-parse'?sha:'';},
+    store:{persist:async()=>{},event:async()=>{}},fetcher:async(url)=>({ok:true,json:async()=>({revision:mismatch?'b'.repeat(40):sha,dirty:false})})};
+  await assert.rejects(publish(record,{...options,confirmation:'yes'}),/exact commit/);assert.equal(deploys,0);
+  await publish(record,options);assert.equal(record.delivery.stage,'published');assert.equal(deploys,1);
+  record.delivery.stage='pushed';mismatch=true;
+  await assert.rejects(publish(record,options),/does not match/);assert.equal(record.delivery.stage,'deployment-needs-inspection');
+  await assert.rejects(publish(record,options),/must be pushed/);assert.equal(deploys,2);
+});

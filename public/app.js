@@ -1,3 +1,4 @@
+import { workflow } from './workflow.js';
 const $ = (id) => document.getElementById(id);
 let allBranches = [],
   selected = null,
@@ -6,6 +7,7 @@ let allBranches = [],
   active = "changed",
   frameKey = "",
   selectionGeneration = 0;
+const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:()=>mountFrames(currentState,true)});
 async function api(path, data) {
   const response = await fetch(
     path,
@@ -110,7 +112,7 @@ function toggle(side) {
       `${side === "original" ? "Original" : "Changed"} · ${preview.sha.slice(0, 7)} · Jordan Review / Intake`;
 }
 function mountFrames(state, force = false) {
-  const key = `${state.original.sha}:${state.changed.sha}`;
+  const key = `${state.original.sha}:${state.changed.sha}:${reviewWorkflow.scenario()}`;
   if (frameKey === key && !force) return;
   frameKey = key;
   $("frames").replaceChildren(
@@ -122,7 +124,7 @@ function mountFrames(state, force = false) {
         "sandbox",
         "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
       );
-      frame.src = `http://127.0.0.1:${state[side].proxy}/__review/start`;
+      frame.src = `http://127.0.0.1:${state[side].proxy}/__review/start?scenario=${encodeURIComponent(reviewWorkflow.scenario())}`;
       return frame;
     }),
   );
@@ -133,6 +135,7 @@ async function poll() {
     const previousBusy = currentState.busy;
     currentState = await api("/api/state");
     token = currentState.token;
+    reviewWorkflow.render(currentState);
     const ready = currentState.status === "ready";
     const preparing = ["preparing", "stopping"].includes(currentState.status);
     $("empty").hidden = ready || preparing;
@@ -247,6 +250,7 @@ window.addEventListener("message", (event) => {
     event.data?.type === "review:error"
   )
     error(`${side}: ${event.data.message}`);
+  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context') reviewWorkflow.context(side,event.data);
 });
 await poll();
 await loadBranches().catch((e) => error(e.message));

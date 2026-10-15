@@ -649,3 +649,19 @@ li::marker {
 .focused .workspace {
   height: calc(100vh - 66px);
 }
+
+.repository-path {margin:0 20px 14px;font-size:10px;color:#67766a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.active-review {padding:10px;background:#e8efe4;border-radius:6px;font-size:11px;overflow-wrap:anywhere;line-height:1.6}
+.check {display:flex;gap:9px;font-size:11px;line-height:1.7;margin:12px 0;align-items:flex-start}
+.check input {margin-top:4px;accent-color:#244f3e}
+.workflow-section {border-top:1px solid #e1e7dd;margin-top:20px;padding-top:16px}
+.workflow-section summary {cursor:pointer;font-weight:600}
+.workflow-section h3 {font-size:14px}
+textarea, #reviewer {font:inherit;width:100%;padding:9px;border:1px solid #dce3d9;border-radius:5px;color:#20302f;background:#fafbf8}
+textarea {min-height:72px;resize:vertical;font-size:12px}
+.secondary {display:block;width:100%;padding:10px;margin:10px 0;border:1px solid #cbd9cc;border-radius:5px;background:#f1f5ed;color:#294e40;font:inherit;font-size:11px;text-align:left}
+.finding {border-bottom:1px solid #dce3d9;padding:15px 0;overflow-wrap:anywhere}
+.finding p,.finding small {font-size:11px;line-height:1.6}
+.finding pre {white-space:pre-wrap;font-size:10px}
+.finding img,#attachment {width:100%;height:auto;border:1px solid #dce3d9;margin:8px 0}
+#delivery-state {overflow-wrap:anywhere}

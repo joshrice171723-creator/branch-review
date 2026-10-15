@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdir,mkdtemp} from 'node:fs/promises';
+import {ReviewStore,defaultManifest,validateManifest,scenarioPath} from '../reviews.mjs';
+await mkdir('.local',{recursive:true});
+const snapshot = {repository:'test',comparison:{branch:{ref:'refs/heads/feature',sha:'b',subject:'Intake'}},original:{sha:'a'},changed:{sha:'b'}};
+test('review approval persists and changes invalidate it; new revisions carry unresolved findings',async()=>{
+  const directory=await mkdtemp('.local/reviews-test-'), store=await new ReviewStore(directory).load();
+  const r=await store.open(snapshot,defaultManifest,'recipe');
+  await assert.rejects(store.approve(r.id,'Joshua'),/every scenario/);
+  for(let i=0;i<4;i++) await store.check(r.id,'intake',i,true);
+  await store.approve(r.id,'Joshua');
+  assert.equal((await new ReviewStore(directory).load()).get(r.id).approval.commit,'b');
+  await store.issue(r.id,{scenario:'intake',expected:'Save',actual:'Does not save'});
+  assert.equal(r.approval,null);
+  await assert.rejects(store.approve(r.id,'Joshua'),/every open finding/);
+  const next=await store.open({...snapshot,changed:{sha:'c'},comparison:{branch:{...snapshot.comparison.branch,sha:'c'}}},defaultManifest,'recipe');
+  assert.equal(next.issues[0].status,'needs-retest');assert.deepEqual(next.checks,{});
+  await assert.rejects(store.resolve(next.id,next.issues[0].id,''),/retest result/);
+  await store.resolve(next.id,next.issues[0].id,'Saved answer persists after reopening.');
+  assert.equal(next.issues[0].resolvedCommit,'c');
+  assert.equal(r.issues[0].status,'open');
+  await assert.rejects(store.issue(next.id,{scenario:'intake',expected:'a',actual:'b',screenshot:'data:image/png;base64,YQ=='}),/invalid/);
+  next.delivery={stage:'deploying'};await store.persist();
+  assert.equal((await new ReviewStore(directory).load()).get(next.id).delivery.stage,'deployment-needs-inspection');
+});
+test('scenario destinations and identifiers are constrained',()=>{
+  assert.equal(scenarioPath({path:'/clinic/patients/:patientId/encounters/:encounterId#intake'},{path:'/clinic/patients/3/encounters/1'}),'/clinic/patients/3/encounters/1#intake');
+  for(const destination of ['https://evil.test','//evil.test','/clinic/../admin','/clinic/%2e%2e/admin','/clinic\\evil']) assert.throws(()=>validateManifest({version:1,scenarios:[{id:'test',title:'Test',path:destination,steps:['Test']}]}),/inside/);
+  assert.throws(()=>validateManifest({...defaultManifest,scenarios:[defaultManifest.scenarios[0],defaultManifest.scenarios[0]]}),/unique/);
+});

@@ -1,4 +1,5 @@
 import http from "node:http";
+import { defaultManifest, scenarioPath } from './reviews.mjs';
 
 export function cookieNamespace(side, sha) {
   return `br_${side}_${sha.slice(0, 12)}_`;
@@ -24,6 +25,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
     const result = {
       ...req.headers,
       host: upstream,
+      'accept-encoding': 'identity',
       cookie: upstreamCookies(
         req.headers.cookie,
         cookieNamespace(side, preview.sha),
@@ -54,14 +56,18 @@ export function previewProxy(side, slot, getState, appOrigin) {
       res.writeHead(503).end("Preview is not ready. Return to Branch Review.");
       return;
     }
-    if (req.url === "/__review/start") {
+    const url = new URL(req.url, origin);
+    if (url.pathname === "/__review/start") {
+      const manifest = current.manifest || defaultManifest;
+      const scenario = manifest.scenarios.find(s => s.id === (url.searchParams.get('scenario') || manifest.scenarios[0].id));
+      if (!scenario) return res.writeHead(400).end('Unknown test scenario');
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "Content-Security-Policy": `frame-ancestors ${appOrigin}`,
       });
       res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Open intake</title></head><body style="font:16px Segoe UI;padding:40px;color:#283a39"><p id="status">Opening Jordan’s intake…</p><script>
-        const scenario = ${escapeJSON(preview.scenario)};
+        const scenario = ${escapeJSON({...preview.scenario, path: scenarioPath(scenario, preview.scenario)})};
         (async () => {
           const csrf = await fetch('/api/csrf').then(async r => { if (!r.ok) throw Error('Could not establish a session.'); return r.json(); });
           const response = await fetch('/api/development_session', { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf.csrf_token}, body:JSON.stringify(scenario) });
@@ -93,8 +99,17 @@ export function previewProxy(side, slot, getState, appOrigin) {
             `http://${upstream}`,
             origin,
           );
-        res.writeHead(response.statusCode, result);
-        response.pipe(res);
+        if (req.method === 'GET' && result['content-type']?.includes('text/html') && !result['content-encoding']) {
+          delete result['content-length'];
+          const chunks = [];
+          response.on('data', chunk => chunks.push(chunk));
+          response.on('end', () => {
+            const observer = `<script>(()=>{const errors=[];const report=()=>parent.postMessage({type:'review:context',location:location.pathname+location.search+location.hash,errors},${escapeJSON(appOrigin)});addEventListener('error',e=>{errors.push(String(e.message).slice(0,500));if(errors.length>10)errors.shift();report()});addEventListener('unhandledrejection',e=>{errors.push(String(e.reason).slice(0,500));if(errors.length>10)errors.shift();report()});setInterval(report,1500);report()})()</script>`;
+            res.writeHead(response.statusCode, result);
+            res.end(Buffer.concat(chunks).toString().replace('</head>', observer + '</head>'));
+          });
+          response.on('error', () => res.destroy());
+        } else { res.writeHead(response.statusCode, result); response.pipe(res); }
       },
     );
     request.on("error", () => {
