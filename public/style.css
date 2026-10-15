@@ -740,3 +740,6 @@ dialog::backdrop {background:#152c2b80}
 @media(max-width:950px){main{grid-template-columns:185px minmax(350px,1fr)}}
 .queue-filters{display:grid;gap:6px;padding:0 10px 10px}.queue-filters input,.queue-filters select{width:100%;padding:7px 9px;font-size:11px}.shortcut-hint{display:block;padding:4px 14px 10px;color:var(--muted);font-size:10px;line-height:1.6}
 #health-status{white-space:pre-line}.health-error{color:#9c3826}#diagnostic-log{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;font-size:10px}
+.branches.compact .search,.branches.compact #branch-filter,.branches.compact label[for="branch-filter"],.branches.compact .branch-list,.branches.compact .list-heading{display:none}
+#toggle-branches{margin:0 12px 10px;text-align:left;color:#315d46;font-size:12px}.compact #guided-queue{margin-top:0}.queue-filters input{border:1px solid #dce3d9;border-radius:5px;background:#fff;color:#20302f}.shortcut-hint{color:#65776d}
+#plan-preview{margin:15px 0}#plan-items{max-height:200px;overflow:auto}

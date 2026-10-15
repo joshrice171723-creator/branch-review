@@ -1,6 +1,6 @@
 import { findingKey, loadDraft, saveDraft } from './drafts.js';
 import { guided } from './guided.js';
-import { canApprove } from './review-model.js';
+import { canApprove,deliveryStep } from './review-model.js';
 import { previewDestination } from './preview-routes.js';
 const $ = id => document.getElementById(id);
 const node = (tag, text, className) => { const el = document.createElement(tag); el.textContent = text; if (className) el.className = className; return el; };
@@ -67,6 +67,12 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     finally { savingFinding = false; await poll(); }
   };
   $('approve').onclick = () => act('approve', {reviewer:$('reviewer').value});
+  $('results-action').onclick=()=>{
+    const action=deliveryStep(getState().record,getState().releaseConfigured).action;if(!action)return;
+    const target=$(action);
+    if(['reviewer','release-note'].includes(action)){const section=target.closest('details');if(section)section.open=true;target.scrollIntoView({block:'center'});target.focus();}
+    else if(!target.disabled)target.click();
+  };
   $('candidate').onclick = () => { if(confirm('Prepare the merged result against current main? Save your preview edits first. The new candidate needs its own completed checklist and approval.')) act('candidate'); };
   $('ship').onclick = () => {
     const r = getState().record;
@@ -111,6 +117,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('repository-path').title = state.repository;
     const r=state.record, enabled=state.status==='ready' && !!r && !state.busy;
     guide.render(state);
+    if(r){const step=deliveryStep(r,state.releaseConfigured);$('results-action').textContent=step.label;$('results-action-detail').textContent=step.detail;$('results-action').disabled=!enabled || !step.action || step.action==='release-settings' && !window.desktop;}
     $('review-workflow').hidden=!r;
     $('choose-repository').disabled=state.busy;
     $('retest').disabled=state.busy || !$('history').value;

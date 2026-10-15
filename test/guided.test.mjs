@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir} from 'node:fs/promises';
 import {ReviewStore,validateManifest} from '../reviews.mjs';
-import {itemStatus,reviewCounts,nextItem,canApprove,fixRequest,matchesItem} from '../public/review-model.js';
+import {itemStatus,reviewCounts,nextItem,canApprove,fixRequest,matchesItem,deliveryStep} from '../public/review-model.js';
 
 const manifest=validateManifest({version:2,title:'Twenty-item review',summary:'Test each behavior.',scenarios:Array.from({length:20},(_,i)=>({id:`item-${i+1}`,title:`Behavior ${i+1}`,path:'/qa?view=coverage',description:'A changed behavior',instructions:'Try the interaction.',expected:'It works.',steps:['First requirement','Second requirement']}))});
 const snapshot={repository:'test',comparison:{branch:{ref:'refs/heads/feature',sha:'b',subject:'Feature'}},original:{sha:'a'},changed:{sha:'b'}};
@@ -55,4 +55,15 @@ test('queue filters retain item identities and distinguish unfinished work from 
   assert.equal(matchesItem(r,second,'item-2','remaining'),true);
   await store.check(r.id,second.id,0,true);await store.check(r.id,second.id,1,true);
   assert.equal(matchesItem(r,second,'','remaining'),false);assert.equal(matchesItem(r,second,'','complete'),true);
+});
+
+test('results recommend only the next valid delivery action',async()=>{
+  const {record:r}=await setup();assert.equal(deliveryStep(r).action,'resume-review');
+  for(const item of r.manifest.scenarios)item.steps.forEach((_,i)=>r.checks[`${item.id}:${i}`]=true);
+  assert.equal(deliveryStep(r).action,'candidate');r.integration={sha:r.identity.changed};
+  assert.equal(deliveryStep(r).action,'reviewer');r.approval={commit:r.identity.changed};assert.equal(deliveryStep(r).action,'ship');
+  r.delivery={stage:'push-unconfirmed'};assert.match(deliveryStep(r).label,/Reconcile/);
+  r.delivery.stage='pushed';assert.equal(deliveryStep(r).action,'release-settings');assert.equal(deliveryStep(r,true).action,'publish');
+  r.delivery.stage='deployment-needs-inspection';assert.equal(deliveryStep(r).action,'release-note');
+  r.delivery.stage='published';assert.equal(deliveryStep(r).action,'release-note');r.delivery.stage='verified';assert.equal(deliveryStep(r).action,null);
 });

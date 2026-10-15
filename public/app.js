@@ -9,6 +9,17 @@ let allBranches = [],
   frameKey = "",
   selectionGeneration = 0, selectedComparison = null, commitBranchSha = '', diffGeneration = 0;
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
+let branchVisibility=null;
+try{branchVisibility=JSON.parse(localStorage.getItem('branch-review:branches-visible') || 'null');}catch{}
+function branchVisibilityUI() {
+  const visible=branchVisibility ?? !currentState.record;
+  $('branches').closest('.branches').classList.toggle('compact',!visible);
+  $('toggle-branches').textContent=visible?'Hide branches':'Show branches';$('toggle-branches').setAttribute('aria-expanded',String(visible));
+  $('rail-review').hidden=visible || !currentState.record;
+  $('rail-review').textContent=currentState.record?.identity.ref.replace(/^refs\/(heads|remotes)\//,'') || '';
+  $('rail-review').title=$('rail-review').textContent;
+}
+$('toggle-branches').onclick=()=>{branchVisibility=!($('toggle-branches').getAttribute('aria-expanded')==='true');try{localStorage.setItem('branch-review:branches-visible',JSON.stringify(branchVisibility));}catch{}branchVisibilityUI();};
 let mutationQueue=Promise.resolve();
 async function api(path, data) {
   if(data!==undefined){const request=mutationQueue.catch(()=>{}).then(()=>requestApi(path,data));mutationQueue=request;return request;}
@@ -113,7 +124,7 @@ async function select(branch) {
   $("start").disabled = currentState.busy;
   const generation = ++selectionGeneration;
   try {
-    selectedComparison=null;$('view-diff').disabled=true;
+    selectedComparison=null;$('view-diff').disabled=true;$('download-plan').disabled=true;$('plan-summary').textContent='Loading review plan…';$('plan-items').replaceChildren();
     if($('baseline').value==='commit' && commitBranchSha!==branch.sha){
       const commits=await api(`/api/commits?sha=${branch.sha}`);if(generation!==selectionGeneration)return;
       $('baseline-commit').replaceChildren(...commits.map(commit=>{const option=document.createElement('option');option.value=commit.sha;option.textContent=`${commit.sha.slice(0,7)} · ${commit.subject}`;return option;}));
@@ -124,6 +135,9 @@ async function select(branch) {
     );
     if (generation !== selectionGeneration) return;
     selectedComparison=result;$('view-diff').disabled=!result.files.length;
+    $('download-plan').disabled=false;$('plan-count').textContent=`Review plan · ${result.plan.scenarios.length} items`;
+    $('plan-summary').textContent=result.plan.summary || result.plan.title;$('plan-source').textContent=result.plan.source;
+    $('plan-items').replaceChildren(...result.plan.scenarios.map(item=>{const entry=document.createElement('li');entry.textContent=item.title;entry.title=item.instructions || item.steps.join('\n');return entry;}));
     $("file-count").textContent = result.files.length;
     $("files").replaceChildren(
       ...result.files.map((name) => {
@@ -137,11 +151,12 @@ async function select(branch) {
         ? "This branch is already contained in main. Choose Previous commit to inspect its latest change."
         : `${result.base.slice(0, 7)} → ${result.branch.sha.slice(0, 7)} · ${result.files.length} changed files`;
   } catch (e) {
+    $('plan-summary').textContent=e.message;
     error(e.message);
   }
 }
-async function openDiff(filename) {
-  const comparison=selectedComparison;if(!comparison)return;
+async function openDiff(filename,comparison=selectedComparison) {
+  if(!comparison)return;
   const generation=++diffGeneration;
   $('diff-dialog').showModal();$('diff-patch').textContent='Loading changes…';$('diff-title').textContent='Code changes';
   $('diff-identity').textContent=`Original ${comparison.base.slice(0,7)} → Changed ${comparison.branch.sha.slice(0,7)} · ${comparison.branch.name}`;
@@ -163,6 +178,8 @@ async function loadDiff(comparison,filename) {
   }catch(e){if(generation===diffGeneration)$('diff-patch').textContent=e.message;}
 }
 $('view-diff').onclick=()=>openDiff();
+$('review-code').onclick=()=>{const r=currentState.record;if(r)void openDiff(undefined,{base:r.identity.base,branch:{sha:r.identity.changed,name:r.identity.ref.replace(/^refs\/(heads|remotes)\//,'')}});};
+$('download-plan').onclick=()=>{if(!selectedComparison)return;const url=URL.createObjectURL(new Blob([JSON.stringify(selectedComparison.plan,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='.branch-review.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 $('close-diff').onclick=()=>{diffGeneration++;$('diff-dialog').close();};
 function toggle(side) {
   active = side;
@@ -233,6 +250,7 @@ async function poll() {
     const previousBusy = currentState.busy;
     currentState = await api("/api/state");
     token = currentState.token;
+    branchVisibilityUI();
     reviewWorkflow.render(currentState);
     const ready = currentState.status === "ready";
     const preparing = ["preparing", "stopping"].includes(currentState.status);
@@ -263,6 +281,7 @@ async function poll() {
       currentState.busy || !["ready", "error"].includes(currentState.status);
     $("refresh").disabled = currentState.busy;
     $("reopen").disabled = !ready;
+    $('review-code').disabled=!ready;
     $("original").disabled = !ready;
     $("changed").disabled = !ready;
     if (currentState.error) error(currentState.error);

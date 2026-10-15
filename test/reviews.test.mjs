@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp} from 'node:fs/promises';
+import {mkdir,mkdtemp,rename,rmdir,readFile} from 'node:fs/promises';
+import path from 'node:path';
 import {ReviewStore,defaultManifest,validateManifest,scenarioPath,manifestForFiles,scenarioRecipe} from '../reviews.mjs';
 await mkdir('.local',{recursive:true});
 const snapshot = {repository:'test',comparison:{branch:{ref:'refs/heads/feature',sha:'b',subject:'Intake'}},original:{sha:'a'},changed:{sha:'b'}};
@@ -32,4 +33,16 @@ test('scenario destinations and identifiers are constrained',()=>{
   assert.equal(scenarioPath({path:'/clinic/patients/:patientId/encounters/:encounterId#intake'},{path:'/clinic/patients/3/encounters/1'}),'/clinic/patients/3/encounters/1#intake');
   for(const destination of ['https://evil.test','//evil.test','/clinic/../admin','/clinic/%2e%2e/admin','/clinic\\evil']) assert.throws(()=>validateManifest({version:1,scenarios:[{id:'test',title:'Test',path:destination,steps:['Test']}]}),/inside/);
   assert.throws(()=>validateManifest({...defaultManifest,scenarios:[defaultManifest.scenarios[0],defaultManifest.scenarios[0]]}),/unique/);
+});
+
+test('a failed disk write cannot leave a checked result or approval in memory',async()=>{
+  const directory=await mkdtemp('.local/save-failure-test-'),store=await new ReviewStore(directory).load();
+  const record=await store.open(snapshot,defaultManifest,'recipe');
+  const destination=path.join(directory,'reviews.json'),backup=destination+'.backup';
+  await rename(destination,backup);await mkdir(destination);
+  await assert.rejects(store.check(record.id,'intake',0,true),/last saved results are unchanged/);
+  assert.equal(store.get(record.id).checks['intake:0'],undefined);assert.equal(store.get(record.id).approval,null);
+  assert.deepEqual(JSON.parse(await readFile(backup,'utf8'))[0].checks,{});
+  await rmdir(destination);await rename(backup,destination);
+  await store.check(record.id,'intake',0,true);assert.equal((await new ReviewStore(directory).load()).get(record.id).checks['intake:0'],true);
 });

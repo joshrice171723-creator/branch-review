@@ -38,7 +38,9 @@
             ↻
           </button>
         </div>
-        <p id="repository-path" class="repository-path"></p><label class="search"
+        <p id="repository-path" class="repository-path"></p>
+        <button id="toggle-branches" class="quiet" aria-expanded="true">Hide branches</button>
+        <p id="rail-review" class="repository-path" hidden></p><label class="search"
           ><span>⌕</span
           ><input
             id="search"
@@ -89,7 +91,7 @@
             ↗ Reset item
           </button>
         </div>
-        <div class="comparison-options"><label for="layout-mode">View</label><select id="layout-mode"><option value="toggle">Toggle versions</option><option value="side-by-side">Side by side</option></select><label class="sync-option"><input id="sync-scroll" type="checkbox" checked> Link scrolling</label><label id="split-control" hidden>Split <input id="split-position" type="range" min="30" max="70" value="50" aria-label="Preview split position"></label></div>
+        <div class="comparison-options"><label for="layout-mode">View</label><select id="layout-mode"><option value="toggle">Toggle versions</option><option value="side-by-side">Side by side</option></select><label class="sync-option"><input id="sync-scroll" type="checkbox" checked> Link scrolling</label><label id="split-control" hidden>Split <input id="split-position" type="range" min="30" max="70" value="50" aria-label="Preview split position"></label><button id="review-code" class="quiet" disabled>Review code</button></div>
         <div id="preview-area">
           <div id="empty" class="empty">
             <span class="empty-mark">⑂</span>
@@ -144,6 +146,7 @@
           Open review <span>↗</span>
         </button>
         <button id="view-diff" class="secondary" disabled>Inspect code changes</button>
+        <details id="plan-preview"><summary id="plan-count">Review plan</summary><p id="plan-summary" class="small"></p><p id="plan-source" class="small muted"></p><ol id="plan-items"></ol><button id="download-plan" class="quiet" disabled>Download review plan</button></details>
         </details>
         <div id="error" role="alert" hidden></div>
         <p id="revision-warning" class="inline-choice" role="status" hidden></p>
@@ -174,6 +177,7 @@
           <section id="guided-results" hidden aria-label="Review results">
             <p class="eyebrow">REVIEW RESULTS</p><h2>Your review summary</h2>
             <p id="results-counts"></p><p id="results-message"></p>
+            <button id="results-action" class="primary">Continue remaining checks</button><p id="results-action-detail" class="small muted"></p>
             <div id="result-items"></div>
             <button id="resume-review" class="primary">Continue remaining checks</button>
             <button id="export-review" class="secondary">View / export review report</button>

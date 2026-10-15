@@ -27,6 +27,17 @@ export function canApprove(record) {
     return status === 'passed' || (status === 'not-applicable' && !!record.items?.[item.id]?.reason?.trim());
   });
 }
+export function deliveryStep(record,configured=false) {
+  if(!canApprove(record))return{action:'resume-review',label:'Continue remaining checks',detail:'Finish the review or prepare a fix request for Codex.'};
+  if(record.integration?.sha!==record.identity.changed)return{action:'candidate',label:'Prepare merge candidate',detail:'Combine this branch with current main, then test the combined result. This does not push or publish.'};
+  if(!record.approval)return{action:'reviewer',label:'Approve this tested candidate',detail:'Enter your reviewer name and approve the exact candidate.'};
+  const stage=record.delivery?.stage;
+  if(stage==='verified')return{action:null,label:'Published workflow verified',detail:'The release and its workflow result have been recorded.'};
+  if(stage==='published')return{action:'release-note',label:'Verify published workflow',detail:'Record your test of the published app. Deployment alone does not complete QA.'};
+  if(stage==='deployment-needs-inspection')return{action:'release-note',label:'Inspect interrupted release',detail:'Review the release and recovery artifacts before enabling a retry.'};
+  if(stage==='pushed')return{action:configured?'publish':'release-settings',label:configured?'Publish approved commit':'Set up publishing',detail:'Main has the reviewed candidate. Publishing is a separate, confirmed action.'};
+  return{action:'ship',label:stage==='push-unconfirmed'?'Reconcile merge and push':'Merge and push to main',detail:stage==='push-unconfirmed'?'The previous push is unconfirmed. Recheck remote main before proceeding.':'Push only the approved candidate. A moving branch or main stops this action.'};
+}
 export function fixRequest(record) {
   const lines = ['# Branch Review: fixes requested', '', `Repository: ${record.identity.repository}`, `Branch: ${record.identity.ref}`, `Reviewed commit: ${record.identity.changed}`, `Original commit: ${record.identity.base}`, '', 'Fix the findings below, preserve unrelated work, and update the review manifest with any additional checks. Do not merge or publish.'];
   for (const [index,item] of record.manifest.scenarios.entries()) {

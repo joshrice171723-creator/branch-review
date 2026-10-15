@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, access, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scenarioRecipe } from './reviews.mjs';
+import { loadPlan } from './plans.mjs';
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
 export const local = process.env.BRANCH_REVIEW_HOME || path.join(root, ".local");
@@ -135,7 +136,8 @@ export async function comparison(ref, baseline, baselineCommit) {
   const files = (await git("diff", "--name-only", '-z', base, branch.sha,'--'))
     .split("\0")
     .filter(Boolean);
-  return { branch, base, main, baseline, ...(baseline==='commit'?{baselineCommit}:{}), files };
+  const plan=await loadPlan(git,branch.sha,files);
+  return { branch, base, main, baseline, ...(baseline==='commit'?{baselineCommit}:{}), files, plan };
 }
 function environment(side, sha) {
   const slot = slots[side];

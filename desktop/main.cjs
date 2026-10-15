@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
@@ -20,7 +20,7 @@ async function launch() {
   home = process.env.BRANCH_REVIEW_HOME || settings.home || (app.isPackaged ? path.join(app.getPath('userData'), 'workspace') : path.join(root, '.local'));
   await mkdir(home, { recursive: true });
   process.env.BRANCH_REVIEW_HOME = home;
-  await writeFile(settingsPath, JSON.stringify({home}));
+  await writeFile(settingsPath, JSON.stringify({...settings,home}));
   // Refuse to attach privileged desktop APIs to an unknown listener.
   const occupied = await fetch(origin + '/api/state', { signal: AbortSignal.timeout(1200) }).then(() => true, () => false);
   if (occupied) throw new Error('Port 4310 is already in use. Close the existing Branch Review server, then open this app again.');
@@ -28,7 +28,9 @@ async function launch() {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   Menu.setApplicationMenu(null);
-  window = new BrowserWindow({ title: 'Branch Review', width: 1600, height: 1000, minWidth: 1000, minHeight: 700,
+  const area=screen.getPrimaryDisplay().workAreaSize;
+  const width=Math.min(area.width,Math.max(1000,Number(settings.window?.width)||1600)),height=Math.min(area.height,Math.max(700,Number(settings.window?.height)||1000));
+  window = new BrowserWindow({ title: 'Branch Review', width, height, minWidth: 1000, minHeight: 700,
     backgroundColor: '#f6f7f5', show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -63,7 +65,7 @@ async function launch() {
     const existing = JSON.parse(await readFile(path.join(newHome, 'config.json'), 'utf8').catch(() => '{}'));
     const previous = JSON.parse(await readFile(path.join(home, 'config.json'), 'utf8').catch(() => '{}'));
     await writeFile(path.join(newHome, 'config.json'), JSON.stringify({ ...existing, repository, toolchain: existing.toolchain || previous.toolchain || path.resolve(root, '../../work/toolchain/node_modules/.bin'), previewRoot: existing.previewRoot || path.join(newHome, 'previews') }, null, 2));
-    await writeFile(settingsPath, JSON.stringify({ home: newHome }));
+    await writeFile(settingsPath, JSON.stringify({...settings,home:newHome,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));
     delete process.env.BRANCH_REVIEW_HOME;
     closing = true; app.relaunch(); app.exit(0);
   });
@@ -85,10 +87,16 @@ async function launch() {
     event.preventDefault();
     const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
     if (state?.busy) { await dialog.showMessageBox(window, {message:'Wait for the current operation to finish before closing Branch Review.'}); return; }
-    dialog.showMessageBox(window, { type: 'question', buttons: ['Keep working', 'Close app, keep previews'], defaultId: 0, cancelId: 0,
-      message: 'Close Branch Review?', detail: 'Previews and saved data remain available. Use Stop previews before closing if you want them stopped.' }).then(result => { if (result.response === 1) { closing = true; app.exit(0); } });
+    const result=await dialog.showMessageBox(window, { type: 'question', buttons: ['Keep working', 'Close app, keep previews'], defaultId: 0, cancelId: 0,
+      message: 'Close Branch Review?', detail: 'Previews and saved data remain available. Use Stop previews before closing if you want them stopped.' });
+    if(result.response===1){
+      try {await writeFile(settingsPath,JSON.stringify({...settings,home,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));}
+      catch(error){await dialog.showMessageBox(window,{message:'Could not save window settings.',detail:error.message});return;}
+      closing=true;app.exit(0);
+    }
   });
   await window.loadURL(origin);
+  if(settings.window?.maximized)window.maximize();
   window.show();
   await writeFile(path.join(home, 'desktop-start.json'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), electron: process.versions.electron, url: window.webContents.getURL() }));
 }

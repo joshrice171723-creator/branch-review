@@ -7,7 +7,7 @@ export const digest = value => createHash('sha256').update(JSON.stringify(value)
 export const defaultManifest = { version: 1, title: 'Jordan Review · intake', scenarios: [{ id: 'intake', title: 'Partially completed intake', path: ':intake', steps: ['Compare the answer controls in Original and Changed.', 'Edit and save an answer in Changed.', 'Confirm Original retains its previous answer.', 'Reopen Changed and confirm the saved answer persists.'] }] };
 export function scenarioRecipe(files = []) { return files.includes('apps/api/app/services/qa/office_qa.rb') ? 'qa-scenario.rb' : 'scenario.rb'; }
 export function manifestForFiles(files = []) {
-  return scenarioRecipe(files) === 'qa-scenario.rb' ? qaManifest : defaultManifest;
+  return scenarioRecipe(files) === 'qa-scenario.rb' ? qaManifest : {...defaultManifest,summary:'Starter intake comparison. Confirm these checks cover this branch before approving it.',source:'Built-in intake scenario. No branch-specific review plan was supplied.'};
 }
 export function validateManifest(value) {
   if (![1,2].includes(value?.version) || !Array.isArray(value.scenarios) || value.scenarios.length < 1 || value.scenarios.length > 100) throw new Error('Review manifest must contain 1–100 items and version 1 or 2.');
@@ -27,17 +27,22 @@ export function validateManifest(value) {
 }
 export {scenarioPath} from './public/preview-routes.js';
 export class ReviewStore {
-  constructor(directory) { this.directory = directory; this.records = []; }
+  constructor(directory) { this.directory = directory; this.records = []; this.saved='[]'; }
   async load() {
     await mkdir(this.directory, { recursive: true });
     this.records = JSON.parse(await readFile(path.join(this.directory, 'reviews.json'), 'utf8').catch(e => { if (e.code === 'ENOENT') return '[]'; throw e; }));
+    this.saved=JSON.stringify(this.records);
     for (const record of this.records) {
       if (record.delivery?.stage === 'deploying') record.delivery.stage = 'deployment-needs-inspection';
       if (record.delivery?.stage === 'pushing') record.delivery.stage = 'push-unconfirmed';
     }
     await this.persist(); return this;
   }
-  async persist() { const destination = path.join(this.directory, 'reviews.json'); await writeFile(destination + '.tmp', JSON.stringify(this.records, null, 2)); await rename(destination + '.tmp', destination); }
+  async persist() {
+    const destination = path.join(this.directory, 'reviews.json'), snapshot=JSON.stringify(this.records,null,2);
+    try { await writeFile(destination + '.tmp',snapshot);await rename(destination + '.tmp', destination);this.saved=snapshot; }
+    catch(error) { this.records=JSON.parse(this.saved);throw new Error(`Could not save review data. Your last saved results are unchanged. ${error.message}`,{cause:error}); }
+  }
   async open(snapshot, manifest, recipeHash) {
     const identity = { repository: snapshot.repository, ref: snapshot.comparison.branch.ref, source: snapshot.comparison.branch.sha, base: snapshot.original.sha, changed: snapshot.changed.sha, scenarioHash: digest({manifest, recipeHash}) };
     const id = digest(identity);

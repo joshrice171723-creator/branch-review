@@ -4,7 +4,8 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, startReview, stopReview, restoreReview, prepare } from './adapter.mjs';
 import { previewProxy } from './proxy.mjs';
-import { ReviewStore, manifestForFiles, scenarioRecipe, validateManifest, digest } from './reviews.mjs';
+import { ReviewStore, scenarioRecipe, digest } from './reviews.mjs';
+import { loadPlan } from './plans.mjs';
 import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
@@ -17,11 +18,7 @@ const store = await new ReviewStore(local).load();
 const delivery = new Delivery(git, store);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
 async function manifestFor(sha) {
-  const found = await git('ls-tree','--name-only',sha,'--','.branch-review.json');
-  if (!found) return validateManifest(manifestForFiles(state.comparison.files));
-  const raw = await git('show',`${sha}:.branch-review.json`);
-  if (raw.length > 64000) throw new Error('Review manifest is too large.');
-  return validateManifest(JSON.parse(raw));
+  return loadPlan(git,sha,state.comparison.files);
 }
 async function activate() {
   if (state.status !== 'ready') return;
