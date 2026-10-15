@@ -35,7 +35,9 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
       if(!await flush())return;
       const r=getState().record, old=r.manifest.scenarios.find(item=>item.id===itemId), target=r.manifest.scenarios.find(item=>item.id===next);
       if(view==='item' && old && target && (old.path!==target.path || old.originalPath!==target.originalPath || needsNavigation(target)) && !confirm('Open the next screen in both previews? Save any edits inside the preview first.'))return;
-      await api('/api/cursor',{id:r.id,itemId:next,view});await poll();if(view==='item')onSelect(next);$(view==='item'?'guided-item':'guided-results').scrollIntoView({block:'start'});
+      await api('/api/cursor',{id:r.id,itemId:next,view});
+      if(view==='item' && target && !matchesItem(r,target,$('item-search').value,$('item-filter').value || 'all')){$('item-search').value='';$('item-filter').value='all';}
+      await poll();if(view==='item')onSelect(next);$(view==='item'?'guided-item':'guided-results').scrollIntoView({block:'start'});
     }
     catch(e){error(e.message);}finally{pending=false;render(getState());}
   }

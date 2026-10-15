@@ -117,6 +117,18 @@ test('rapid Next clicks create only one navigation while saving',async t=>{
   assert.equal(h.calls.filter(call=>call.path==='/api/cursor').length,1);assert.equal(h.state.record.cursor.itemId,'second');
 });
 
+test('navigating outside a queue filter reveals the selected item without losing its notes',async t=>{
+  let h;
+  h=harness(t,{api:async(path,data)=>{if(path==='/api/cursor')h.state.record.cursor={itemId:data.itemId,view:data.view};}});
+  h.state.record.manifest={...defaultManifest,scenarios:[defaultManifest.scenarios[0],{...defaultManifest.scenarios[0],id:'second',title:'Second item'}]};
+  h.state.record.items={second:{notes:'Resume me'}};h.view.render(h.state);
+  h.elements['item-search'].value='Partially';h.elements['item-filter'].value='complete';
+  await h.elements['leave-unfinished'].onclick();
+  assert.equal(h.state.record.cursor.itemId,'second');
+  assert.equal(h.elements['item-search'].value,'');assert.equal(h.elements['item-filter'].value,'all');
+  assert.equal(h.elements['item-queue'].children.length,2);assert.equal(h.elements['item-notes'].value,'Resume me');
+});
+
 test('retest drafts recover after remount and failed item saves block approval',async t=>{
   const h=harness(t,{api:async(path)=>{if(path==='/api/item')throw Error('Disk unavailable');}}),e=h.elements;
   h.state.record.issues=[{id:'issue',status:'open',expected:'a',actual:'b',side:'changed',commit:'bbbbbbb',scenario:'intake',consoleErrors:[]}];h.view.render(h.state);
