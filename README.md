@@ -18,7 +18,7 @@ npm run desktop
 
 **Open repository** selects a local Git folder. Branch listing works with Git repositories; previews and publishing currently support Meta Clinic. The branch list defaults to **Unmerged into main**, based on commit ancestry against origin/main. Identical local/remote copies are combined; divergent copies remain separate. **All branches, including merged** shows historical work. Use Refresh to fetch current remote refs. This is merge status, not a claim that a revision has been published. Search a branch, choose Previous commit or Common ancestor with main, then **Open review**. First setup installs dependencies and migrates a separate database for each revision.
 
-Original and Changed stay mounted while toggling, preserving their own forms and scroll positions. Reopen returns both to the saved scenario; save edits first. Stop previews stops the owned stacks and preserves databases. Closing the desktop app keeps previews running and is blocked during active operations.
+Original and Changed stay mounted while toggling. Preview data is isolated, but desktop validation observed scroll positions resetting on a toggle. Reopen returns both to the saved scenario; save edits first. Stop previews stops the owned stacks and preserves databases. Closing the desktop app keeps previews running and is blocked during active operations.
 
 ## Local configuration
 
@@ -91,7 +91,7 @@ Unit tests cover Git comparisons, invalid refs, session separation, gateway boun
 
 The live check requires a ready preview pair. It signs into both with one cookie jar, saves and reloads a synthetic answer in Changed, verifies Original stays unchanged, then restores the answer.
 
-The Windows build launches and restores the pinned preview pair. Unit tests and the live persistence/isolation check pass. Screenshot capture, folder-picker interaction, rendered toggle behavior and the complete click-through still need visual acceptance: the available Codex UI-control connection times out. This implementation task has not merged or deployed Meta Clinic changes.
+The Windows build launches and restores the pinned preview pair. Unit tests and the live persistence/isolation check pass. Windows Computer Use visually verified Original/Changed switching and Reopen scenario on 2026-10-15. Both sides show Workflow coverage at /qa?view=coverage: Original ecbe9d9 shows historical untested rows; Changed 3f9a686 shows WF-011 Fail and WF-012 Pass, while WF-013 remains stale. The original UI-control connector remains unavailable; native Windows automation provided this acceptance. The in-app screenshot action, folder picker and complete release click-through remain unverified. This implementation task has not merged or deployed Meta Clinic changes.
 
 ## QA grid comparison
 
