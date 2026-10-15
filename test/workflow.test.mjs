@@ -20,10 +20,10 @@ function harness(t, options = {}) {
   globalThis.document = {getElementById: id => elements[id], createElement: () => new Element()};
   globalThis.window = {desktop:{capture:options.capture || (async()=> 'data:image/png;base64,example')}};
   globalThis.localStorage = {getItem:key=>saved.get(key), setItem:(key,value)=>saved.set(key,value), removeItem:key=>saved.delete(key)};
-  t.after(()=>{delete globalThis.document;delete globalThis.window;delete globalThis.localStorage;});
+  t.after(()=>{delete globalThis.document;delete globalThis.window;delete globalThis.localStorage;delete globalThis.confirm;});
   const state = {status:'ready', busy:false, repository:'test', record:{id:'review-a',identity:{ref:'refs/heads/test',base:'aaaaaaa',changed:'bbbbbbb'},manifest:defaultManifest,checks:{},issues:[],updatedAt:'1'}};
   let side = 'changed';
-  const view = workflow({getState:()=>state,getSide:()=>side,error:message=>{elements.error.textContent=message;},reopen:()=>{},
+  const view = workflow({getState:()=>state,getSide:()=>side,error:message=>{elements.error.textContent=message;},reopen:options.reopen || (()=>{}),
     api:async(path,data)=>{calls.push({path,data});if(path==='/api/history')return [];return options.api?.(path,data);},poll:async()=>view.render(state)});
   view.render(state);
   return {elements,state,view,calls,saved,switchSide(next){side=next;view.viewChanged();}};
@@ -116,4 +116,17 @@ test('retest drafts recover after remount and failed item saves block approval',
   const failing=workflow({api:async(path)=>{h.calls.push({path});if(path==='/api/item')throw Error('Disk unavailable');return [];},getState:()=>h.state,getSide:()=> 'changed',error:()=>{},poll:async()=>{},reopen:()=>{}});failing.render(h.state);
   e['item-notes'].value='Unsaved approval context';e['item-notes'].oninput();await e.approve.onclick();
   assert.equal(h.calls.some(call=>call.path==='/api/approve'),false);
+});
+
+test('returning to an item restores its screen after navigating elsewhere',async t=>{
+  const reopened=[];const h=harness(t,{reopen:force=>reopened.push(force)});
+  h.state.original=h.state.changed={scenario:{path:'/clinic/patients/3/encounters/1'}};
+  h.view.context('changed',{location:'/clinic/schedule',errors:[]});
+  globalThis.confirm=()=>false;
+  h.elements['scenario-select'].value='intake';await h.elements['scenario-select'].onchange();
+  assert.equal(h.calls.some(call=>call.path==='/api/cursor'),false);
+  globalThis.confirm=()=>true;await h.elements['scenario-select'].onchange();
+  assert.equal(reopened.at(-1),true);
+  h.view.context('changed',{location:'/clinic/patients/3/encounters/1',errors:[]});
+  await h.elements['scenario-select'].onchange();assert.equal(reopened.at(-1),false);
 });

@@ -1,5 +1,6 @@
 import http from "node:http";
 import { scrollBridge } from './scroll-bridge.mjs';
+import { reviewShortcut } from './public/shortcuts.js';
 import { defaultManifest, scenarioPath } from './reviews.mjs';
 
 export function cookieNamespace(side, sha) {
@@ -108,7 +109,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
           response.on('end', () => {
             const observer = `<script>(()=>{const errors=[];const report=()=>parent.postMessage({type:'review:context',location:location.pathname+location.search+location.hash,errors},${escapeJSON(appOrigin)});addEventListener('error',e=>{errors.push(String(e.message).slice(0,500));if(errors.length>10)errors.shift();report()});addEventListener('unhandledrejection',e=>{errors.push(String(e.reason).slice(0,500));if(errors.length>10)errors.shift();report()});setInterval(report,1500);report()})()</script>`;
             res.writeHead(response.statusCode, result);
-            const scrolling = `<script>(${scrollBridge.toString()})(${escapeJSON(appOrigin)})</script>`;
+        const scrolling = `<script>(${scrollBridge.toString()})(${escapeJSON(appOrigin)},${reviewShortcut.toString()})</script>`;
             res.end(Buffer.concat(chunks).toString().replace('</head>', observer + scrolling + '</head>'));
           });
           response.on('error', () => res.destroy());

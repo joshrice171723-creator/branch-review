@@ -9,6 +9,7 @@ import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
 import { reviewReport } from './report.mjs';
+import { previewHealth } from './health.mjs';
 
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false;
@@ -97,6 +98,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,busy,token,repository:repo,record:state.recordId?store.get(state.recordId):null,publishTarget:target,releaseConfigured:await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await branches());
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
+    if(req.method==='GET' && url.pathname==='/api/health')return json(res,200,await previewHealth({...state}));
     if(req.method==='GET' && url.pathname==='/api/report'){
       const record=store.get(url.searchParams.get('id')),html=await reviewReport(record,local);
       res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Disposition':`${url.searchParams.get('inline')==='1'?'inline':'attachment'}; filename="branch-review-${record.identity.changed.slice(0,7)}.html"`,'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'; base-uri 'none'"});return res.end(html);
@@ -116,7 +118,7 @@ const server=http.createServer(async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));

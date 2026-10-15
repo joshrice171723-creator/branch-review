@@ -738,3 +738,5 @@ dialog::backdrop {background:#152c2b80}
 #review-summary {margin:8px 0}
 @media(max-width:1250px){main{grid-template-columns:200px minmax(320px,1fr) 325px}.review{padding:20px 16px 32px}.item-navigation{bottom:-32px}}
 @media(max-width:950px){main{grid-template-columns:185px minmax(350px,1fr)}}
+.queue-filters{display:grid;gap:6px;padding:0 10px 10px}.queue-filters input,.queue-filters select{width:100%;padding:7px 9px;font-size:11px}.shortcut-hint{display:block;padding:4px 14px 10px;color:var(--muted);font-size:10px;line-height:1.6}
+#health-status{white-space:pre-line}.health-error{color:#9c3826}#diagnostic-log{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;font-size:10px}

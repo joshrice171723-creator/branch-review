@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir} from 'node:fs/promises';
 import {ReviewStore,validateManifest} from '../reviews.mjs';
-import {itemStatus,reviewCounts,nextItem,canApprove,fixRequest} from '../public/review-model.js';
+import {itemStatus,reviewCounts,nextItem,canApprove,fixRequest,matchesItem} from '../public/review-model.js';
 
 const manifest=validateManifest({version:2,title:'Twenty-item review',summary:'Test each behavior.',scenarios:Array.from({length:20},(_,i)=>({id:`item-${i+1}`,title:`Behavior ${i+1}`,path:'/qa?view=coverage',description:'A changed behavior',instructions:'Try the interaction.',expected:'It works.',steps:['First requirement','Second requirement']}))});
 const snapshot={repository:'test',comparison:{branch:{ref:'refs/heads/feature',sha:'b',subject:'Feature'}},original:{sha:'a'},changed:{sha:'b'}};
@@ -45,4 +45,14 @@ test('manifest validation preserves structured guidance and validates both previ
   assert.equal(manifest.scenarios.length,20);
   assert.throws(()=>validateManifest({...manifest,scenarios:[{...manifest.scenarios[0],originalPath:'https://outside.example'}]}),/inside/);
   assert.throws(()=>validateManifest({...manifest,scenarios:[{...manifest.scenarios[0],focus:{selector:'anything'}}]}),/row identifier/);
+});
+
+test('queue filters retain item identities and distinguish unfinished work from failures',async()=>{
+  const {store,record:r}=await setup(),first=manifest.scenarios[0],second=manifest.scenarios[1];
+  await store.item(r.id,first.id,{outcome:'blocked',notes:'',reason:'Cannot reach screen'});
+  assert.equal(matchesItem(r,first,'BEHAVIOR 1','attention'),true);
+  assert.equal(matchesItem(r,second,'','attention'),false);
+  assert.equal(matchesItem(r,second,'item-2','remaining'),true);
+  await store.check(r.id,second.id,0,true);await store.check(r.id,second.id,1,true);
+  assert.equal(matchesItem(r,second,'','remaining'),false);assert.equal(matchesItem(r,second,'','complete'),true);
 });

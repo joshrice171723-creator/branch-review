@@ -7,7 +7,7 @@ assert.equal(state.manifest.scenarios[0].path,'/qa?view=coverage');
 const results={};
 for (const side of ['original','changed']) {
   const origin=`http://127.0.0.1:${state[side].proxy}`;
-  const start=await fetch(origin+'/__review/start?scenario=qa-coverage').then(r=>r.text());
+  const start=await fetch(origin+'/__review/start?scenario='+encodeURIComponent(state.manifest.scenarios[0].id)).then(r=>r.text());
   assert.match(start,/\/qa\?view=coverage/);assert.match(start,/"public":true/);
   const page=await fetch(origin+'/qa?view=coverage');assert.equal(page.status,200);
   assert.match(await page.text(),/id="root"/);

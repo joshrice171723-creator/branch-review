@@ -1,4 +1,5 @@
 import { workflow } from './workflow.js';
+import { reviewShortcut } from './shortcuts.js';
 const $ = (id) => document.getElementById(id);
 let allBranches = [],
   selected = null,
@@ -70,8 +71,30 @@ function branchList() {
 function visibleBranches() { return allBranches.filter(b => $('branch-filter').value === 'all' || !b.merged); }
 async function loadBranches() {
   allBranches = await api("/api/branches");
+  const reviewed=currentState.record?.identity, latest=reviewed && allBranches.find(branch=>[branch.ref,...branch.aliases].includes(reviewed.ref));
+  $('revision-warning').hidden=!reviewed || latest?.sha===reviewed.source;
+  $('revision-warning').textContent=reviewed && latest?.sha!==reviewed.source ? latest?`This branch has a new commit (${latest.sha.slice(0,7)}). You are reviewing ${reviewed.source.slice(0,7)}. Open the latest branch to retest; saved results stay attached to their original version.`:'The reviewed branch is no longer listed. Saved evidence remains available.':'';
   await chooseVisibleBranch();
 }
+let healthChecking=false, lastHealth=0, healthResult=null;
+const healthKey=()=>`${currentState.status}:${currentState.original?.sha}:${currentState.changed?.sha}`;
+async function checkHealth() {
+  if(healthChecking || currentState.busy)return;
+  healthChecking=true;$('check-health').disabled=true;
+  try {
+    const key=healthKey();
+    const result=await api('/api/health');
+    if(key!==healthKey())return;
+    $('health-status').textContent=['original','changed'].map(side=>`${side==='original'?'Original':'Changed'}: ${result.sides[side].message}`).join('\n')+`\nChecked ${new Date(result.checkedAt).toLocaleTimeString()}`;
+    const healthy=Object.values(result.sides).every(side=>side.ok);
+    healthResult={key,healthy};
+    if(currentState.status==='ready' && !healthy)$('preview-status').textContent='Needs attention';
+    $('health-status').classList.toggle('health-error',currentState.status==='ready' && !healthy);
+    lastHealth=Date.now();
+  }catch(e){$('health-status').textContent=`Could not check previews: ${e.message}`;}
+  finally{healthChecking=false;$('check-health').disabled=false;}
+}
+$('check-health').onclick=checkHealth;
 async function chooseVisibleBranch() {
   const visible = visibleBranches();
   selected =
@@ -157,6 +180,14 @@ function toggle(side) {
     $("context").textContent =
       `${side === "original" ? "Original" : "Changed"} · ${preview.sha.slice(0, 7)} · ${currentState.manifest?.title || "Review scenario"}`;
 }
+function runShortcut(command) {
+  if(document.querySelector('dialog[open]') || currentState.status!=='ready' || currentState.busy)return;
+  if(command==='toggle')toggle(active==='changed'?'original':'changed');
+  else if(['next','previous'].includes(command) && currentState.record?.cursor?.view!=='results') {
+    const button=$(`item-${command}`);if(!button.disabled)button.click();
+  }
+}
+window.addEventListener('keydown',event=>{const command=reviewShortcut(event);if(command){event.preventDefault();runShortcut(command);}});
 function applyLayout() {
   const split=$('layout-mode').value==='side-by-side';
   $('frames').classList.toggle('side-by-side',split);$('split-control').hidden=!split;
@@ -174,6 +205,7 @@ function focusItem(item) {
 function mountFrames(state, force = false) {
   const item=state.manifest.scenarios.find(s=>s.id===reviewWorkflow.scenario()) || state.manifest.scenarios[0];
   const key = `${state.original.sha}:${state.changed.sha}:${item.path}:${item.originalPath || item.path}`;
+  if(focusedItem!==item.id && reviewWorkflow.needsNavigation(item))force=true;
   if (frameKey === key && !force) { if(focusedItem!==item.id){focusedItem=item.id;focusItem(item);}return; }
   focusedItem=item.id;
   frameKey = key;
@@ -208,13 +240,14 @@ async function poll() {
     $("loading").hidden = !preparing;
     $("frames").hidden = !ready;
     $("phase").textContent = currentState.phase;
+    $('diagnostic-log').textContent=currentState.log.map(entry=>`${entry.at} ${entry.message}`).join('\n')+(currentState.error?`\n${currentState.error}`:'');
     $("progress").textContent =
       currentState.log.map((entry) => entry.message).join("\n") +
       (currentState.lastOutput && preparing
         ? `\n\n${currentState.lastOutput}`
         : "");
     $("preview-status").textContent = ready
-      ? "Running"
+      ? healthResult?.key===healthKey() && !healthResult.healthy ? 'Needs attention' : "Running"
       : preparing
         ? "Preparing"
         : currentState.status === "error"
@@ -242,6 +275,7 @@ async function poll() {
       frameKey = "";
     }
     $("connection").textContent = "LOCAL PREVIEW";
+    if(Date.now()-lastHealth>15000)void checkHealth();
     if (previousBusy && !currentState.busy) await loadBranches();
   } catch (e) {
     $("connection").textContent = "REVIEW SERVER DISCONNECTED";
@@ -322,6 +356,7 @@ window.addEventListener("message", (event) => {
     error(`${side}: ${event.data.message}`);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context') reviewWorkflow.context(side,event.data);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:active' && $('layout-mode').value==='side-by-side')toggle(side);
+  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:shortcut')runShortcut(event.data.command);
   if ($('sync-scroll').checked && side === active && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:scroll') {
     const other = side === 'original' ? 'changed' : 'original';
     $(`frame-${other}`)?.contentWindow.postMessage(event.data, `http://127.0.0.1:${currentState[other].proxy}`);

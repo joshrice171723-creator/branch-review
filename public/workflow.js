@@ -1,13 +1,15 @@
 import { findingKey, loadDraft, saveDraft } from './drafts.js';
 import { guided } from './guided.js';
 import { canApprove } from './review-model.js';
+import { previewDestination } from './preview-routes.js';
 const $ = id => document.getElementById(id);
 const node = (tag, text, className) => { const el = document.createElement(tag); el.textContent = text; if (className) el.className = className; return el; };
 export function workflow({api, getState, getSide, error, poll, reopen}) {
   let scenario = 'intake', rendered = '', screenshot = null, screenshotKey = null, screenshotContext = null, draftKey = '', savingFinding = false, capturing = false;
   const retestNotes = new Map();
   const contexts = {original:{}, changed:{}};
-  const guide = guided({api,getState,poll,error,onSelect:next=>{scenario=next;rendered='';render(getState());reopen(false);}});
+  const needsNavigation=item=>['original','changed'].some(side=>contexts[side].location && contexts[side].location!==previewDestination(item,side,getState()));
+  const guide = guided({api,getState,poll,error,needsNavigation,onSelect:next=>{scenario=next;rendered='';render(getState());reopen(needsNavigation(getState().record.manifest.scenarios.find(item=>item.id===next)));}});
   const currentKey = () => findingKey(getState().record?.id, scenario, getSide());
   const notice = message => { $('review-notice').textContent = message; };
   async function act(action, data = {}) {
@@ -161,5 +163,5 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('retry-publish').disabled=!enabled;
     void history(state);
   }
-  return {render, viewChanged, flush:guide.flush, resetContexts:()=>{contexts.original={};contexts.changed={};clearScreenshot();}, scenario:()=>scenario, context:(side,data)=>{contexts[side]={location:String(data.location||'').slice(0,700),errors:Array.isArray(data.errors)?data.errors.slice(-10):[]};}};
+  return {render, viewChanged, flush:guide.flush, needsNavigation, resetContexts:()=>{contexts.original={};contexts.changed={};clearScreenshot();}, scenario:()=>scenario, context:(side,data)=>{contexts[side]={location:String(data.location||'').slice(0,700),errors:Array.isArray(data.errors)?data.errors.slice(-10):[]};}};
 }

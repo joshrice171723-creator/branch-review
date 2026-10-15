@@ -1,10 +1,11 @@
 // Runs inside each isolated preview; only its review parent can exchange positions.
-export function scrollBridge(appOrigin) {
+export function scrollBridge(appOrigin, shortcut) {
   let applying = false;
   let focusObserver, focusTimer;
   const route = () => location.pathname + location.search;
   const activate = () => parent.postMessage({type:'review:active'},appOrigin);
   addEventListener('pointerdown',activate,true);addEventListener('focusin',activate,true);addEventListener('wheel',activate,{passive:true});
+  addEventListener('keydown',event=>{const command=shortcut?.(event);if(command){event.preventDefault();parent.postMessage({type:'review:shortcut',command},appOrigin);}});
   function selector(element) {
     if (element === document.scrollingElement) return ':root';
     if (element.id) return '#' + CSS.escape(element.id);

@@ -7,6 +7,11 @@ export function itemStatus(record, item) {
   return saved.visitedAt || saved.notes || item.steps.some((_,index) => record.checks[`${item.id}:${index}`]) ? 'in-progress' : 'not-started';
 }
 export const isComplete = status => status === 'passed' || status === 'not-applicable';
+export function matchesItem(record,item,query='',filter='all') {
+  const status=itemStatus(record,item);
+  return `${item.title} ${item.id} ${item.description || ''}`.toLowerCase().includes(query.toLowerCase().trim()) &&
+    (filter==='all' || filter==='remaining' && !isComplete(status) || filter==='attention' && ['needs-fixes','blocked'].includes(status) || filter==='complete' && isComplete(status));
+}
 export function reviewCounts(record) {
   const counts = Object.fromEntries(Object.keys(statusLabels).map(key => [key,0]));
   for (const item of record.manifest.scenarios) counts[itemStatus(record,item)]++;

@@ -25,11 +25,7 @@ export function validateManifest(value) {
   }
   return { version: value.version, title: String(value.title || 'Branch review').slice(0, 160), summary:String(value.summary || '').slice(0,2000), source:String(value.source || 'Committed review manifest').slice(0,300), scenarios: value.scenarios.map(({id,title,path,steps,description='',instructions='',expected='',focus='',originalPath}) => ({id,title,path,steps,description,instructions,expected,focus,...(originalPath?{originalPath}:{})})) };
 }
-export function scenarioPath(scenario, fixture) {
-  if (scenario.path === ':intake') return fixture.path;
-  const match = /patients\/(\d+)\/encounters\/(\d+)/.exec(fixture.path);
-  return scenario.path.replaceAll(':patientId', match?.[1] || '').replaceAll(':encounterId', match?.[2] || '');
-}
+export {scenarioPath} from './public/preview-routes.js';
 export class ReviewStore {
   constructor(directory) { this.directory = directory; this.records = []; }
   async load() {

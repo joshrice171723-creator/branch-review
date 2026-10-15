@@ -57,8 +57,9 @@
         <div id="branches" class="branch-list" aria-label="Git branches"></div>
         <section id="guided-queue" hidden aria-label="Review items">
           <div class="queue-heading"><h2>Review items</h2><span id="queue-progress"></span></div>
+          <div class="queue-filters"><input id="item-search" type="search" placeholder="Find a review item…" aria-label="Find a review item"><select id="item-filter" aria-label="Filter review items"><option value="all">All items</option><option value="remaining">Remaining</option><option value="attention">Needs attention</option><option value="complete">Completed</option></select></div>
           <div id="item-queue"></div>
-          <button id="show-results" class="quiet">Review results</button>
+          <button id="show-results" class="quiet">Review results</button><small class="shortcut-hint">Alt + ← / → Previous / Next<br>Alt + V Toggle versions</small>
         </section>
         <div class="rail-footer">
           <span class="dot"></span> Runs on your machine<br /><small
@@ -145,6 +146,7 @@
         <button id="view-diff" class="secondary" disabled>Inspect code changes</button>
         </details>
         <div id="error" role="alert" hidden></div>
+        <p id="revision-warning" class="inline-choice" role="status" hidden></p>
         <section id="review-workflow" hidden>
           <p id="active-review" class="active-review"></p>
           <p id="review-summary" class="small"></p>
@@ -218,6 +220,7 @@
           <button id="view-history" class="secondary" disabled>Inspect saved review</button>
           <button id="retest" class="secondary" disabled>Retest latest branch commit</button>
         </details>
+        <details class="workflow-section"><summary>Preview diagnostics</summary><p id="health-status" class="small" role="status">Checking preview health…</p><button id="check-health" class="secondary">Check previews now</button><pre id="diagnostic-log"></pre></details>
         <details class="files" open>
           <summary>
             <span>Changed files</span><span id="file-count">0</span>
