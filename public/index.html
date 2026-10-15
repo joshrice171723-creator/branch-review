@@ -17,7 +17,7 @@
         <span class="divider">/</span> Review workspace
       </div>
       <div class="header-actions">
-        <button id="choose-repository" class="quiet" hidden>Open repository</button><button id="focus" class="quiet" aria-pressed="false">
+          <button id="updated-branch" class="secondary" hidden></button><button id="review-tools" class="quiet" disabled>Review tools</button><button id="capture-item" class="quiet" disabled>Add this screen</button><button id="choose-repository" class="quiet" hidden>Open repository</button><button id="focus" class="quiet" aria-pressed="false">
           Expand preview</button
         ><button id="stop" class="quiet" disabled>Stop previews</button>
       </div>
@@ -61,6 +61,8 @@
           <div class="queue-heading"><h2>Review items</h2><span id="queue-progress"></span></div>
           <div class="queue-filters"><input id="item-search" type="search" placeholder="Find a review item…" aria-label="Find a review item"><select id="item-filter" aria-label="Filter review items"><option value="all">All items</option><option value="remaining">Remaining</option><option value="attention">Needs attention</option><option value="complete">Completed</option></select></div>
           <div id="item-queue"></div>
+          <button id="review-fixes" class="secondary">Review fixes</button>
+          <div id="fix-mode-note" class="small" hidden>Reviewing failed and blocked items only. <button id="exit-fix-mode" class="quiet">Return to all items</button></div>
           <button id="show-results" class="quiet">Review results</button><small class="shortcut-hint">Alt + ← / → Previous / Next<br>Alt + V Toggle versions</small>
         </section>
         <div class="rail-footer">
@@ -70,6 +72,7 @@
         </div>
       </aside>
       <section class="workspace" aria-label="Application preview">
+        <p id="tool-notice" class="tool-notice" role="status" hidden></p>
         <div class="preview-toolbar">
           <div class="preview-label">
             <span class="small-mark">▣</span><span>Meta Clinic</span
@@ -194,6 +197,7 @@
               <textarea id="actual" required maxlength="4000"></textarea>
               <button id="capture" type="button" class="secondary" hidden>Capture screenshot</button>
               <img id="attachment" alt="Screenshot attached to this finding" hidden />
+              <video id="video-attachment" controls hidden aria-label="Recording attached to this finding"></video>
               <button id="remove-attachment" type="button" class="quiet" hidden>Remove screenshot</button>
               <button id="report" class="secondary">Save finding</button>
             </form>
@@ -239,6 +243,31 @@
     <dialog id="diff-dialog" aria-labelledby="diff-title"><header class="dialog-heading"><h2 id="diff-title">Code changes</h2><button id="close-diff" class="quiet">Close</button></header><p id="diff-identity" class="small"></p><label for="diff-files" class="field-label">Changed file</label><select id="diff-files"></select><p id="diff-warning" role="status" class="small"></p><pre id="diff-patch"></pre></dialog>
     <dialog id="report-dialog" aria-labelledby="report-title"><header class="dialog-heading"><h2 id="report-title">Saved review report</h2><a id="download-report" class="quiet" download>Download with screenshots</a><button id="close-report" class="quiet">Close</button></header><iframe id="report-frame" title="Saved review report" sandbox="allow-same-origin"></iframe></dialog>
     <dialog id="evidence-dialog" aria-labelledby="evidence-title"><header class="dialog-heading"><h2 id="evidence-title">Finding screenshot</h2><button id="close-evidence" class="quiet">Close</button></header><p id="evidence-context" class="small"></p><img id="evidence-image" alt="Screenshot captured with the review finding"></dialog>
+    <dialog id="tools-dialog" aria-labelledby="tools-title">
+      <header class="dialog-heading"><h2 id="tools-title">Review tools</h2><button id="close-tools" class="quiet">Close</button></header>
+      <nav class="tools-tabs" aria-label="Review tools"><button id="tab-plan">Plan</button><button id="tab-updates">Updates &amp; fixes</button><button id="tab-evidence">Evidence</button><button id="tab-checks">Checks</button><button id="tab-release">Published review</button></nav>
+      <p id="tools-status" role="status" aria-live="polite"></p>
+      <section id="tools-plan">
+        <p>Edit the checks for this exact version. Saving creates a new review and resets checks and approval; previous evidence stays in history.</p>
+        <label class="field-label" for="plan-summary-edit">What changed</label><textarea id="plan-summary-edit" maxlength="2000"></textarea>
+        <div class="tool-actions"><button id="generate-plan">Generate with Codex</button><button id="copy-plan-instructions">Copy Codex branch instructions</button><button id="plan-export">Export manifest</button></div>
+        <label class="check"><input id="auto-plan" type="checkbox">Automatically ask Codex for a plan when opening a branch without one</label>
+        <label class="field-label" for="plan-item-list">Review item</label><select id="plan-item-list"></select><p id="plan-item-id" class="small muted"></p>
+        <div class="tool-actions"><button id="plan-add">Add item</button><button id="plan-remove">Remove item</button><button id="plan-up">Move up</button><button id="plan-down">Move down</button><button id="plan-responsive">Add tablet &amp; phone checks</button></div>
+        <div class="plan-fields">
+          <label>Title<input id="plan-title" maxlength="160"></label><label>Changed screen<input id="plan-path" maxlength="500"></label>
+          <label>Original screen (optional)<input id="plan-originalPath" maxlength="500"></label><label>Row ID or heading to focus<input id="plan-focus" maxlength="160"></label>
+          <label>What changed<textarea id="plan-description" maxlength="2000"></textarea></label><label>What to do<textarea id="plan-instructions" maxlength="2000"></textarea></label>
+          <label>Expected result<textarea id="plan-expected" maxlength="2000"></textarea></label><label>Checks (one per line)<textarea id="plan-steps" rows="5"></textarea></label>
+          <label>Affected files (one per line)<textarea id="plan-files" rows="3"></textarea></label><label>Required viewport<select id="plan-viewport"><option value="">Any size</option><option value="desktop">Desktop</option><option value="tablet">Tablet</option><option value="phone">Phone</option></select></label>
+        </div><button id="plan-save" class="primary">Save new review plan</button>
+      </section>
+      <section id="tools-updates" hidden><h3>Branch updates</h3><p id="update-summary"></p><pre id="update-commits"></pre><div class="tool-actions"><button id="refresh-updates">Refresh analysis</button><button id="open-updated">Open updated branch</button></div><h3>Recommended retest order</h3><p class="small">Recommendations never carry a pass forward. Every new commit has its own checklist.</p><ol id="retest-advice"></ol><h3>Related branches</h3><div id="branch-relations"></div><h3>Send fixes to Codex</h3><p>Resume the specified chat in a new isolated fix checkout. Review its resulting branch before merging.</p><label for="codex-chat">Codex chat UUID</label><input id="codex-chat" placeholder="Exact chat ID"><button id="send-codex" class="secondary">Review and send fix request</button></section>
+      <section id="tools-evidence" hidden><h3>Starting state</h3><p>Restore the active version's scenario data when you need a repeatable starting point.</p><button id="restore-data">Restore starting data</button><div id="evidence-tools"></div></section>
+      <section id="tools-checks" hidden><h3>Automated checks</h3><p>Runs configured scripts in the isolated Changed checkout. These results are separate from manual QA.</p><label for="check-select">Check</label><select id="check-select"></select><pre id="check-command"></pre><button id="run-check">Run selected check</button><h3>Prepare the next branch</h3><p>Starts its isolated database and servers in a spare environment while you keep reviewing. Opening that commit reuses the prepared preview.</p><select id="warm-branch" aria-label="Branch to prepare"></select><button id="warm-preview">Prepare next preview</button><div id="screen-checks"></div></section>
+      <section id="tools-release" hidden><h3>Verify the published workflow</h3><div id="published-tools"></div></section>
+      <details class="workflow-section" open><summary>Jobs</summary><div id="job-list"></div></details>
+    </dialog>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

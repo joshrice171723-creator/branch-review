@@ -1,6 +1,6 @@
 require 'json'
 database = ActiveRecord::Base.connection_db_config.database
-abort 'QA review fixtures require an isolated review database.' unless Rails.env.development? && database.match?(/\Aapply_review_(original|changed)_[0-9a-f]{12}_development\z/)
+abort 'QA review fixtures require an isolated review database.' unless Rails.env.development? && database.match?(/\Aapply_review_(original|changed|standby)_[0-9a-f]{12}_development\z/)
 revision = ENV.fetch('BRANCH_REVIEW_REVISION')
 abort 'Invalid review revision.' unless revision.match?(/\A[0-9a-f]{40}\z/) && database.include?(revision[0,12])
 

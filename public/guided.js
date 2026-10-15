@@ -4,6 +4,7 @@ const el = (tag,text,className) => { const node=document.createElement(tag);node
 export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>false}) {
   let key='', queueKey='', timer, pending=false, advancing=false, dirty=false, version=0, savePromise=Promise.resolve(true);
   let recordId='', itemId='';
+  let fixMode=false;
   const status = text => { $('item-save').textContent=text; };
   function draft() { return {outcome:$('item-outcome').value,notes:$('item-notes').value,reason:$('item-reason').value}; }
   function draftKey() { return `branch-review:item:${recordId}:${itemId}`; }
@@ -49,14 +50,16 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const r=getState().record,item=r.manifest.scenarios.find(item=>item.id===itemId);
     if(!leave && !isComplete(itemStatus(r,item)) && !['blocked','needs-fixes'].includes(itemStatus(r,item))) { $('unfinished-choice').hidden=false;$('unfinished-choice').scrollIntoView({block:'center'});return; }
     $('unfinished-choice').hidden=true;
-    const next=nextItem(r,itemId);await navigate(next || itemId,next?'item':'results');
+    const next=nextItem(r,itemId,fixMode?'attention':'remaining');await navigate(next || itemId,next?'item':'results');
     } finally { advancing=false; }
   }
   $('item-next').onclick=()=>advance();
   $('item-search').oninput=$('item-filter').onchange=()=>render(getState());
   $('leave-unfinished').onclick=()=>advance(true);
   $('keep-testing').onclick=()=>{$('unfinished-choice').hidden=true;};
-  $('item-previous').onclick=()=>{const items=getState().record.manifest.scenarios,index=items.findIndex(item=>item.id===itemId);if(index>0)void navigate(items[index-1].id);};
+  $('item-previous').onclick=()=>{const r=getState().record,items=r.manifest.scenarios,index=items.findIndex(item=>item.id===itemId),previous=items.slice(0,index).findLast(item=>!fixMode || matchesItem(r,item,'','attention'));if(previous)void navigate(previous.id);};
+  $('review-fixes').onclick=async()=>{if(!await flush())return;const r=getState().record,first=r.manifest.scenarios.find(item=>matchesItem(r,item,'','attention'));if(!first)return;fixMode=true;$('item-search').value='';$('item-filter').value='attention';await navigate(first.id);};
+  $('exit-fix-mode').onclick=()=>{fixMode=false;$('item-filter').value='all';render(getState());};
   $('show-results').onclick=()=>navigate(itemId,'results');
   $('resume-review').onclick=()=>{const r=getState().record;void navigate(r.manifest.scenarios.find(item=>!isComplete(itemStatus(r,item)))?.id || itemId);};
   $('item-notes').oninput=$('item-reason').oninput=edited;
@@ -75,6 +78,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const currentKey=`${r.id}:${current.id}`;
     const moved=key!==currentKey;
     if(moved){
+      if(recordId!==r.id)fixMode=false;
       key=currentKey;recordId=r.id;itemId=current.id;dirty=false;version++;
       let saved=r.items?.[itemId]||{};
       try{const local=JSON.parse(localStorage.getItem(draftKey())||'null');if(local){saved=local;dirty=true;}}catch{}
@@ -84,6 +88,9 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     }
     const results=r.cursor?.view==='results',counts=reviewCounts(r),currentStatus=itemStatus(r,current);
     $('guided-item').hidden=results;$('guided-results').hidden=!results;
+    $('fix-mode-note').hidden=!fixMode;
+    $('review-fixes').textContent=`Review fixes (${counts['needs-fixes']+counts.blocked})`;
+    $('review-fixes').disabled=!enabled || !(counts['needs-fixes']+counts.blocked);
     $('item-reason-wrap').hidden=!$('item-outcome').value;
     $('item-number').textContent=`ITEM ${index+1} OF ${items.length}`;
     $('item-title').textContent=current.title;$('item-description').textContent=current.description || r.manifest.summary || 'Compare this behavior in Original and Changed.';
@@ -109,10 +116,10 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
       $('result-items').replaceChildren(...items.map((item,i)=>{const state=itemStatus(r,item),button=el('button',`${i+1}. ${item.title} — ${statusLabels[state]}`,'result-item');button.disabled=!enabled;button.onclick=()=>navigate(item.id);return button;}));
     }
     for(const id of ['item-next','item-previous','item-outcome','item-notes','item-reason','show-results','resume-review','prepare-handoff','retry-item-save'])$(id).disabled=!enabled;
-    $('item-previous').disabled=!enabled || index===0;
+    $('item-previous').disabled=!enabled || !items.slice(0,index).some(item=>!fixMode || matchesItem(r,item,'','attention'));
     $('resume-review').textContent=counts.complete===counts.total?'Revisit review items':'Continue remaining checks';
     $('prepare-handoff').disabled=!enabled || canApprove(r);
-    $('item-next').textContent=nextItem(r,itemId)?'Next item →':'Review results →';
+    $('item-next').textContent=nextItem(r,itemId,fixMode?'attention':'remaining')?(fixMode?'Next fix →':'Next item →'):'Review results →';
   }
   return {render,flush,navigate};
 }

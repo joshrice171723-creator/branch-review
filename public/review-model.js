@@ -17,9 +17,9 @@ export function reviewCounts(record) {
   for (const item of record.manifest.scenarios) counts[itemStatus(record,item)]++;
   return {...counts,total:record.manifest.scenarios.length,complete:counts.passed+counts['not-applicable']};
 }
-export function nextItem(record, current) {
+export function nextItem(record, current, mode='remaining') {
   const items = record.manifest.scenarios, index = items.findIndex(item=>item.id===current);
-  return items.slice(index+1).find(item=>!isComplete(itemStatus(record,item)))?.id || null;
+  return items.slice(index+1).find(item=>matchesItem(record,item,'',mode))?.id || null;
 }
 export function canApprove(record) {
   return record.issues.every(issue=>issue.status==='resolved') && record.manifest.scenarios.every(item => {
@@ -51,6 +51,7 @@ export function fixRequest(record) {
     for (const issue of record.issues.filter(issue=>issue.scenario===item.id && issue.status!=='resolved')) {
       lines.push(`Finding ${issue.id}: ${issue.actual}`, `Expected: ${issue.expected}`, `Observed in ${issue.side} at ${issue.commit}, ${issue.location || item.path}`);
       if (issue.screenshot) lines.push(`Screenshot attachment: ${issue.screenshot}`);
+      if (issue.video) lines.push(`Recording attachment: ${issue.video}`);
     }
   }
   const unassigned=record.issues.filter(issue=>issue.status!=='resolved' && !record.manifest.scenarios.some(item=>item.id===issue.scenario));

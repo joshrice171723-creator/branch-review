@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scenarioRecipe } from './reviews.mjs';
 import { loadPlan } from './plans.mjs';
+import {createHash} from 'node:crypto';
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
 export const local = process.env.BRANCH_REVIEW_HOME || path.join(root, ".local");
@@ -25,6 +26,7 @@ export const toolchain =
 export const slots = {
   original: { web: 3410, api: 3411, postgres: 54541, proxy: 4311 },
   changed: { web: 3420, api: 3421, postgres: 54542, proxy: 4312 },
+  standby: { web: 3430, api: 3431, postgres: 54543, proxy: 4313 },
 };
 export const state = {
   status: "idle",
@@ -159,7 +161,7 @@ async function lifecycle(side, sha, action) {
   const cwd = path.join(previewRoot, side);
   if (action === 'stop') await clearDeadPidRecords(cwd);
   const env = environment(side, sha);
-  progress(`${side === "original" ? "Original" : "Changed"} · ${action}`);
+  progress(`${side === "original" ? "Original" : side === "standby" ? "Next preview" : "Changed"} · ${action}`);
   const logfile = path.join(local, `${side}.log`);
   const output = await run(
     "python",
@@ -199,7 +201,7 @@ export async function clearDeadPidRecords(cwd) {
   }
   return removed;
 }
-export async function prepare(side, sha) {
+export async function prepare(side, sha, files=state.comparison.files) {
   const cwd = path.join(previewRoot, side);
   await assertOwner();
   if (!(await exists(cwd))) await git("worktree", "add", "--detach", cwd, sha);
@@ -221,11 +223,18 @@ export async function prepare(side, sha) {
       `${side} preview has edits. Preserve them before switching.\n${dirty}`,
     );
   const current = await run("git", ["rev-parse", "HEAD"], { cwd });
+  const recipeHash=createHash('sha256').update(await readFile(path.join(root,scenarioRecipe(files)))).digest('hex');
+  const cacheFile=path.join(local,`preview-${side}-${sha}-${recipeHash}.json`);
+  const cached=JSON.parse(await readFile(cacheFile,'utf8').catch(()=> 'null'));
+  if(current===sha && cached){
+    const ready=await Promise.all([slots[side].api,slots[side].web].map((port,index)=>fetch(`http://127.0.0.1:${port}/${index?'login':'up'}`,{signal:AbortSignal.timeout(2000)}).then(r=>r.ok,()=>false)));
+    if(ready.every(Boolean)){progress(`${side} · reused running preview`);return cached;}
+  }
   await lifecycle(side, current, "stop");
   await run("git", ["checkout", "--detach", sha], { cwd });
   await lifecycle(side, sha, "setup");
   progress(
-    `${side === "original" ? "Original" : "Changed"} · preparing review scenario`,
+    `${side === "original" ? "Original" : side === "standby" ? "Next preview" : "Changed"} · preparing review scenario`,
   );
   const scenarioOutput = await run(
     "ruby",
@@ -234,7 +243,7 @@ export async function prepare(side, sha) {
       "exec",
       "bin/rails",
       "runner",
-      path.join(root, scenarioRecipe(state.comparison.files)),
+      path.join(root, scenarioRecipe(files)),
     ],
     {
       cwd: path.join(cwd, "apps/api"),
@@ -248,15 +257,27 @@ export async function prepare(side, sha) {
     throw new Error("The intake scenario did not return a destination.");
   const scenario = JSON.parse(scenarioLine.slice("BRANCH_REVIEW=".length));
   await lifecycle(side, sha, "start");
-  return {
+  const result = {
     side,
     sha,
     ...slots[side],
     database: environment(side, sha).APPLY_DEVELOPMENT_DATABASE,
     scenario,
+    runtime:side,directory:cwd,
   };
+  await writeFile(cacheFile,JSON.stringify(result));return result;
+}
+
+export async function resetScenario(side){
+  if(!['original','changed'].includes(side) || state.status!=='ready')throw new Error('Open a ready preview first.');
+  await assertOwner();const preview=state[side],runtime=preview.runtime || side,cwd=path.join(previewRoot,runtime);
+  if(await run('git',['rev-parse','HEAD'],{cwd})!==preview.sha || await run('git',['status','--porcelain'],{cwd}))throw new Error('Preview source changed. Reopen its committed version.');
+  const output=await run('ruby',['bin/postgres','exec','bin/rails','runner',path.join(root,scenarioRecipe(state.comparison.files))],{cwd:path.join(cwd,'apps/api'),env:{...environment(runtime,preview.sha),BRANCH_REVIEW_RESET:'1'}});
+  const line=output.split('\n').find(line=>line.startsWith('BRANCH_REVIEW='));if(!line)throw new Error('Scenario reset did not return a destination.');
+  preview.scenario=JSON.parse(line.slice('BRANCH_REVIEW='.length));return preview.scenario;
 }
 export async function startReview(ref, baseline, baselineCommit) {
+  const previousRuntime=state.changed?.runtime || 'changed';
   state.status = "preparing";
   state.error = null;
   state.original = null;
@@ -268,7 +289,9 @@ export async function startReview(ref, baseline, baselineCommit) {
     const selected = await comparison(ref, baseline, baselineCommit);
     Object.assign(state, { comparison: selected });
     state.original = await prepare("original", selected.base);
-    state.changed = await prepare("changed", selected.branch.sha);
+    let runtime=previousRuntime;
+    if(state.prepared?.sha===selected.branch.sha && state.prepared.recipe===scenarioRecipe(selected.files))runtime=state.prepared.runtime;
+    state.changed = {...await prepare(runtime, selected.branch.sha),side:'changed',proxy:slots.changed.proxy};
     state.status = "ready";
     progress("Both previews are ready");
     await writeFile(
@@ -295,7 +318,7 @@ export async function stopReview() {
   progress('Stopping both previews; saved review data will be kept');
   try {
     await assertOwner();
-    for (const side of ["original", "changed"]) {
+    for (const side of ["original", "changed", "standby"]) {
       if (await exists(path.join(previewRoot, side))) {
         const sha = await run("git", ["rev-parse", "HEAD"], {
           cwd: path.join(previewRoot, side),
@@ -323,13 +346,13 @@ export async function restoreReview() {
     for (const side of ["original", "changed"]) {
       const slot = previous[side];
       const head = await run("git", ["rev-parse", "HEAD"], {
-        cwd: path.join(previewRoot, side),
+        cwd: path.join(previewRoot, slot.runtime || side),
       });
       if (head !== slot.sha)
         throw new Error("Preview checkout revision changed.");
       if (
         await run("git", ["status", "--porcelain"], {
-          cwd: path.join(previewRoot, side),
+          cwd: path.join(previewRoot, slot.runtime || side),
         })
       )
         throw new Error("Preview checkout has edits.");

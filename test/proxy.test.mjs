@@ -94,6 +94,9 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
   assert.equal((await fetch(origin+'/__review/start?scenario=unknown')).status,400);
   const document=await fetch(origin+'/document').then(r=>r.text());
   assert.match(document,/review:context/);assert.match(document,/<body>Clinic<\/body>/);
+  state.original.web=upstream.address().port;
+  slot.web=1;
+  assert.equal(await fetch(origin).then(r=>r.text()),'preview','promoted preview uses its own runtime port');
   state.status = "preparing";
   assert.equal((await fetch(origin)).status, 503);
 });

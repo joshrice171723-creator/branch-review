@@ -9,7 +9,7 @@ The remaining screenshot enlargement and unresolved-finding filter were verified
 The packaged desktop source matches cf5eeab. No live Meta Clinic merge or publish was executed.
 Publishing is implemented but its live deployment path remains unverified.
 
-## Next 20 — implementation queue
+## Next 20 — implemented in 0.4.0
 
 1. Codex-generated branch plans
 2. Fix-only review navigation
@@ -32,5 +32,22 @@ Publishing is implemented but its live deployment path remains unverified.
 19. Branch dependency and overlap analysis
 20. Guided post-publish verification
 
-Implementation and verification status will be recorded against commits. A control being present
-does not establish that its external integration or live release path has been exercised.
+All twenty controls and their local persistence/integration paths are implemented. The consolidated
+suite passed 53 tests; a subsequent configured-check execution regression passed with the other
+11 tool tests (54 tests total). A focused gateway regression also verifies forwarding to a promoted
+spare runtime instead of the default port.
+
+Native desktop checks verified the versioned plan editor (six items became eight, with 16 unchecked
+requirements and previous evidence retained), current-screen accessibility analysis, matching
+Original/Changed screenshot capture and pixel highlighting, and a background preview preparation
+job completing with its own database and servers while the active pair remained available.
+Reopening promoted the spare runtime (3430/3431) to Changed, and the live QA check passed exact
+commit and row assertions through the normal gateways. Native recording produced a playable
+15-second preview clip. The queue remains visible in the 1200px-wide desktop window.
+Evidence: ../desktop-verification/visual-comparison-0.4.png.
+
+Verification limits: the configured Codex CLI was detected, but no generation request or direct
+chat fix job was sent. No live Meta Clinic push, publication or hosted checklist was performed.
+Recording/replay, annotations, clip attachment, responsive presets and performance sampling
+have automated boundary coverage where applicable but do not yet all have complete
+native desktop journey evidence. Implementation completion is not full end-to-end acceptance.

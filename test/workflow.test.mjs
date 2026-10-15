@@ -171,3 +171,10 @@ test('findings filter without losing retest drafts and screenshot viewer retains
   assert.equal(e.findings.children[0].children.find(n=>n.placeholder==='Describe the retest result').value,'Retest draft');
   e['finding-filter'].value='current';e['finding-filter'].onchange();assert.equal(e.findings.children.length,1);
 });
+
+test('Review fixes enters a scoped queue and Next skips unrelated unfinished work',async t=>{
+  let h;h=harness(t,{api:async(path,data)=>{if(path==='/api/cursor')h.state.record.cursor={itemId:data.itemId,view:data.view};}});
+  const first=defaultManifest.scenarios[0];h.state.record.manifest={...defaultManifest,scenarios:[first,{...first,id:'second'},{...first,id:'third'}]};h.state.record.items={intake:{outcome:'needs-fixes',reason:'Wrong'},third:{outcome:'blocked',reason:'Unavailable'}};h.view.render(h.state);
+  await h.elements['review-fixes'].onclick();assert.equal(h.elements['fix-mode-note'].hidden,false);await h.elements['item-next'].onclick();assert.equal(h.state.record.cursor.itemId,'third');
+  h.elements['exit-fix-mode'].onclick();assert.equal(h.elements['fix-mode-note'].hidden,true);assert.equal(h.elements['item-filter'].value,'all');
+});

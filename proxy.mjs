@@ -2,6 +2,8 @@ import http from "node:http";
 import { scrollBridge } from './scroll-bridge.mjs';
 import { reviewShortcut } from './public/shortcuts.js';
 import { defaultManifest, scenarioPath } from './reviews.mjs';
+import {reviewToolsBridge} from './review-tools-bridge.mjs';
+import {readFile} from 'node:fs/promises';
 
 export function cookieNamespace(side, sha) {
   return `br_${side}_${sha.slice(0, 12)}_`;
@@ -26,7 +28,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
   function headers(req, preview) {
     const result = {
       ...req.headers,
-      host: upstream,
+      host: `127.0.0.1:${preview.web || slot.web}`,
       'accept-encoding': 'identity',
       cookie: upstreamCookies(
         req.headers.cookie,
@@ -35,9 +37,9 @@ export function previewProxy(side, slot, getState, appOrigin) {
     };
     delete result["forwarded"];
     delete result["x-forwarded-host"];
-    if (result.origin === origin) result.origin = `http://${upstream}`;
+    if (result.origin === origin) result.origin = `http://127.0.0.1:${preview.web || slot.web}`;
     if (result.referer?.startsWith(origin + "/"))
-      result.referer = result.referer.replace(origin, `http://${upstream}`);
+      result.referer = result.referer.replace(origin, `http://127.0.0.1:${preview.web || slot.web}`);
     return result;
   }
   const server = http.createServer((req, res) => {
@@ -59,6 +61,9 @@ export function previewProxy(side, slot, getState, appOrigin) {
       return;
     }
     const url = new URL(req.url, origin);
+    if(req.method==='GET' && url.pathname==='/__review/axe.js'){
+      readFile(new URL('./node_modules/axe-core/axe.min.js',import.meta.url)).then(content=>{res.writeHead(200,{'Content-Type':'text/javascript','Cache-Control':'no-store'});res.end(content);},()=>res.writeHead(404).end('Accessibility engine unavailable'));return;
+    }
     if (url.pathname === "/__review/start") {
       const manifest = current.manifest || defaultManifest;
       const scenario = manifest.scenarios.find(s => s.id === (url.searchParams.get('scenario') || manifest.scenarios[0].id));
@@ -83,7 +88,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
     const request = http.request(
       {
         hostname: "127.0.0.1",
-        port: slot.web,
+        port: preview.web || slot.web,
         method: req.method,
         path: req.url,
         headers: headers(req, preview),
@@ -97,9 +102,9 @@ export function previewProxy(side, slot, getState, appOrigin) {
         // This loopback-only preview may be embedded only by its review shell.
         delete result["x-frame-options"];
         result["content-security-policy"] = `frame-ancestors ${appOrigin}`;
-        if (result.location?.startsWith(`http://${upstream}/`))
+        if (result.location?.startsWith(`http://127.0.0.1:${preview.web || slot.web}/`))
           result.location = result.location.replace(
-            `http://${upstream}`,
+            `http://127.0.0.1:${preview.web || slot.web}`,
             origin,
           );
         if (req.method === 'GET' && result['content-type']?.includes('text/html') && !result['content-encoding']) {
@@ -107,7 +112,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
           const chunks = [];
           response.on('data', chunk => chunks.push(chunk));
           response.on('end', () => {
-            const observer = `<script>(()=>{const errors=[];const report=()=>parent.postMessage({type:'review:context',location:location.pathname+location.search+location.hash,errors},${escapeJSON(appOrigin)});addEventListener('error',e=>{errors.push(String(e.message).slice(0,500));if(errors.length>10)errors.shift();report()});addEventListener('unhandledrejection',e=>{errors.push(String(e.reason).slice(0,500));if(errors.length>10)errors.shift();report()});setInterval(report,1500);report()})()</script>`;
+            const observer = `<script>(${reviewToolsBridge.toString()})(${escapeJSON(appOrigin)})</script>`;
             res.writeHead(response.statusCode, result);
         const scrolling = `<script>(${scrollBridge.toString()})(${escapeJSON(appOrigin)},${reviewShortcut.toString()})</script>`;
             res.end(Buffer.concat(chunks).toString().replace('</head>', observer + scrolling + '</head>'));
@@ -134,7 +139,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
       return socket.destroy();
     const request = http.request({
       hostname: "127.0.0.1",
-      port: slot.web,
+      port: preview.web || slot.web,
       path: req.url,
       headers: headers(req, preview),
     });

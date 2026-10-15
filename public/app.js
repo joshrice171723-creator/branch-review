@@ -1,5 +1,7 @@
 import { workflow } from './workflow.js';
 import { reviewShortcut } from './shortcuts.js';
+import {workbench} from './workbench.js';
+import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
 let allBranches = [],
   selected = null,
@@ -9,6 +11,8 @@ let allBranches = [],
   frameKey = "",
   selectionGeneration = 0, selectedComparison = null, commitBranchSha = '', diffGeneration = 0;
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
+const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,poll,error,reopen:()=>mountFrames(currentState,true)});
+const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 let branchVisibility=null;
 try{branchVisibility=JSON.parse(localStorage.getItem('branch-review:branches-visible') || 'null');}catch{}
 function branchVisibilityUI() {
@@ -276,6 +280,7 @@ async function poll() {
     token = currentState.token;
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
+    reviewTools.render(currentState);
     renderFocusStatus();
     const ready = currentState.status === "ready";
     const preparing = ["preparing", "stopping"].includes(currentState.status);
@@ -316,6 +321,7 @@ async function poll() {
       $("original-sha").textContent = currentState.original.sha.slice(0, 7);
       $("changed-sha").textContent = currentState.changed.sha.slice(0, 7);
       mountFrames(currentState);
+      evidence.render();
     } else if (preparing) {
       $("frames").replaceChildren();
       frameKey = "";

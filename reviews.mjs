@@ -22,8 +22,10 @@ export function validateManifest(value) {
     for (const field of ['description','instructions','expected']) if (item[field] !== undefined && (typeof item[field] !== 'string' || item[field].length > 2000)) throw new Error('Item descriptions must be text up to 2,000 characters.');
     if (item.focus !== undefined && (typeof item.focus !== 'string' || item.focus.length > 160)) throw new Error('Item focus must be a short row identifier or heading.');
     if (item.originalPath !== undefined) validateManifest({version:1,scenarios:[{id:'original',title:'Original',path:item.originalPath,steps:['Open']}]});
+    if(item.files!==undefined && (!Array.isArray(item.files)||item.files.length>100||item.files.some(file=>typeof file!=='string'||file.length>300||file.startsWith('/')||file.includes('..')||file.includes('\\'))))throw new Error('Affected files must be repository-relative paths.');
+    if(item.viewport!==undefined && !['desktop','tablet','phone'].includes(item.viewport))throw new Error('Choose desktop, tablet or phone.');
   }
-  return { version: value.version, title: String(value.title || 'Branch review').slice(0, 160), summary:String(value.summary || '').slice(0,2000), source:String(value.source || 'Committed review manifest').slice(0,300), scenarios: value.scenarios.map(({id,title,path,steps,description='',instructions='',expected='',focus='',originalPath}) => ({id,title,path,steps,description,instructions,expected,focus,...(originalPath?{originalPath}:{})})) };
+  return { version: value.version, title: String(value.title || 'Branch review').slice(0, 160), summary:String(value.summary || '').slice(0,2000), source:String(value.source || 'Committed review manifest').slice(0,300), scenarios: value.scenarios.map(({id,title,path,steps,description='',instructions='',expected='',focus='',originalPath,files,viewport}) => ({id,title,path,steps,description,instructions,expected,focus,...(originalPath?{originalPath}:{}),...(files?{files}:{}),...(viewport?{viewport}:{})})) };
 }
 export {scenarioPath} from './public/preview-routes.js';
 export class ReviewStore {
@@ -96,6 +98,11 @@ export class ReviewStore {
       if (data.length > 5_000_000 || data.subarray(0,8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Screenshot is invalid or larger than 5 MB.');
       await mkdir(path.join(this.directory,'screenshots'),{recursive:true});
       issue.screenshot = issue.id + '.png'; await writeFile(path.join(this.directory,'screenshots',issue.screenshot),data);
+    }
+    if(input.video){
+      if(typeof input.video!=='string'||!/^data:video\/webm(?:;codecs=[\w,]+)?;base64,[A-Za-z0-9+/=]+$/.test(input.video))throw new Error('Recording must be WebM.');
+      const data=Buffer.from(input.video.split(',')[1],'base64');if(data.length>5000000||data.subarray(0,4).toString('hex')!=='1a45dfa3')throw new Error('Recording is invalid or larger than 5 MB.');
+      await mkdir(path.join(this.directory,'recordings'),{recursive:true});issue.video=issue.id+'.webm';await writeFile(path.join(this.directory,'recordings',issue.video),data);
     }
     r.issues.push(issue); this.invalidate(r); return this.event(r,'issue-reported',{issue:issue.id});
   }

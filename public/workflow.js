@@ -8,6 +8,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   let scenario = 'intake', rendered = '', screenshot = null, screenshotKey = null, screenshotContext = null, draftKey = '', savingFinding = false, capturing = false;
   const retestNotes = new Map();
   const contexts = {original:{}, changed:{}};
+  let video=null,videoKey=null;
   const needsNavigation=item=>['original','changed'].some(side=>{
     const actual=contexts[side].location;if(!actual)return false;
     const expected=previewDestination(item,side,getState());
@@ -54,7 +55,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     catch(e) { error(e.message); }
     finally { capturing = false; render(getState()); }
   };
-  function clearScreenshot() { screenshot = null; screenshotKey = null; screenshotContext = null; $('attachment').removeAttribute('src'); $('attachment').hidden = true; $('remove-attachment').hidden = true; }
+  function clearScreenshot() { screenshot = null; screenshotKey = null; screenshotContext = null; video=null;videoKey=null;$('video-attachment').removeAttribute('src');$('video-attachment').hidden=true; $('attachment').removeAttribute('src'); $('attachment').hidden = true; $('remove-attachment').hidden = true; }
   $('remove-attachment').onclick = clearScreenshot;
   $('finding-form').onsubmit = async event => {
     event.preventDefault(); if (savingFinding) return;
@@ -63,7 +64,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     try {
       error('');
       const context = screenshotKey === key ? screenshotContext : contexts[side];
-      await api('/api/issue', {id:state.record.id, scenario, side, expected:$('expected').value, actual:$('actual').value, screenshot:screenshotKey === key ? screenshot : null, location:context?.location || '', consoleErrors:context?.errors || []});
+      await api('/api/issue', {id:state.record.id, scenario, side, expected:$('expected').value, actual:$('actual').value, screenshot:screenshotKey === key ? screenshot : null, video:videoKey===key?video:null, location:context?.location || '', consoleErrors:context?.errors || []});
       saveDraft(localStorage, key, {expected:'',actual:''});
       if (key === currentKey()) { $('finding-form').reset(); clearScreenshot(); }
       notice('Finding saved. It must be resolved before approval.');
@@ -156,6 +157,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
           zoom.onclick=()=>{$('evidence-context').textContent=`${issue.side} · ${issue.commit} · ${issue.scenario} · ${issue.location}`;$('evidence-image').src=image.src;$('evidence-dialog').showModal();};card.append(zoom);
         }
         if(issue.consoleErrors.length) card.append(node('pre',issue.consoleErrors.join('\n')));
+        if(issue.video){const video=document.createElement('video');video.controls=true;video.preload='metadata';video.src='/recordings/'+issue.video;card.append(video);}
         if(issue.status!=='resolved') {
           const note=document.createElement('textarea');note.placeholder='Describe the retest result';note.setAttribute('aria-label','Retest result');note.maxLength=2000;
           const noteKey = `${r.id}:${issue.id}`, savedKey=`branch-review:retest:${noteKey}`;
@@ -182,5 +184,8 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('retry-publish').disabled=!enabled;
     void history(state);
   }
-  return {render, viewChanged, flush:guide.flush, needsNavigation, resetContexts:()=>{contexts.original={};contexts.changed={};clearScreenshot();}, scenario:()=>scenario, context:(side,data)=>{contexts[side]={location:String(data.location||'').slice(0,700),errors:Array.isArray(data.errors)?data.errors.slice(-10):[]};}};
+  return {render, viewChanged, flush:guide.flush, needsNavigation,
+    attachScreenshot(data,notes=''){screenshot=data;screenshotKey=currentKey();screenshotContext=contexts[getSide()];$('attachment').src=data;$('attachment').hidden=false;$('remove-attachment').hidden=false;if(notes){$('actual').value=[$('actual').value,notes].filter(Boolean).join('\n');saveFindingDraft();}$('finding-form').closest('details').open=true;$('finding-form').scrollIntoView({block:'start'});},
+    attachVideo(data){video=data;videoKey=currentKey();$('video-attachment').src=data;$('video-attachment').hidden=false;$('remove-attachment').hidden=false;$('finding-form').closest('details').open=true;$('finding-form').scrollIntoView({block:'start'});},
+    getContext:side=>contexts[side] || {}, resetContexts:()=>{contexts.original={};contexts.changed={};clearScreenshot();}, scenario:()=>scenario, context:(side,data)=>{contexts[side]={location:String(data.location||'').slice(0,700),heading:String(data.heading||'').slice(0,160),anchor:String(data.anchor||'').slice(0,160),errors:Array.isArray(data.errors)?data.errors.slice(-10):[]};}};
 }

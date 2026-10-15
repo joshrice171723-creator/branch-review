@@ -2,7 +2,7 @@ require 'securerandom'
 require 'json'
 
 database = ActiveRecord::Base.connection_db_config.database
-abort 'Review fixtures require an isolated review database.' unless Rails.env.development? && database.match?(/\Aapply_review_(original|changed)_[0-9a-f]{12}_development\z/)
+abort 'Review fixtures require an isolated review database.' unless Rails.env.development? && database.match?(/\Aapply_review_(original|changed|standby)_[0-9a-f]{12}_development\z/)
 
 User.transaction do
   user = User.find_or_create_by!(email_address: 'review-staff@example.invalid') do |record|
@@ -18,6 +18,9 @@ User.transaction do
   encounter = Clinic::Encounter.find_or_create_by!(practice: practice, patient: patient) do |record|
     record.started_at = Time.current - 15.minutes
     record.status = 'in_progress'
+  end
+  if ENV['BRANCH_REVIEW_RESET'] == '1'
+    Clinic::EncounterIntakeRevision.where(practice: practice, encounter: encounter).delete_all
   end
   unless Clinic::EncounterIntakeRevision.exists?(practice: practice, encounter: encounter)
     answers = { 'visit_reason' => { 'state' => 'answered', 'value' => 'Discuss energy levels and build a sustainable routine.' }, 'goals' => { 'state' => 'answered', 'value' => 'Walk comfortably for thirty minutes.' } }

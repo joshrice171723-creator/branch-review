@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
@@ -69,11 +69,13 @@ async function launch() {
     delete process.env.BRANCH_REVIEW_HOME;
     closing = true; app.relaunch(); app.exit(0);
   });
-  ipcMain.handle('review:capture', async event => {
+  ipcMain.handle('review:capture', async (event,rect) => {
     trusted(event);
-    const png = await window.webContents.capturePage();
+    if(rect){const [width,height]=window.getContentSize();if(!['x','y','width','height'].every(key=>Number.isInteger(rect[key]))||rect.x<0||rect.y<0||rect.width<1||rect.height<1||rect.x+rect.width>width||rect.y+rect.height>height)throw new Error('Capture must stay inside the review window.');}
+    const png = await window.webContents.capturePage(rect);
     return png.toDataURL();
   });
+  ipcMain.handle('review:open-published',async(event,url)=>{trusted(event);const destination=new URL(url);if(destination.origin!=='https://aimetaclinic.com'||destination.username||destination.password||!/^\/(clinic(?:\/|$)|qa$)/.test(destination.pathname))throw new Error('Choose a Meta Clinic workflow URL.');await shell.openExternal(destination.href);});
   ipcMain.handle('review:release-files', async event => {
     trusted(event);
     const key = await dialog.showOpenDialog(window, { title: 'Select the existing Lightsail SSH key', properties: ['openFile'] });
@@ -86,7 +88,7 @@ async function launch() {
     if (closing) return;
     event.preventDefault();
     const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
-    if (state?.busy) { await dialog.showMessageBox(window, {message:'Wait for the current operation to finish before closing Branch Review.'}); return; }
+    if (state?.busy || state?.jobsRunning) { await dialog.showMessageBox(window, {message:'Wait for the current operation or review job to finish before closing Branch Review.'}); return; }
     const result=await dialog.showMessageBox(window, { type: 'question', buttons: ['Keep working', 'Close app, keep previews'], defaultId: 0, cancelId: 0,
       message: 'Close Branch Review?', detail: 'Previews and saved data remain available. Use Stop previews before closing if you want them stopped.' });
     if(result.response===1){

@@ -747,3 +747,31 @@ dialog::backdrop {background:#152c2b80}
 
 #target-status {margin-left:auto;font-size:10px;color:#61715e;max-width:40%;text-align:right}
 #target-status.health-error {color:#9c3b2b}
+/* Review tools share the same saved review and exact preview identity. */
+#tools-dialog { width:min(1000px,94vw); max-height:90vh; overflow:auto; }
+.tools-tabs,.tool-actions { display:flex;flex-wrap:wrap;gap:8px;margin:14px 0; }
+.tools-tabs { position:sticky;top:0;background:var(--paper,#fff);padding:12px 0;z-index:2; }
+.tools-tabs button[aria-pressed="true"] { background:#244e40;color:white; }
+.plan-fields { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0; }
+.plan-fields label { display:flex;flex-direction:column;gap:7px; }
+#tools-dialog pre { max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere; }
+#tools-dialog input,#tools-dialog textarea,#tools-dialog select { width:100%;box-sizing:border-box; }
+#tools-status { white-space:pre-wrap;color:#6d4814; }
+#tools-dialog .finding small { display:block; }
+@media(max-width:800px){.plan-fields{grid-template-columns:1fr;}}
+.comparison-options {flex-wrap:wrap;min-height:42px;height:auto}
+.viewport-control {display:flex;align-items:center;gap:5px;font-size:11px}
+#annotation-dialog {width:min(1200px,96vw);max-height:92vh;overflow:auto}
+#annotation-canvas {display:block;max-width:100%;height:auto;touch-action:none;cursor:crosshair;border:1px solid #ccd7cd}
+.finding video,#clip-preview,#video-attachment {width:100%;max-height:400px;background:#132a22}
+.header-actions {flex-wrap:wrap;justify-content:flex-end}
+#tools-dialog input[type="checkbox"] {width:auto;flex:none}
+.tool-notice {margin:0;padding:8px 14px;background:#e7f0e6;color:#234a37;font-size:12px}
+#tools-dialog button,#annotation-dialog button {font:inherit;font-size:12px;border:1px solid #ccd7cc;border-radius:6px;padding:9px 12px;background:#f4f7f1;color:#244e40;cursor:pointer}
+#tools-dialog button:disabled,#annotation-dialog button:disabled {opacity:.45;cursor:default}
+#tools-dialog button.primary {background:#244e40;color:white}
+#tools-dialog input:not([type="checkbox"]),#annotation-dialog input {font:inherit;border:1px solid #ccd7cc;border-radius:6px;padding:9px;background:white;color:#233c31}
+#guided-queue {min-height:330px}
+#item-queue {min-height:80px}
+.branches:has(#guided-queue:not([hidden])) .branch-list {flex-basis:125px;min-height:70px}
+.branches {overflow-y:auto}
