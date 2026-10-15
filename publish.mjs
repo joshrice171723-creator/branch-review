@@ -1,10 +1,12 @@
 import { readFile, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
+import { digest } from './reviews.mjs';
 export const target = 'https://aimetaclinic.com';
 export async function publish(record, { local, repo, run, git, store, confirmation, toolchain, fetcher = fetch }) {
   const sha = record.identity.changed;
   if (confirmation !== `PUBLISH ${sha} TO ${target}`) throw new Error('Confirm the exact commit and publishing destination.');
   if (!record.approval || record.delivery?.stage !== 'pushed') throw new Error('The approved candidate must be pushed before publishing.');
+  if (record.approval.identity !== digest(record.identity) || record.integration?.sha !== sha || record.delivery.commit !== sha) throw new Error('Publishing requires approval and push evidence for this exact candidate.');
   const remote = await git('remote','get-url','origin');
   if (!/^(https:\/\/github\.com\/|git@github\.com:)joshrice171723-creator\/meta_clinic(?:\.git)?$/.test(remote)) throw new Error('Publishing is configured only for the Meta Clinic repository.');
   const config = JSON.parse(await readFile(path.join(local,'release.json'),'utf8').catch(()=> '{}'));

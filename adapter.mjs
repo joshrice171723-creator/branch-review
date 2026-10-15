@@ -119,22 +119,23 @@ export async function branches() {
     return true;
   });
 }
-export async function comparison(ref, baseline) {
-  if (!["merge-base", "parent"].includes(baseline))
+export async function comparison(ref, baseline, baselineCommit) {
+  if (!["merge-base", "parent", "main", "commit"].includes(baseline))
     throw new Error("Choose a listed baseline.");
   const entry = (await branches()).find((b) => b.ref === ref || b.aliases.includes(ref));
   const branch = entry && {...entry, ref};
   if (!branch)
     throw new Error("Branch no longer exists. Refresh the branch list.");
   const main = await git("rev-parse", "refs/remotes/origin/main");
-  const base =
+  if(baseline==='commit' && !/^[a-f0-9]{40}$/.test(baselineCommit || ''))throw new Error('Choose a full commit from history.');
+  const base = baseline==='main'? main : baseline==='commit'? await git('rev-parse','--verify',`${baselineCommit}^{commit}`) :
     baseline === "parent"
-      ? await git("rev-parse", `${branch.sha}^`)
+      ? await git("rev-parse", `${branch.sha}^`).catch(()=>{throw new Error('This is the first commit. Choose another comparison baseline.');})
       : await git("merge-base", main, branch.sha);
-  const files = (await git("diff", "--name-only", base, branch.sha))
-    .split("\n")
+  const files = (await git("diff", "--name-only", '-z', base, branch.sha,'--'))
+    .split("\0")
     .filter(Boolean);
-  return { branch, base, main, baseline, files };
+  return { branch, base, main, baseline, ...(baseline==='commit'?{baselineCommit}:{}), files };
 }
 function environment(side, sha) {
   const slot = slots[side];
@@ -253,14 +254,14 @@ export async function prepare(side, sha) {
     scenario,
   };
 }
-export async function startReview(ref, baseline) {
+export async function startReview(ref, baseline, baselineCommit) {
   state.status = "preparing";
   state.error = null;
   state.original = null;
   state.changed = null;
   state.log = [];
   try {
-    const selected = await comparison(ref, baseline);
+    const selected = await comparison(ref, baseline, baselineCommit);
     Object.assign(state, { comparison: selected });
     state.original = await prepare("original", selected.base);
     state.changed = await prepare("changed", selected.branch.sha);

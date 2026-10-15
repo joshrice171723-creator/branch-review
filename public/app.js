@@ -6,7 +6,7 @@ let allBranches = [],
   currentState = {},
   active = "changed",
   frameKey = "",
-  selectionGeneration = 0;
+  selectionGeneration = 0, selectedComparison = null, commitBranchSha = '', diffGeneration = 0;
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
 let mutationQueue=Promise.resolve();
 async function api(path, data) {
@@ -90,15 +90,22 @@ async function select(branch) {
   $("start").disabled = currentState.busy;
   const generation = ++selectionGeneration;
   try {
+    selectedComparison=null;$('view-diff').disabled=true;
+    if($('baseline').value==='commit' && commitBranchSha!==branch.sha){
+      const commits=await api(`/api/commits?sha=${branch.sha}`);if(generation!==selectionGeneration)return;
+      $('baseline-commit').replaceChildren(...commits.map(commit=>{const option=document.createElement('option');option.value=commit.sha;option.textContent=`${commit.sha.slice(0,7)} · ${commit.subject}`;return option;}));
+      $('baseline-commit').value=commits[1]?.sha || commits[0]?.sha || '';commitBranchSha=branch.sha;
+    }
     const result = await api(
-      `/api/comparison?ref=${encodeURIComponent(branch.ref)}&baseline=${$("baseline").value}`,
+      `/api/comparison?ref=${encodeURIComponent(branch.ref)}&baseline=${$("baseline").value}&commit=${$('baseline-commit').value}`,
     );
     if (generation !== selectionGeneration) return;
+    selectedComparison=result;$('view-diff').disabled=!result.files.length;
     $("file-count").textContent = result.files.length;
     $("files").replaceChildren(
       ...result.files.map((name) => {
         const li = document.createElement("li");
-        li.textContent = name;
+        const button=document.createElement('button');button.className='file-link';button.textContent=name;button.onclick=()=>openDiff(name);li.append(button);
         return li;
       }),
     );
@@ -110,19 +117,55 @@ async function select(branch) {
     error(e.message);
   }
 }
+async function openDiff(filename) {
+  const comparison=selectedComparison;if(!comparison)return;
+  const generation=++diffGeneration;
+  $('diff-dialog').showModal();$('diff-patch').textContent='Loading changes…';$('diff-title').textContent='Code changes';
+  $('diff-identity').textContent=`Original ${comparison.base.slice(0,7)} → Changed ${comparison.branch.sha.slice(0,7)} · ${comparison.branch.name}`;
+  try {
+    const files=await api(`/api/changes?base=${comparison.base}&changed=${comparison.branch.sha}`);if(generation!==diffGeneration)return;
+    $('diff-files').replaceChildren(...files.map(file=>{const option=document.createElement('option');option.value=file.path;option.textContent=`${file.status} · ${file.path} ${file.binary?'· binary':`· +${file.added} −${file.removed}`}`;return option;}));
+    if(filename)$('diff-files').value=filename;
+    $('diff-files').onchange=()=>loadDiff(comparison,$('diff-files').value);
+    await loadDiff(comparison,$('diff-files').value);
+  }catch(e){$('diff-patch').textContent=e.message;}
+}
+async function loadDiff(comparison,filename) {
+  const generation=++diffGeneration;$('diff-patch').textContent='Loading changes…';
+  try {
+    const diff=await api(`/api/diff?base=${comparison.base}&changed=${comparison.branch.sha}&file=${encodeURIComponent(filename)}`);if(generation!==diffGeneration)return;
+    $('diff-title').textContent=diff.file.previousPath?`${diff.file.previousPath} → ${diff.file.path}`:diff.file.path;
+    $('diff-warning').textContent=diff.truncated?'Large diff: showing a limited excerpt. Inspect the full change in Git before approval.':diff.file.binary?'Binary file changed. Review the rendered behavior or original file.':'';
+    $('diff-patch').replaceChildren(...diff.patch.split('\n').map(line=>{const span=document.createElement('span');span.textContent=line+'\n';span.className=line.startsWith('+')&&!line.startsWith('+++')?'diff-add':line.startsWith('-')&&!line.startsWith('---')?'diff-remove':line.startsWith('@@')?'diff-hunk':'';return span;}));
+  }catch(e){if(generation===diffGeneration)$('diff-patch').textContent=e.message;}
+}
+$('view-diff').onclick=()=>openDiff();
+$('close-diff').onclick=()=>{diffGeneration++;$('diff-dialog').close();};
 function toggle(side) {
   active = side;
   reviewWorkflow.viewChanged();
   for (const name of ["original", "changed"]) {
     $(name).setAttribute("aria-pressed", String(side === name));
     const frame = $(`frame-${name}`);
-    if (frame) { frame.classList.toggle('inactive', side !== name); frame.inert = side !== name; }
+    if (frame) {
+      const hidden=$('layout-mode').value!=='side-by-side' && side!==name;
+      frame.parentElement.classList.toggle('inactive',hidden);frame.parentElement.classList.toggle('active-pane',side===name);frame.parentElement.inert=hidden;
+    }
   }
   const preview = currentState[side];
   if (preview)
     $("context").textContent =
       `${side === "original" ? "Original" : "Changed"} · ${preview.sha.slice(0, 7)} · ${currentState.manifest?.title || "Review scenario"}`;
 }
+function applyLayout() {
+  const split=$('layout-mode').value==='side-by-side';
+  $('frames').classList.toggle('side-by-side',split);$('split-control').hidden=!split;
+  $('frames').style.gridTemplateColumns=split?`${$('split-position').value}fr ${100-Number($('split-position').value)}fr`:'';
+  toggle(active);
+  try{localStorage.setItem('branch-review:layout',JSON.stringify({mode:$('layout-mode').value,sync:$('sync-scroll').checked,split:$('split-position').value}));}catch{}
+}
+try{const layout=JSON.parse(localStorage.getItem('branch-review:layout')||'{}');if(['toggle','side-by-side'].includes(layout.mode))$('layout-mode').value=layout.mode;if(typeof layout.sync==='boolean')$('sync-scroll').checked=layout.sync;if(Number(layout.split)>=30 && Number(layout.split)<=70)$('split-position').value=layout.split;}catch{}
+$('layout-mode').onchange=$('sync-scroll').onchange=$('split-position').oninput=applyLayout;
 let focusedItem = '';
 function focusItem(item) {
   if(!item?.focus)return;
@@ -137,6 +180,8 @@ function mountFrames(state, force = false) {
   reviewWorkflow.resetContexts();
   $("frames").replaceChildren(
     ...["original", "changed"].map((side) => {
+      const pane=document.createElement('section');pane.className='preview-pane';pane.setAttribute('aria-label',`${side} preview`);
+      const label=document.createElement('div');label.className='preview-side-label';label.textContent=`${side==='original'?'Original':'Changed'} · ${state[side].sha.slice(0,7)}`;
       const frame = document.createElement("iframe");
       frame.id = `frame-${side}`;
       frame.title = `${side === "original" ? "Original" : "Changed"} Meta Clinic review`;
@@ -146,10 +191,10 @@ function mountFrames(state, force = false) {
       );
       frame.src = `http://127.0.0.1:${state[side].proxy}/__review/start?scenario=${encodeURIComponent(reviewWorkflow.scenario())}`;
       frame.addEventListener('load',()=>focusItem(currentState.manifest?.scenarios.find(s=>s.id===reviewWorkflow.scenario())));
-      return frame;
+      pane.append(label,frame);return pane;
     }),
   );
-  toggle(active);
+  applyLayout();
 }
 async function poll() {
   try {
@@ -205,7 +250,8 @@ async function poll() {
 }
 $("search").oninput = branchList;
 $('branch-filter').onchange = chooseVisibleBranch;
-$("baseline").onchange = () => selected && select(selected);
+$("baseline").onchange = () => { $('commit-choice').hidden=$('baseline').value!=='commit';if(selected)void select(selected); };
+$('baseline-commit').onchange=()=>selected && select(selected);
 $("original").onclick = () => toggle("original");
 $("changed").onclick = () => toggle("changed");
 $("focus").onclick = () => {
@@ -236,6 +282,7 @@ $("start").onclick = async () => {
     await api("/api/start", {
       ref: selected.ref,
       baseline: $("baseline").value,
+      baselineCommit:$('baseline-commit').value,
     });
     await poll();
   } catch (e) {
@@ -274,7 +321,8 @@ window.addEventListener("message", (event) => {
   )
     error(`${side}: ${event.data.message}`);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context') reviewWorkflow.context(side,event.data);
-  if (side === active && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:scroll') {
+  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:active' && $('layout-mode').value==='side-by-side')toggle(side);
+  if ($('sync-scroll').checked && side === active && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:scroll') {
     const other = side === 'original' ? 'changed' : 'original';
     $(`frame-${other}`)?.contentWindow.postMessage(event.data, `http://127.0.0.1:${currentState[other].proxy}`);
   }

@@ -7,6 +7,8 @@ import { previewProxy } from './proxy.mjs';
 import { ReviewStore, manifestForFiles, scenarioRecipe, validateManifest, digest } from './reviews.mjs';
 import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
+import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
+import { reviewReport } from './report.mjs';
 
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false;
@@ -45,10 +47,10 @@ async function active(id, checkFresh = false) {
 function json(res,status,data) { res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(data)); }
 async function body(req) { let buffer=''; for await(const chunk of req) { buffer += chunk; if(Buffer.byteLength(buffer)>7_000_000) throw new Error('Request too large'); } return JSON.parse(buffer || '{}'); }
 async function mutate(endpoint, data) {
-  if (endpoint === '/api/start') { state.integration = null; await startReview(data.ref,data.baseline); await activate(); return; }
+  if (endpoint === '/api/start') { state.integration = null; await startReview(data.ref,data.baseline,data.baselineCommit); await activate(); return; }
   if (endpoint === '/api/stop') return stopReview();
   if (endpoint === '/api/fetch') return git('fetch','origin');
-  if (endpoint === '/api/retest') { const prior=store.get(data.id); state.integration=null; await startReview(prior.identity.ref,'parent'); await activate(); return; }
+  if (endpoint === '/api/retest') { const prior=store.get(data.id); state.integration=null; await startReview(prior.identity.ref,prior.comparisonMode?.baseline || 'parent',prior.comparisonMode?.baselineCommit); await activate(); return; }
   if (endpoint === '/api/release-settings') {
     if (typeof data.keyPath !== 'string' || typeof data.recoveryDirectory !== 'string' || !path.isAbsolute(data.keyPath) || !path.isAbsolute(data.recoveryDirectory)) throw new Error('Choose an existing key and recovery folder.');
     await access(data.keyPath); await access(data.recoveryDirectory); await writeFile(path.join(local,'release.json'),JSON.stringify({keyPath:data.keyPath,recoveryDirectory:data.recoveryDirectory})); return;
@@ -95,7 +97,14 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,busy,token,repository:repo,record:state.recordId?store.get(state.recordId):null,publishTarget:target,releaseConfigured:await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await branches());
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
-    if(req.method==='GET' && url.pathname==='/api/comparison') return json(res,200,await comparison(url.searchParams.get('ref'),url.searchParams.get('baseline')));
+    if(req.method==='GET' && url.pathname==='/api/report'){
+      const record=store.get(url.searchParams.get('id')),html=await reviewReport(record,local);
+      res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Disposition':`${url.searchParams.get('inline')==='1'?'inline':'attachment'}; filename="branch-review-${record.identity.changed.slice(0,7)}.html"`,'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'; base-uri 'none'"});return res.end(html);
+    }
+    if(req.method==='GET' && url.pathname==='/api/comparison') return json(res,200,await comparison(url.searchParams.get('ref'),url.searchParams.get('baseline'),url.searchParams.get('commit')));
+    if(req.method==='GET' && url.pathname==='/api/commits')return json(res,200,await commitHistory(git,url.searchParams.get('sha')));
+    if(req.method==='GET' && url.pathname==='/api/changes')return json(res,200,await changedFiles(git,url.searchParams.get('base'),url.searchParams.get('changed')));
+    if(req.method==='GET' && url.pathname==='/api/diff')return json(res,200,await fileDiff(git,url.searchParams.get('base'),url.searchParams.get('changed'),url.searchParams.get('file')));
     if(req.method==='GET' && /^\/screenshots\/[a-f0-9-]{36}\.png$/.test(url.pathname)) { const image=await readFile(path.join(local,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'"}); return res.end(image); }
     if(req.method==='POST' && actions.has(url.pathname)) {
       if(req.headers.origin!==origin || req.headers['x-review-token']!==token) return json(res,403,{error:'Reload Branch Review before continuing.'});
@@ -109,7 +118,7 @@ const server=http.createServer(async(req,res)=>{
     }
     if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
-    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src http://127.0.0.1:4311 http://127.0.0.1:4312; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
+    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
   }catch(error){if(!res.headersSent)json(res,400,{error:error.message});else res.end();}
 });

@@ -2,7 +2,7 @@ import {itemStatus,statusLabels,reviewCounts,isComplete,nextItem,fixRequest,canA
 const $ = id => document.getElementById(id);
 const el = (tag,text,className) => { const node=document.createElement(tag);node.textContent=text;if(className)node.className=className;return node; };
 export function guided({api,getState,poll,error,onSelect}) {
-  let key='', queueKey='', timer, pending=false, dirty=false, version=0, savePromise=Promise.resolve(true);
+  let key='', queueKey='', timer, pending=false, advancing=false, dirty=false, version=0, savePromise=Promise.resolve(true);
   let recordId='', itemId='';
   const status = text => { $('item-save').textContent=text; };
   function draft() { return {outcome:$('item-outcome').value,notes:$('item-notes').value,reason:$('item-reason').value}; }
@@ -29,19 +29,26 @@ export function guided({api,getState,poll,error,onSelect}) {
     return savePromise;
   }
   async function navigate(next, view='item') {
-    if(pending || !await flush())return;
-    const r=getState().record, old=r.manifest.scenarios.find(item=>item.id===itemId), target=r.manifest.scenarios.find(item=>item.id===next);
-    if(view==='item' && old && target && (old.path!==target.path || old.originalPath!==target.originalPath) && !confirm('Open the next screen in both previews? Save any edits inside the preview first.'))return;
+    if(pending)return;
     pending=true;render(getState());
-    try { await api('/api/cursor',{id:r.id,itemId:next,view});await poll();if(view==='item')onSelect(next);$(view==='item'?'guided-item':'guided-results').scrollIntoView({block:'start'}); }
+    try {
+      if(!await flush())return;
+      const r=getState().record, old=r.manifest.scenarios.find(item=>item.id===itemId), target=r.manifest.scenarios.find(item=>item.id===next);
+      if(view==='item' && old && target && (old.path!==target.path || old.originalPath!==target.originalPath) && !confirm('Open the next screen in both previews? Save any edits inside the preview first.'))return;
+      await api('/api/cursor',{id:r.id,itemId:next,view});await poll();if(view==='item')onSelect(next);$(view==='item'?'guided-item':'guided-results').scrollIntoView({block:'start'});
+    }
     catch(e){error(e.message);}finally{pending=false;render(getState());}
   }
   async function advance(leave=false) {
+    if(advancing || pending)return;
+    advancing=true;
+    try {
     if(!await flush())return;
     const r=getState().record,item=r.manifest.scenarios.find(item=>item.id===itemId);
     if(!leave && !isComplete(itemStatus(r,item)) && !['blocked','needs-fixes'].includes(itemStatus(r,item))) { $('unfinished-choice').hidden=false;$('unfinished-choice').scrollIntoView({block:'center'});return; }
     $('unfinished-choice').hidden=true;
     const next=nextItem(r,itemId);await navigate(next || itemId,next?'item':'results');
+    } finally { advancing=false; }
   }
   $('item-next').onclick=()=>advance();
   $('leave-unfinished').onclick=()=>advance(true);

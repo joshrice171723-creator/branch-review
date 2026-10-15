@@ -710,6 +710,31 @@ main {grid-template-columns:230px minmax(360px,1fr) 360px}
 #branch-brief {border-bottom:1px solid #dce3d9;padding-bottom:12px}
 #branch-brief summary {cursor:pointer;font-size:11px;color:#65776d;margin-bottom:12px}
 #branch-brief:not([open]) summary {margin:0}
+.file-link {border:0;background:none;color:#365d47;text-align:left;padding:2px 0;font-size:11px;overflow-wrap:anywhere;text-decoration:underline;text-underline-offset:3px}
+dialog {width:min(1100px,92vw);max-height:88vh;border:1px solid #c3d1c4;border-radius:10px;padding:22px;color:#20302f;box-shadow:0 20px 80px #172e3140}
+dialog::backdrop {background:#152c2b80}
+.dialog-heading {display:flex;justify-content:space-between;align-items:start;gap:20px}
+.dialog-heading h2 {font-size:17px;overflow-wrap:anywhere;margin:0}
+#diff-patch {font:12px/1.65 Consolas,monospace;tab-size:2;overflow:auto;max-height:58vh;background:#fafbf8;padding:12px;border:1px solid #dce3d9}
+#diff-patch span {display:block;min-height:1.65em;white-space:pre;margin:0}
+.diff-add {background:#e5f4e9;color:#1d623b}
+.diff-remove {background:#fae8e4;color:#8a3025}
+.diff-hunk {background:#e9eef8;color:#324e80}
+#report-frame {position:static;width:100%;height:70vh;margin-top:18px;border:1px solid #dce3d9}
+.comparison-options {display:flex;align-items:center;gap:10px;min-height:39px;padding:5px 16px;background:#f9faf7;border-bottom:1px solid #dce3d9;font-size:10px;flex-wrap:wrap}
+.comparison-options select {width:auto;font-size:10px;padding:4px 7px}
+.sync-option,#split-control {display:flex;align-items:center;gap:5px}
+.sync-option input {accent-color:#244f3e}
+#split-position {width:90px;accent-color:#244f3e}
+#frames {position:relative}
+.preview-pane {position:absolute;inset:0;min-width:0;min-height:0}
+.preview-pane.inactive {visibility:hidden;pointer-events:none}
+.preview-side-label {display:none}
+#frames.side-by-side {display:grid;gap:3px;background:#c6d2c5}
+.side-by-side .preview-pane {position:relative;display:flex;flex-direction:column;inset:auto}
+.side-by-side .preview-pane iframe {position:relative;flex:1;min-height:0}
+.side-by-side .preview-side-label {display:block;padding:8px 12px;background:#edf2e8;color:#566d5a;font-size:10px;border-bottom:2px solid transparent}
+.side-by-side .active-pane .preview-side-label {border-color:#287151;color:#204a35}
 #review-summary {margin:8px 0}
 @media(max-width:1250px){main{grid-template-columns:200px minmax(320px,1fr) 325px}.review{padding:20px 16px 32px}.item-navigation{bottom:-32px}}
 @media(max-width:950px){main{grid-template-columns:185px minmax(350px,1fr)}}

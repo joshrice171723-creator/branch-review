@@ -91,3 +91,29 @@ test('item notes save before navigation and save failures prevent leaving the it
   fail=false;await h.elements['show-results'].onclick();
   assert.equal(h.state.record.items.intake.notes,'Keep this note');assert.equal(h.state.record.cursor.view,'results');
 });
+
+test('rapid Next clicks create only one navigation while saving',async t=>{
+  let h,release;
+  h=harness(t,{api:async(path,data)=>{
+    if(path==='/api/item')await new Promise(resolve=>{release=resolve;});
+    if(path==='/api/cursor')h.state.record.cursor={itemId:data.itemId,view:data.view};
+  }});
+  h.state.record.manifest={...defaultManifest,scenarios:[defaultManifest.scenarios[0],{...defaultManifest.scenarios[0],id:'second'}]};h.view.render(h.state);
+  h.elements['item-notes'].value='Pending note';h.elements['item-notes'].oninput();
+  const first=h.elements['leave-unfinished'].onclick(),second=h.elements['leave-unfinished'].onclick();
+  await new Promise(resolve=>setImmediate(resolve));release();await Promise.all([first,second]);
+  assert.equal(h.calls.filter(call=>call.path==='/api/cursor').length,1);assert.equal(h.state.record.cursor.itemId,'second');
+});
+
+test('retest drafts recover after remount and failed item saves block approval',async t=>{
+  const h=harness(t,{api:async(path)=>{if(path==='/api/item')throw Error('Disk unavailable');}}),e=h.elements;
+  h.state.record.issues=[{id:'issue',status:'open',expected:'a',actual:'b',side:'changed',commit:'bbbbbbb',scenario:'intake',consoleErrors:[]}];h.view.render(h.state);
+  let note=e.findings.children[0].children.find(n=>n.placeholder==='Describe the retest result');note.value='Recovered retest';note.oninput();
+  const reloaded=workflow({api:async()=>[],getState:()=>h.state,getSide:()=> 'changed',error:()=>{},poll:async()=>{},reopen:()=>{}});reloaded.render(h.state);
+  note=e.findings.children[0].children.find(n=>n.placeholder==='Describe the retest result');assert.equal(note.value,'Recovered retest');
+  h.view.render(h.state);
+  // Recreate the original event handlers before testing a failed save.
+  const failing=workflow({api:async(path)=>{h.calls.push({path});if(path==='/api/item')throw Error('Disk unavailable');return [];},getState:()=>h.state,getSide:()=> 'changed',error:()=>{},poll:async()=>{},reopen:()=>{}});failing.render(h.state);
+  e['item-notes'].value='Unsaved approval context';e['item-notes'].oninput();await e.approve.onclick();
+  assert.equal(h.calls.some(call=>call.path==='/api/approve'),false);
+});

@@ -11,7 +11,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   const currentKey = () => findingKey(getState().record?.id, scenario, getSide());
   const notice = message => { $('review-notice').textContent = message; };
   async function act(action, data = {}) {
-    try { error(''); await api('/api/' + action, {id:getState().record?.id, ...data}); notice(action === 'check' ? 'Checklist saved.' : action === 'resolve' ? 'Retest result saved.' : action === 'approve' ? 'Approval saved for this exact version.' : 'Request accepted.'); }
+    try { if(!await guide.flush())return;error(''); await api('/api/' + action, {id:getState().record?.id, ...data});if(action==='resolve'){const key=`${getState().record.id}:${data.issueId}`;retestNotes.delete(key);saveDraft(localStorage,`branch-review:retest:${key}`,{expected:'',actual:''});} notice(action === 'check' ? 'Checklist saved.' : action === 'resolve' ? 'Retest result saved.' : action === 'approve' ? 'Approval saved for this exact version.' : 'Request accepted.'); }
     catch(e) { error(e.message); }
     finally { await poll(); }
   }
@@ -78,7 +78,16 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   };
   $('retry-publish').onclick = () => act('retry-publish',{note:$('release-note').value});
   $('smoke').onclick = () => act('smoke',{note:$('release-note').value});
-  $('history').onchange = () => { $('retest').disabled = !$('history').value || getState().busy; };
+  $('history').onchange = () => { $('retest').disabled = !$('history').value || getState().busy; $('view-history').disabled=!$('history').value; };
+  function report(id) {
+    if(!id)return;
+    $('report-frame').src=`/api/report?id=${encodeURIComponent(id)}&inline=1`;
+    $('download-report').href=`/api/report?id=${encodeURIComponent(id)}`;
+    $('report-dialog').showModal();
+  }
+  $('view-history').onclick=()=>report($('history').value);
+  $('export-review').onclick=async()=>{if(await guide.flush())report(getState().record.id);};
+  $('close-report').onclick=()=>{$('report-dialog').close();$('report-frame').removeAttribute('src');};
   $('retest').onclick = () => { if(confirm('Open the latest commit for this saved branch? Save preview edits first. Existing findings carry forward for retesting.')) act('retest',{id:$('history').value}); };
   let historyKey = '', historyLoading = false;
   async function history(state) {
@@ -103,6 +112,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('review-workflow').hidden=!r;
     $('choose-repository').disabled=state.busy;
     $('retest').disabled=state.busy || !$('history').value;
+    $('view-history').disabled=!$('history').value;
     if(!r) { void history(state); return; }
     if(r.cursor?.itemId) scenario=r.cursor.itemId;
     if(!r.manifest.scenarios.some(s=>s.id===scenario)) scenario=r.manifest.scenarios[0].id;
@@ -127,7 +137,9 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
         if(issue.consoleErrors.length) card.append(node('pre',issue.consoleErrors.join('\n')));
         if(issue.status!=='resolved') {
           const note=document.createElement('textarea');note.placeholder='Describe the retest result';note.setAttribute('aria-label','Retest result');note.maxLength=2000;
-          const noteKey = `${r.id}:${issue.id}`; note.value = retestNotes.get(noteKey) || ''; note.oninput = () => retestNotes.set(noteKey,note.value);
+          const noteKey = `${r.id}:${issue.id}`, savedKey=`branch-review:retest:${noteKey}`;
+          note.value = retestNotes.get(noteKey) ?? loadDraft(localStorage,savedKey).actual;
+          note.oninput = () => {retestNotes.set(noteKey,note.value);if(!saveDraft(localStorage,savedKey,{expected:'',actual:note.value}))notice('Keep this window open until your retest note is saved.');};
           const resolve=node('button','Resolve after retest','secondary');resolve.disabled=!enabled;resolve.onclick=()=>act('resolve',{issueId:issue.id,note:note.value});card.append(note,resolve);
         } else card.append(node('p',issue.resolution));
         return card;

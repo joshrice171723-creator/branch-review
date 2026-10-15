@@ -3,6 +3,8 @@ export function scrollBridge(appOrigin) {
   let applying = false;
   let focusObserver, focusTimer;
   const route = () => location.pathname + location.search;
+  const activate = () => parent.postMessage({type:'review:active'},appOrigin);
+  addEventListener('pointerdown',activate,true);addEventListener('focusin',activate,true);addEventListener('wheel',activate,{passive:true});
   function selector(element) {
     if (element === document.scrollingElement) return ':root';
     if (element.id) return '#' + CSS.escape(element.id);

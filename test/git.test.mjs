@@ -36,8 +36,8 @@ const { branches, comparison, clearDeadPidRecords } = await import("../adapter.m
 test("branch inventory identifies exact revisions; both baselines resolve the real diff", async () => {
   const list = await branches();
   assert.equal(list.find((b) => b.name === "intake-controls").sha, candidate);
-  for (const mode of ["parent", "merge-base"]) {
-    const result = await comparison("refs/heads/intake-controls", mode);
+  for (const mode of ["parent", "merge-base", "main", "commit"]) {
+    const result = await comparison("refs/heads/intake-controls", mode, base);
     assert.equal(result.base, base);
     assert.equal(result.branch.sha, candidate);
     assert.deepEqual(result.files, ["intake.txt"]);
@@ -45,6 +45,7 @@ test("branch inventory identifies exact revisions; both baselines resolve the re
   assert.equal(git("status", "--porcelain"), "");
 });
 test("unknown refs and unsupported baselines cannot enter the lifecycle", async () => {
+  await assert.rejects(comparison('refs/heads/intake-controls','commit','HEAD~1'),/full commit/);
   await assert.rejects(
     comparison("--upload-pack=not-a-command", "parent"),
     /Branch no longer exists/,
