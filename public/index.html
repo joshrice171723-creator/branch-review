@@ -55,6 +55,11 @@
           <span>BRANCHES</span><span id="count">—</span>
         </div>
         <div id="branches" class="branch-list" aria-label="Git branches"></div>
+        <section id="guided-queue" hidden aria-label="Review items">
+          <div class="queue-heading"><h2>Review items</h2><span id="queue-progress"></span></div>
+          <div id="item-queue"></div>
+          <button id="show-results" class="quiet">Review results</button>
+        </section>
         <div class="rail-footer">
           <span class="dot"></span> Runs on your machine<br /><small
             >Committed revisions · isolated data</small
@@ -80,7 +85,7 @@
             disabled
             title="Return both previews to the selected scenario; unsaved edits will be lost"
           >
-            ↗ Reopen scenario
+            ↗ Reset item
           </button>
         </div>
         <div id="preview-area">
@@ -115,7 +120,9 @@
         </footer>
       </section>
       <aside class="review">
-        <p class="eyebrow">REVIEW BRIEF</p>
+        <p class="eyebrow">GUIDED REVIEW</p>
+        <details id="branch-brief" open>
+        <summary>Selected branch and comparison</summary>
         <h2 id="title">Choose a change</h2>
         <p id="branch-name" class="muted">
           Your branch’s latest commit appears here.
@@ -131,16 +138,44 @@
         <button id="start" class="primary" disabled>
           Open review <span>↗</span>
         </button>
+        </details>
         <div id="error" role="alert" hidden></div>
         <section id="review-workflow" hidden>
           <p id="active-review" class="active-review"></p>
-          <label class="field-label" for="scenario-select">Test scenario</label>
-          <select id="scenario-select"></select>
-          <p class="small muted">Both versions keep their own state. Save edits before reopening or changing scenarios.</p>
-          <div id="checks"></div>
+          <p id="review-summary" class="small"></p>
+          <p id="review-source" class="small muted"></p>
+          <p id="review-progress" class="small"></p>
+          <p id="review-notice" class="small" role="status" aria-live="polite"></p>
+          <label class="field-label" for="scenario-select" hidden>Review item</label>
+          <select id="scenario-select" hidden></select>
+          <section id="guided-item" aria-label="Current review item">
+            <div class="item-heading"><span id="item-number" class="eyebrow"></span><span id="item-status" class="item-status"></span></div>
+            <h2 id="item-title"></h2>
+            <p id="item-description"></p>
+            <h3>What to do</h3><p id="item-instructions"></p>
+            <h3>Expected result</h3><p id="item-expected"></p>
+            <div id="checks"></div>
+            <label class="field-label" for="item-notes">Notes</label>
+            <textarea id="item-notes" maxlength="4000" placeholder="What did you observe?"></textarea>
+            <label class="field-label" for="item-outcome">Outcome</label>
+            <select id="item-outcome"><option value="">Use checklist result</option><option value="needs-fixes">Needs fixes</option><option value="blocked">Blocked — cannot test</option><option value="not-applicable">Not applicable</option></select>
+            <div id="item-reason-wrap" hidden><label class="field-label" for="item-reason">Reason / what needs fixing</label><textarea id="item-reason" maxlength="2000"></textarea></div>
+            <div class="save-line"><span id="item-save" role="status" aria-live="polite">Saved</span><button id="retry-item-save" class="quiet">Save now</button></div>
+            <div id="unfinished-choice" class="inline-choice" hidden><p>This item is unfinished. Leave it open and continue?</p><button id="keep-testing" class="quiet">Keep testing</button><button id="leave-unfinished" class="secondary">Leave unfinished and continue</button></div>
+            <div class="item-navigation"><button id="item-previous" class="secondary">← Previous</button><button id="item-next" class="primary">Next item →</button></div>
+          </section>
+          <section id="guided-results" hidden aria-label="Review results">
+            <p class="eyebrow">REVIEW RESULTS</p><h2>Your review summary</h2>
+            <p id="results-counts"></p><p id="results-message"></p>
+            <div id="result-items"></div>
+            <button id="resume-review" class="primary">Continue remaining checks</button>
+          </section>
+          <button id="prepare-handoff" class="secondary">Prepare fixes for Codex</button>
+          <section id="handoff-panel" hidden><h3>Fix request</h3><p class="small">Review this request, then copy it into the Codex chat for this branch. Nothing has been sent automatically.</p><textarea id="handoff-text" rows="12" aria-label="Codex fix request"></textarea><button id="copy-handoff" class="secondary">Copy fix request</button><button id="download-handoff" class="quiet">Download request</button><p id="handoff-status" role="status"></p></section>
           <details class="workflow-section">
             <summary>Report a finding</summary>
             <form id="finding-form">
+              <p id="finding-context" class="small muted"></p>
               <label class="field-label" for="expected">Expected behavior</label>
               <textarea id="expected" required maxlength="4000"></textarea>
               <label class="field-label" for="actual">Actual behavior</label>

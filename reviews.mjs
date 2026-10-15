@@ -1,14 +1,16 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { qaManifest } from './qa-manifest.mjs';
+import { canApprove, reviewCounts } from './public/review-model.js';
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const defaultManifest = { version: 1, title: 'Jordan Review · intake', scenarios: [{ id: 'intake', title: 'Partially completed intake', path: ':intake', steps: ['Compare the answer controls in Original and Changed.', 'Edit and save an answer in Changed.', 'Confirm Original retains its previous answer.', 'Reopen Changed and confirm the saved answer persists.'] }] };
 export function scenarioRecipe(files = []) { return files.includes('apps/api/app/services/qa/office_qa.rb') ? 'qa-scenario.rb' : 'scenario.rb'; }
 export function manifestForFiles(files = []) {
-  return scenarioRecipe(files) === 'qa-scenario.rb' ? {version:1,title:'QA coverage after a ledger import',scenarios:[{id:'qa-coverage',title:'Signed results survive historical imports',path:'/qa?view=coverage',steps:['In Original, find WF-011 and WF-012: both imported rows are historical and untested.', 'Switch to Changed: WF-011 shows Fail and WF-012 shows Pass from the saved result records.', 'Confirm WF-013 remains historical because its recorded result belongs to an older build.', 'Reopen both screens and confirm the same difference remains. These are synthetic projection fixtures.']}]} : defaultManifest;
+  return scenarioRecipe(files) === 'qa-scenario.rb' ? qaManifest : defaultManifest;
 }
 export function validateManifest(value) {
-  if (value?.version !== 1 || !Array.isArray(value.scenarios) || value.scenarios.length < 1 || value.scenarios.length > 12) throw new Error('Review manifest must contain 1–12 scenarios and version 1.');
+  if (![1,2].includes(value?.version) || !Array.isArray(value.scenarios) || value.scenarios.length < 1 || value.scenarios.length > 100) throw new Error('Review manifest must contain 1–100 items and version 1 or 2.');
   const ids = new Set();
   for (const item of value.scenarios) {
     if (!/^[a-z0-9-]{1,60}$/.test(item.id) || ids.has(item.id)) throw new Error('Scenario IDs must be unique lowercase names.');
@@ -17,8 +19,11 @@ export function validateManifest(value) {
     if (typeof item.path !== 'string' || !(item.path === ':intake' || /^\/(?:clinic(?:[/?#]|$)|qa(?:[?#]|$))/.test(item.path)) || /[\\\r\n]|%5c/i.test(item.path) || item.path.length > 500) throw new Error('Scenario destinations must stay inside /clinic or /qa.');
     if (item.path !== ':intake' && !/^(?:\/clinic(?:\/|$)|\/qa$)/.test(new URL(item.path, 'http://localhost').pathname)) throw new Error('Scenario destinations must stay inside /clinic or /qa.');
     if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 20 || item.steps.some(s => typeof s !== 'string' || !s.trim() || s.length > 500)) throw new Error('Each scenario needs 1–20 short test steps.');
+    for (const field of ['description','instructions','expected']) if (item[field] !== undefined && (typeof item[field] !== 'string' || item[field].length > 2000)) throw new Error('Item descriptions must be text up to 2,000 characters.');
+    if (item.focus !== undefined && (typeof item.focus !== 'string' || item.focus.length > 160)) throw new Error('Item focus must be a short row identifier.');
+    if (item.originalPath !== undefined) validateManifest({version:1,scenarios:[{id:'original',title:'Original',path:item.originalPath,steps:['Open']}]});
   }
-  return { version: 1, title: String(value.title || 'Branch review').slice(0, 160), scenarios: value.scenarios.map(({id,title,path,steps}) => ({id,title,path,steps})) };
+  return { version: value.version, title: String(value.title || 'Branch review').slice(0, 160), summary:String(value.summary || '').slice(0,2000), source:String(value.source || 'Committed review manifest').slice(0,300), scenarios: value.scenarios.map(({id,title,path,steps,description='',instructions='',expected='',focus='',originalPath}) => ({id,title,path,steps,description,instructions,expected,focus,...(originalPath?{originalPath}:{})})) };
 }
 export function scenarioPath(scenario, fixture) {
   if (scenario.path === ':intake') return fixture.path;
@@ -43,19 +48,40 @@ export class ReviewStore {
     let record = this.records.find(r => r.id === id);
     if (!record) {
       const previous = this.records.findLast(r => r.identity.repository === identity.repository && r.identity.ref === identity.ref);
-      record = { id, identity, manifest, title: snapshot.comparison.branch.subject, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), checks: {}, issues: previous?.issues.filter(i => i.status !== 'resolved').map(i => ({ ...i, status: 'needs-retest', carriedFrom: previous.id })) || [], events: [], approval: null, integration: null, delivery: null };
+      record = { id, identity, manifest, title: snapshot.comparison.branch.subject, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), checks: {}, items:{}, cursor:{itemId:manifest.scenarios[0].id,view:'item'}, previousId:previous?.id || null, issues: previous?.issues.filter(i => i.status !== 'resolved').map(i => ({ ...i, status: 'needs-retest', carriedFrom: previous.id })) || [], events: [], approval: null, integration: null, delivery: null };
+      for (const [itemId, saved] of Object.entries(previous?.items || {})) {
+        if (!['needs-fixes','blocked'].includes(saved.outcome)) continue;
+        if (manifest.scenarios.some(item=>item.id===itemId)) record.items[itemId]={...saved,carriedFrom:previous.id};
+        else record.issues.push({id:randomUUID(),expected:previous.manifest.scenarios.find(item=>item.id===itemId)?.expected || 'Resolve the previous review item.',actual:saved.reason,scenario:itemId,side:'changed',status:'needs-retest',createdAt:new Date().toISOString(),commit:previous.identity.changed,location:'',consoleErrors:[],carriedFrom:previous.id});
+      }
       this.records.push(record); await this.persist();
     }
     return record;
   }
   get(id) { const record = this.records.find(r => r.id === id); if (!record) throw new Error('Review not found. Reopen the branch.'); return record; }
-  summary() { return this.records.slice().reverse().map(r => ({ id:r.id, title:r.title, identity:r.identity, updatedAt:r.updatedAt, approval:r.approval, openIssues:r.issues.filter(i=>i.status!=='resolved').length, delivery:r.delivery })); }
+  summary() { return this.records.slice().reverse().map(r => ({ id:r.id, title:r.title, identity:r.identity, updatedAt:r.updatedAt, approval:r.approval, progress:reviewCounts(r), openIssues:r.issues.filter(i=>i.status!=='resolved').length, delivery:r.delivery })); }
   invalidate(record) { record.approval = null; }
   async event(record, type, detail) { record.updatedAt = new Date().toISOString(); record.events.push({ at:record.updatedAt,type,detail }); await this.persist(); return record; }
   async check(id, scenario, index, passed) {
     const r = this.get(id), item = r.manifest.scenarios.find(s => s.id === scenario);
     if (!item || !Number.isInteger(index) || index < 0 || index >= item.steps.length || typeof passed !== 'boolean') throw new Error('Invalid checklist item.');
     r.checks[`${scenario}:${index}`] = passed; this.invalidate(r); return this.event(r, 'check', {scenario,index,passed});
+  }
+  async item(id, itemId, input) {
+    const r = this.get(id);
+    if (!r.manifest.scenarios.some(item=>item.id===itemId)) throw new Error('Review item not found.');
+    if (!['','needs-fixes','blocked','not-applicable'].includes(input.outcome) || typeof input.notes !== 'string' || input.notes.length > 4000 || typeof input.reason !== 'string' || input.reason.length > 2000) throw new Error('Invalid item outcome or notes.');
+    if (['blocked','not-applicable','needs-fixes'].includes(input.outcome) && !input.reason.trim()) throw new Error('Describe why this item needs attention or does not apply.');
+    r.items ||= {};
+    r.items[itemId] = {...r.items[itemId], outcome:input.outcome, notes:input.notes, reason:input.reason.trim(), updatedAt:new Date().toISOString()};
+    this.invalidate(r); return this.event(r,'item-saved',{itemId,outcome:input.outcome});
+  }
+  async cursor(id, itemId, view = 'item') {
+    const r = this.get(id);
+    if (!r.manifest.scenarios.some(item=>item.id===itemId) || !['item','results'].includes(view)) throw new Error('Choose an existing review item.');
+    r.cursor = {itemId,view}; r.items ||= {}; r.items[itemId] ||= {};
+    r.items[itemId].visitedAt ||= new Date().toISOString();
+    await this.persist(); return r;
   }
   async issue(id, input) {
     const r = this.get(id);
@@ -80,7 +106,7 @@ export class ReviewStore {
     const r = this.get(id);
     if (typeof reviewer !== 'string' || !reviewer.trim() || reviewer.length > 100) throw new Error('Enter the reviewer name.');
     if (r.issues.some(i => i.status !== 'resolved')) throw new Error('Resolve or retest every open finding before approval.');
-    if (r.manifest.scenarios.some(s => s.steps.some((_,i) => !r.checks[`${s.id}:${i}`]))) throw new Error('Complete every scenario check before approval.');
+    if (!canApprove(r)) throw new Error('Complete every scenario check and resolve blocked or failed items before approval.');
     r.approval = { reviewer:reviewer.trim(), at:new Date().toISOString(), identity:digest(r.identity), commit:r.identity.changed };
     return this.event(r,'approved',{commit:r.identity.changed,reviewer:r.approval.reviewer});
   }

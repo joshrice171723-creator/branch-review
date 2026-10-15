@@ -67,8 +67,8 @@ export function previewProxy(side, slot, getState, appOrigin) {
         "Cache-Control": "no-store",
         "Content-Security-Policy": `frame-ancestors ${appOrigin}`,
       });
-      res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Open intake</title></head><body style="font:16px Segoe UI;padding:40px;color:#283a39"><p id="status">Opening Jordan’s intake…</p><script>
-        const scenario = ${escapeJSON({...preview.scenario, path: scenarioPath(scenario, preview.scenario)})};
+      res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Open review item</title></head><body style="font:16px Segoe UI;padding:40px;color:#283a39"><p id="status">Opening the review screen…</p><script>
+        const scenario = ${escapeJSON({...preview.scenario, path: scenarioPath({...scenario,path:side==='original' && scenario.originalPath ? scenario.originalPath : scenario.path}, preview.scenario)})};
         (async () => {
           if (scenario.public === true) { location.replace(scenario.path); return; }
           const csrf = await fetch('/api/csrf').then(async r => { if (!r.ok) throw Error('Could not establish a session.'); return r.json(); });

@@ -1,6 +1,7 @@
 // Runs inside each isolated preview; only its review parent can exchange positions.
 export function scrollBridge(appOrigin) {
   let applying = false;
+  let focusObserver, focusTimer;
   const route = () => location.pathname + location.search;
   function selector(element) {
     if (element === document.scrollingElement) return ':root';
@@ -56,5 +57,17 @@ export function scrollBridge(appOrigin) {
   }, true);
   addEventListener('message', event => {
     if (event.source === parent && event.origin === appOrigin && event.data?.type === 'review:scroll') restore(event.data.snapshot);
+    if(event.source === parent && event.origin === appOrigin && event.data?.type === 'review:focus' && typeof event.data.key === 'string') {
+      focusObserver?.disconnect();clearTimeout(focusTimer);
+      const find = () => {
+        const row=Array.from(document.querySelectorAll('tbody tr')).find(row=>row.cells[0]?.textContent.trim()===event.data.key);
+        if(!row)return false;
+        row.scrollIntoView({block:'center',behavior:'instant'});return true;
+      };
+      if(!find()) {
+        focusObserver=new MutationObserver(()=>{if(find())focusObserver.disconnect();});
+        focusObserver.observe(document.documentElement,{childList:true,subtree:true});focusTimer=setTimeout(()=>focusObserver.disconnect(),10000);
+      }
+    }
   });
 }

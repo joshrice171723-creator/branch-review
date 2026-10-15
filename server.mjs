@@ -15,7 +15,7 @@ const delivery = new Delivery(git, store);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
 async function manifestFor(sha) {
   const found = await git('ls-tree','--name-only',sha,'--','.branch-review.json');
-  if (!found) return manifestForFiles(state.comparison.files);
+  if (!found) return validateManifest(manifestForFiles(state.comparison.files));
   const raw = await git('show',`${sha}:.branch-review.json`);
   if (raw.length > 64000) throw new Error('Review manifest is too large.');
   return validateManifest(JSON.parse(raw));
@@ -55,6 +55,8 @@ async function mutate(endpoint, data) {
   }
   const record = await active(data.id, ['/api/approve','/api/ship','/api/publish','/api/candidate'].includes(endpoint));
   if (endpoint === '/api/check') return store.check(record.id,data.scenario,data.index,data.passed);
+  if (endpoint === '/api/item') return store.item(record.id,data.itemId,data);
+  if (endpoint === '/api/cursor') return store.cursor(record.id,data.itemId,data.view);
   if (endpoint === '/api/issue') return store.issue(record.id,data);
   if (endpoint === '/api/resolve') return store.resolve(record.id,data.issueId,data.note);
   if (endpoint === '/api/approve') return store.approve(record.id,data.reviewer);
@@ -84,7 +86,7 @@ async function mutate(endpoint, data) {
   }
   throw new Error('Unknown review action.');
 }
-const actions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','/api/release-settings','/api/check','/api/issue','/api/resolve','/api/approve','/api/candidate','/api/ship','/api/publish','/api/smoke','/api/retry-publish']);
+const actions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','/api/release-settings','/api/check','/api/item','/api/cursor','/api/issue','/api/resolve','/api/approve','/api/candidate','/api/ship','/api/publish','/api/smoke','/api/retry-publish']);
 const longActions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','/api/candidate','/api/ship','/api/publish']);
 const server=http.createServer(async(req,res)=>{
   try {
@@ -105,7 +107,7 @@ const server=http.createServer(async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src http://127.0.0.1:4311 http://127.0.0.1:4312; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));

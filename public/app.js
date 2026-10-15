@@ -7,8 +7,13 @@ let allBranches = [],
   active = "changed",
   frameKey = "",
   selectionGeneration = 0;
-const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:()=>mountFrames(currentState,true)});
+const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
+let mutationQueue=Promise.resolve();
 async function api(path, data) {
+  if(data!==undefined){const request=mutationQueue.catch(()=>{}).then(()=>requestApi(path,data));mutationQueue=request;return request;}
+  return requestApi(path,data);
+}
+async function requestApi(path, data) {
   const response = await fetch(
     path,
     data === undefined
@@ -78,6 +83,7 @@ async function chooseVisibleBranch() {
 }
 async function select(branch) {
   selected = branch;
+  $('branch-brief').open = !currentState.record || ![branch.ref,...branch.aliases].includes(currentState.comparison?.branch.ref);
   branchList();
   $("title").textContent = branch.subject;
   $("branch-name").textContent = branch.name;
@@ -106,6 +112,7 @@ async function select(branch) {
 }
 function toggle(side) {
   active = side;
+  reviewWorkflow.viewChanged();
   for (const name of ["original", "changed"]) {
     $(name).setAttribute("aria-pressed", String(side === name));
     const frame = $(`frame-${name}`);
@@ -116,10 +123,18 @@ function toggle(side) {
     $("context").textContent =
       `${side === "original" ? "Original" : "Changed"} · ${preview.sha.slice(0, 7)} · ${currentState.manifest?.title || "Review scenario"}`;
 }
+let focusedItem = '';
+function focusItem(item) {
+  if(!item?.focus)return;
+  for(const side of ['original','changed'])$(`frame-${side}`)?.contentWindow.postMessage({type:'review:focus',key:item.focus},`http://127.0.0.1:${currentState[side].proxy}`);
+}
 function mountFrames(state, force = false) {
-  const key = `${state.original.sha}:${state.changed.sha}:${reviewWorkflow.scenario()}`;
-  if (frameKey === key && !force) return;
+  const item=state.manifest.scenarios.find(s=>s.id===reviewWorkflow.scenario()) || state.manifest.scenarios[0];
+  const key = `${state.original.sha}:${state.changed.sha}:${item.path}:${item.originalPath || item.path}`;
+  if (frameKey === key && !force) { if(focusedItem!==item.id){focusedItem=item.id;focusItem(item);}return; }
+  focusedItem=item.id;
   frameKey = key;
+  reviewWorkflow.resetContexts();
   $("frames").replaceChildren(
     ...["original", "changed"].map((side) => {
       const frame = document.createElement("iframe");
@@ -130,6 +145,7 @@ function mountFrames(state, force = false) {
         "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
       );
       frame.src = `http://127.0.0.1:${state[side].proxy}/__review/start?scenario=${encodeURIComponent(reviewWorkflow.scenario())}`;
+      frame.addEventListener('load',()=>focusItem(currentState.manifest?.scenarios.find(s=>s.id===reviewWorkflow.scenario())));
       return frame;
     }),
   );
@@ -206,6 +222,7 @@ $("reopen").onclick = () => {
     mountFrames(currentState, true);
 };
 $("start").onclick = async () => {
+  if(!await reviewWorkflow.flush())return;
   if (
     frameKey &&
     !confirm(
