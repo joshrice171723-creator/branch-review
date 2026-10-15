@@ -124,7 +124,7 @@ async function chooseVisibleBranch() {
     visible.find((b) => b.ref === currentState.comparison?.branch.ref || b.aliases.includes(currentState.comparison?.branch.ref)) ||
     visible[0];
   if (selected) await select(selected);
-  else { branchList(); $('start').disabled = true; $('title').textContent = 'No branches needing review'; $('branch-name').textContent = 'Choose All branches to inspect merged work.'; $('files').replaceChildren(); $('file-count').textContent = '0'; $('comparison-note').textContent = ''; }
+  else { selectedComparison=null; selectionGeneration++; branchList(); $('view-diff').disabled=true; $('download-plan').disabled=true; $('plan-count').textContent='Review plan'; $('plan-summary').textContent='Select a branch to see its checks.'; $('plan-items').replaceChildren(); $('start').disabled = true; $('title').textContent = 'No branches needing review'; $('branch-name').textContent = 'Choose All branches to inspect merged work.'; $('files').replaceChildren(); $('file-count').textContent = '0'; $('comparison-note').textContent = ''; }
 }
 async function select(branch,reveal=false) {
   selected = branch;
@@ -319,7 +319,8 @@ async function poll() {
   }
 }
 $("search").oninput = branchList;
-$('branch-filter').onchange = chooseVisibleBranch;
+try{if(localStorage.getItem('branch-review:branch-filter')==='all')$('branch-filter').value='all';}catch{}
+$('branch-filter').onchange = () => {try{localStorage.setItem('branch-review:branch-filter',$('branch-filter').value);}catch{}void chooseVisibleBranch();};
 $("baseline").onchange = () => { $('commit-choice').hidden=$('baseline').value!=='commit';if(selected)void select(selected,true); };
 $('baseline-commit').onchange=()=>selected && select(selected,true);
 $("original").onclick = () => toggle("original");
