@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { scrollBridge } from '../scroll-bridge.mjs';
+
+function preview(rowY) {
+  const handlers = {}, sent = [], frames = [];
+  const root = {scrollLeft: 0, scrollTop: 0, scrollTo({left, top}) { this.scrollLeft = left; this.scrollTop = top; }};
+  const pane = {id: 'grid', scrollLeft: 0, scrollTop: 0, scrollHeight: 100, clientHeight: 100,
+    parentElement: root, scrollTo: root.scrollTo};
+  const table = {id: 'coverage', querySelectorAll: () => [row]};
+  const row = {cells: [{textContent: 'WF-011'}], parentElement: pane, closest: () => table,
+    getBoundingClientRect: () => ({top: rowY - root.scrollTop, height: 100, left: 0, right: 800})};
+  const parent = {postMessage: message => sent.push(message)};
+  const document = {scrollingElement: root, documentElement: root,
+    querySelectorAll: selector => selector === 'body *' ? [pane] : [row],
+    querySelector: selector => ({'#coverage': table, '#grid': pane})[selector]};
+  const context = {document, parent, location: {pathname: '/qa', search: '?view=coverage'},
+    innerHeight: 800, innerWidth: 1000, CSS: {escape: value => value},
+    getComputedStyle: () => ({overflow: 'auto', overflowX: 'auto', overflowY: 'auto'}),
+    addEventListener: (name, fn) => { handlers[name] = fn; }, requestAnimationFrame: fn => frames.push(fn)};
+  vm.runInNewContext(`(${scrollBridge.toString()})('http://127.0.0.1:4310')`, context);
+  return {root, pane, sent, frames, handlers, receive(snapshot, origin = 'http://127.0.0.1:4310', source = parent) {
+    handlers.message({origin, source, data: {type: 'review:scroll', snapshot}});
+  }};
+}
+
+test('scroll comparison aligns the same row despite different preceding row heights, in both directions', () => {
+  const original = preview(1500), changed = preview(1700);
+  original.root.scrollTop = 1400;
+  original.pane.scrollLeft = 120;
+  original.handlers.scroll();
+  changed.receive(original.sent[0].snapshot);
+  assert.equal(changed.root.scrollTop, 1600);
+  assert.equal(changed.pane.scrollLeft, 120);
+  changed.handlers.scroll();
+  assert.equal(changed.sent.length, 0, 'restoring must not echo');
+  changed.frames.shift()();
+  changed.root.scrollTop = 1550;
+  changed.handlers.scroll();
+  original.receive(changed.sent[0].snapshot);
+  assert.equal(original.root.scrollTop, 1350);
+});
+
+test('scroll messages reject other origins, other windows and different routes; missing rows use pixel fallback', () => {
+  const target = preview(1700);
+  const snapshot = {route: '/qa?view=coverage', positions: [{selector: ':root', x: 0, y: 900}], anchor: {table: '#coverage', key: 'removed', top: 100}};
+  target.receive(snapshot, 'https://outside.example');
+  target.receive(snapshot, undefined, {});
+  target.receive({...snapshot, route: '/clinic'});
+  assert.equal(target.root.scrollTop, 0);
+  target.receive(snapshot);
+  assert.equal(target.root.scrollTop, 900);
+});

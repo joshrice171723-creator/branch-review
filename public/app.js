@@ -109,7 +109,7 @@ function toggle(side) {
   for (const name of ["original", "changed"]) {
     $(name).setAttribute("aria-pressed", String(side === name));
     const frame = $(`frame-${name}`);
-    if (frame) frame.hidden = side !== name;
+    if (frame) { frame.classList.toggle('inactive', side !== name); frame.inert = side !== name; }
   }
   const preview = currentState[side];
   if (preview)
@@ -257,6 +257,10 @@ window.addEventListener("message", (event) => {
   )
     error(`${side}: ${event.data.message}`);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context') reviewWorkflow.context(side,event.data);
+  if (side === active && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:scroll') {
+    const other = side === 'original' ? 'changed' : 'original';
+    $(`frame-${other}`)?.contentWindow.postMessage(event.data, `http://127.0.0.1:${currentState[other].proxy}`);
+  }
 });
 await poll();
 await loadBranches().catch((e) => error(e.message));
