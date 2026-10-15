@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,7 +31,7 @@ git('update-ref','refs/heads/already-merged',base);
 git('update-ref','refs/heads/diverged',candidate);
 git('update-ref','refs/remotes/origin/diverged',base);
 process.env.META_CLINIC_REPO = fixture;
-const { branches, comparison } = await import("../adapter.mjs");
+const { branches, comparison, clearDeadPidRecords } = await import("../adapter.mjs");
 
 test("branch inventory identifies exact revisions; both baselines resolve the real diff", async () => {
   const list = await branches();
@@ -63,4 +63,14 @@ test('merged refs are classified and identical local/remote copies collapse with
   assert.equal(list.filter(b=>b.name==='diverged'||b.name==='origin/diverged').length,2);
   const remote = await comparison('refs/remotes/origin/intake-controls','parent');
   assert.equal(remote.branch.sha,candidate);assert.equal(remote.branch.ref,'refs/remotes/origin/intake-controls');
+});
+test('Windows recovery removes only absent processes belonging to the exact checkout', {skip:process.platform!=='win32'}, async()=>{
+  const directory=path.join(fixture,'tmp/dev/pids');mkdirSync(directory,{recursive:true});
+  writeFileSync(path.join(directory,'api.pid'),JSON.stringify({pid:2147483647,role:'api',root:fixture}));
+  writeFileSync(path.join(directory,'web.pid'),JSON.stringify({pid:process.pid,role:'web',root:fixture}));
+  writeFileSync(path.join(directory,'worker.pid'),JSON.stringify({pid:2147483647,role:'worker',root:path.dirname(fixture)}));
+  assert.equal(await clearDeadPidRecords(fixture),1);
+  assert.equal(existsSync(path.join(directory,'api.pid')),false);
+  assert.equal(existsSync(path.join(directory,'web.pid')),true);
+  assert.equal(existsSync(path.join(directory,'worker.pid')),true);
 });

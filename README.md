@@ -65,7 +65,7 @@ The pilot branch `codex/intake-completion-ui` compares `8968d0b8` with `a4948139
 
 ## Explicit scenario manifest
 
-Add `.branch-review.json` to a branch to name affected routes and checks. It is read from the committed candidate. Without a manifest, every branch opens the intake scenario; automatic impact discovery is not implemented. Up to 12 scenarios with 20 steps each are supported. Paths stay under `/clinic`. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers.
+Add `.branch-review.json` to a branch to name affected routes and checks. It is read from the committed candidate. Without a manifest, changes to `apps/api/app/services/qa/office_qa.rb` open the QA coverage scenario at `/qa?view=coverage`; other branches use the intake scenario. This is explicit file-to-scenario mapping, not general impact discovery. Up to 12 scenarios with 20 steps each are supported. Paths stay under `/clinic` or the `/qa` page. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers.
 
 ```json
 {
@@ -92,3 +92,9 @@ Unit tests cover Git comparisons, invalid refs, session separation, gateway boun
 The live check requires a ready preview pair. It signs into both with one cookie jar, saves and reloads a synthetic answer in Changed, verifies Original stays unchanged, then restores the answer.
 
 The Windows build launches and restores the pinned preview pair. Unit tests and the live persistence/isolation check pass. Screenshot capture, folder-picker interaction, rendered toggle behavior and the complete click-through still need visual acceptance: the available Codex UI-control connection times out. This implementation task has not merged or deployed Meta Clinic changes.
+
+## QA grid comparison
+
+`codex/qa-grid-freshness` uses the parent commit as Original and the branch tip as Changed. Both receive the same synthetic post-import snapshot: 116 historical workflow rows plus saved result records for WF-011 (Fail), WF-012 (Pass), and WF-013 (an older-build Fail). Original shows the imported historical rows; Changed projects saved results over them, keeping WF-013 stale. These fixtures test the read projection, not cryptographic receipt submission or live QA outcomes. No hosted ledger is modified.
+
+`node test/qa-live.mjs` checks the ready pair's exact build IDs, QA route, original/changed rows, stale-build control, and repeated reads. It writes `.local/qa-verification.json`. Desktop previews automatically use the scenario selected from the changed files. Windows stop recovery removes only PID records whose processes no longer exist and whose root and role match the owned checkout; live or unrelated records remain untouched.

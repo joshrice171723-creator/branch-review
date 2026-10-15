@@ -69,6 +69,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
       res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Open intake</title></head><body style="font:16px Segoe UI;padding:40px;color:#283a39"><p id="status">Opening Jordan’s intake…</p><script>
         const scenario = ${escapeJSON({...preview.scenario, path: scenarioPath(scenario, preview.scenario)})};
         (async () => {
+          if (scenario.public === true) { location.replace(scenario.path); return; }
           const csrf = await fetch('/api/csrf').then(async r => { if (!r.ok) throw Error('Could not establish a session.'); return r.json(); });
           const response = await fetch('/api/development_session', { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf.csrf_token}, body:JSON.stringify(scenario) });
           if (!response.ok) { const data = await response.json(); throw Error(data.error || 'Could not sign in to the review clinic.'); }

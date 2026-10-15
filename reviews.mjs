@@ -3,6 +3,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const defaultManifest = { version: 1, title: 'Jordan Review · intake', scenarios: [{ id: 'intake', title: 'Partially completed intake', path: ':intake', steps: ['Compare the answer controls in Original and Changed.', 'Edit and save an answer in Changed.', 'Confirm Original retains its previous answer.', 'Reopen Changed and confirm the saved answer persists.'] }] };
+export function scenarioRecipe(files = []) { return files.includes('apps/api/app/services/qa/office_qa.rb') ? 'qa-scenario.rb' : 'scenario.rb'; }
+export function manifestForFiles(files = []) {
+  return scenarioRecipe(files) === 'qa-scenario.rb' ? {version:1,title:'QA coverage after a ledger import',scenarios:[{id:'qa-coverage',title:'Signed results survive historical imports',path:'/qa?view=coverage',steps:['In Original, find WF-011 and WF-012: both imported rows are historical and untested.', 'Switch to Changed: WF-011 shows Fail and WF-012 shows Pass from the saved result records.', 'Confirm WF-013 remains historical because its recorded result belongs to an older build.', 'Reopen both screens and confirm the same difference remains. These are synthetic projection fixtures.']}]} : defaultManifest;
+}
 export function validateManifest(value) {
   if (value?.version !== 1 || !Array.isArray(value.scenarios) || value.scenarios.length < 1 || value.scenarios.length > 12) throw new Error('Review manifest must contain 1–12 scenarios and version 1.');
   const ids = new Set();
@@ -10,8 +14,8 @@ export function validateManifest(value) {
     if (!/^[a-z0-9-]{1,60}$/.test(item.id) || ids.has(item.id)) throw new Error('Scenario IDs must be unique lowercase names.');
     ids.add(item.id);
     if (typeof item.title !== 'string' || !item.title.trim() || item.title.length > 160) throw new Error('Each scenario needs a short title.');
-    if (typeof item.path !== 'string' || !(item.path === ':intake' || /^\/clinic(?:[/?#]|$)/.test(item.path)) || /[\\\r\n]|%5c/i.test(item.path) || item.path.length > 500) throw new Error('Scenario destinations must stay inside /clinic.');
-    if (item.path !== ':intake' && !/^\/clinic(?:\/|$)/.test(new URL(item.path, 'http://localhost').pathname)) throw new Error('Scenario destinations must stay inside /clinic.');
+    if (typeof item.path !== 'string' || !(item.path === ':intake' || /^\/(?:clinic(?:[/?#]|$)|qa(?:[?#]|$))/.test(item.path)) || /[\\\r\n]|%5c/i.test(item.path) || item.path.length > 500) throw new Error('Scenario destinations must stay inside /clinic or /qa.');
+    if (item.path !== ':intake' && !/^(?:\/clinic(?:\/|$)|\/qa$)/.test(new URL(item.path, 'http://localhost').pathname)) throw new Error('Scenario destinations must stay inside /clinic or /qa.');
     if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 20 || item.steps.some(s => typeof s !== 'string' || !s.trim() || s.length > 500)) throw new Error('Each scenario needs 1–20 short test steps.');
   }
   return { version: 1, title: String(value.title || 'Branch review').slice(0, 160), scenarios: value.scenarios.map(({id,title,path,steps}) => ({id,title,path,steps})) };

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, startReview, stopReview, restoreReview, prepare } from './adapter.mjs';
 import { previewProxy } from './proxy.mjs';
-import { ReviewStore, defaultManifest, validateManifest, digest } from './reviews.mjs';
+import { ReviewStore, manifestForFiles, scenarioRecipe, validateManifest, digest } from './reviews.mjs';
 import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
 
@@ -15,7 +15,7 @@ const delivery = new Delivery(git, store);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
 async function manifestFor(sha) {
   const found = await git('ls-tree','--name-only',sha,'--','.branch-review.json');
-  if (!found) return defaultManifest;
+  if (!found) return manifestForFiles(state.comparison.files);
   const raw = await git('show',`${sha}:.branch-review.json`);
   if (raw.length > 64000) throw new Error('Review manifest is too large.');
   return validateManifest(JSON.parse(raw));
@@ -23,7 +23,7 @@ async function manifestFor(sha) {
 async function activate() {
   if (state.status !== 'ready') return;
   const manifest = await manifestFor(state.changed.sha);
-  const record = await store.open({...state, repository:repo}, manifest, digest(await readFile(path.join(root,'scenario.rb'),'utf8')));
+  const record = await store.open({...state, repository:repo}, manifest, digest(await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8')));
   state.recordId = record.id; state.manifest = manifest;
   if (state.integration?.sha === state.changed.sha) { record.integration = state.integration; await store.persist(); }
   await writeFile(path.join(local,'review.json'),JSON.stringify({comparison:state.comparison,original:state.original,changed:state.changed,integration:state.integration},null,2));

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp} from 'node:fs/promises';
-import {ReviewStore,defaultManifest,validateManifest,scenarioPath} from '../reviews.mjs';
+import {ReviewStore,defaultManifest,validateManifest,scenarioPath,manifestForFiles,scenarioRecipe} from '../reviews.mjs';
 await mkdir('.local',{recursive:true});
 const snapshot = {repository:'test',comparison:{branch:{ref:'refs/heads/feature',sha:'b',subject:'Intake'}},original:{sha:'a'},changed:{sha:'b'}};
 test('review approval persists and changes invalidate it; new revisions carry unresolved findings',async()=>{
@@ -25,6 +25,10 @@ test('review approval persists and changes invalidate it; new revisions carry un
   assert.equal((await new ReviewStore(directory).load()).get(next.id).delivery.stage,'deployment-needs-inspection');
 });
 test('scenario destinations and identifiers are constrained',()=>{
+  const files=['apps/api/app/services/qa/office_qa.rb'];
+  assert.equal(scenarioRecipe(files),'qa-scenario.rb');
+  assert.equal(validateManifest(manifestForFiles(files)).scenarios[0].path,'/qa?view=coverage');
+  assert.equal(scenarioRecipe([]),'scenario.rb');
   assert.equal(scenarioPath({path:'/clinic/patients/:patientId/encounters/:encounterId#intake'},{path:'/clinic/patients/3/encounters/1'}),'/clinic/patients/3/encounters/1#intake');
   for(const destination of ['https://evil.test','//evil.test','/clinic/../admin','/clinic/%2e%2e/admin','/clinic\\evil']) assert.throws(()=>validateManifest({version:1,scenarios:[{id:'test',title:'Test',path:destination,steps:['Test']}]}),/inside/);
   assert.throws(()=>validateManifest({...defaultManifest,scenarios:[defaultManifest.scenarios[0],defaultManifest.scenarios[0]]}),/unique/);

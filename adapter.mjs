@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile, access } from "node:fs/promises";
+import { mkdir, readFile, writeFile, access, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { scenarioRecipe } from './reviews.mjs';
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
 export const local = process.env.BRANCH_REVIEW_HOME || path.join(root, ".local");
@@ -141,6 +142,8 @@ function environment(side, sha) {
     ...process.env,
     PATH: `${toolchain}${path.delimiter}${process.env.PATH}`,
     APP_DEVELOPMENT_LOGIN: "1",
+    QA_BUILD_URL: `http://127.0.0.1:${slot.web}/build.json`,
+    BRANCH_REVIEW_REVISION: sha,
     APPLY_POSTGRES_CONTAINER: `apply-review-${side}`,
     PGPORT: String(slot.postgres),
     APPLY_DEVELOPMENT_DATABASE: `apply_review_${side}_${sha.slice(0, 12)}_development`,
@@ -151,6 +154,7 @@ function environment(side, sha) {
 }
 async function lifecycle(side, sha, action) {
   const cwd = path.join(previewRoot, side);
+  if (action === 'stop') await clearDeadPidRecords(cwd);
   const env = environment(side, sha);
   progress(`${side === "original" ? "Original" : "Changed"} · ${action}`);
   const logfile = path.join(local, `${side}.log`);
@@ -174,10 +178,23 @@ async function lifecycle(side, sha, action) {
       },
     },
   ).catch(async (error) => {
+    if (action === 'stop' && await clearDeadPidRecords(cwd)) { await lifecycle(side,sha,action); return 'Recovered stopped process records.'; }
     await writeFile(logfile, error.message);
     throw error;
   });
   await writeFile(logfile, output);
+}
+export async function clearDeadPidRecords(cwd) {
+  if (process.platform !== 'win32') return 0;
+  let removed = 0;
+  for (const role of ['api','web','worker']) {
+    const filename = path.join(cwd,'tmp/dev/pids',`${role}.pid`);
+    const record = JSON.parse(await readFile(filename,'utf8').catch(e=>{if(e.code==='ENOENT')return 'null';throw e;}));
+    if (!record || !Number.isSafeInteger(record.pid) || record.pid <= 0 || path.resolve(record.root) !== path.resolve(cwd) || record.role !== role) continue;
+    const alive = await run('powershell.exe',['-NoProfile','-NonInteractive','-Command',`[bool](Get-Process -Id ${record.pid} -ErrorAction SilentlyContinue)`]);
+    if (alive === 'False') { await unlink(filename); removed++; }
+  }
+  return removed;
 }
 export async function prepare(side, sha) {
   const cwd = path.join(previewRoot, side);
@@ -205,7 +222,7 @@ export async function prepare(side, sha) {
   await run("git", ["checkout", "--detach", sha], { cwd });
   await lifecycle(side, sha, "setup");
   progress(
-    `${side === "original" ? "Original" : "Changed"} · preparing Jordan’s intake`,
+    `${side === "original" ? "Original" : "Changed"} · preparing review scenario`,
   );
   const scenarioOutput = await run(
     "ruby",
@@ -214,7 +231,7 @@ export async function prepare(side, sha) {
       "exec",
       "bin/rails",
       "runner",
-      path.join(root, "scenario.rb"),
+      path.join(root, scenarioRecipe(state.comparison.files)),
     ],
     {
       cwd: path.join(cwd, "apps/api"),

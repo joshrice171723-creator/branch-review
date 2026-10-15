@@ -114,7 +114,7 @@ function toggle(side) {
   const preview = currentState[side];
   if (preview)
     $("context").textContent =
-      `${side === "original" ? "Original" : "Changed"} · ${preview.sha.slice(0, 7)} · Jordan Review / Intake`;
+      `${side === "original" ? "Original" : "Changed"} · ${preview.sha.slice(0, 7)} · ${currentState.manifest?.title || "Review scenario"}`;
 }
 function mountFrames(state, force = false) {
   const key = `${state.original.sha}:${state.changed.sha}:${reviewWorkflow.scenario()}`;
@@ -124,7 +124,7 @@ function mountFrames(state, force = false) {
     ...["original", "changed"].map((side) => {
       const frame = document.createElement("iframe");
       frame.id = `frame-${side}`;
-      frame.title = `${side === "original" ? "Original" : "Changed"} Meta Clinic intake`;
+      frame.title = `${side === "original" ? "Original" : "Changed"} Meta Clinic review`;
       frame.setAttribute(
         "sandbox",
         "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
@@ -200,7 +200,7 @@ $("focus").onclick = () => {
 $("reopen").onclick = () => {
   if (
     confirm(
-      "Reopen both intake screens? Unsaved edits in either version will be lost.",
+      "Reopen both scenario screens? Unsaved edits in either version will be lost.",
     )
   )
     mountFrames(currentState, true);
