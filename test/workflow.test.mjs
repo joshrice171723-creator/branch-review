@@ -13,6 +13,8 @@ function harness(t, options = {}) {
     setAttribute(name, value) { this[name] = value; }
     removeAttribute(name) { delete this[name]; }
     scrollIntoView() { this.scrolled = true; }
+    showModal() { this.open = true; }
+    close() { this.open = false; }
     reset() { elements.expected.value = ''; elements.actual.value = ''; }
   }
   const elements = new Proxy({}, {get(target, key) { return target[key] ||= new Element(); }});
@@ -129,4 +131,21 @@ test('returning to an item restores its screen after navigating elsewhere',async
   assert.equal(reopened.at(-1),true);
   h.view.context('changed',{location:'/clinic/patients/3/encounters/1',errors:[]});
   await h.elements['scenario-select'].onchange();assert.equal(reopened.at(-1),false);
+});
+
+test('findings filter without losing retest drafts and screenshot viewer retains exact evidence context',t=>{
+  const h=harness(t),e=h.elements;
+  h.state.record.issues=[
+    {id:'one',status:'open',expected:'Expected',actual:'Observed',side:'changed',commit:'bbbbbbb',scenario:'intake',location:'/clinic/intake',consoleErrors:[],screenshot:'one.png'},
+    {id:'two',status:'resolved',expected:'Other',actual:'Other',side:'original',commit:'aaaaaaa',scenario:'other',location:'/qa',consoleErrors:[]},
+  ];h.view.render(h.state);
+  const card=e.findings.children[0],note=card.children.find(n=>n.placeholder==='Describe the retest result');note.value='Retest draft';note.oninput();
+  card.children.find(n=>n['aria-label']==='Enlarge finding screenshot').onclick();
+  assert.equal(e['evidence-dialog'].open,true);assert.equal(e['evidence-image'].src,'/screenshots/one.png');
+  assert.match(e['evidence-context'].textContent,/changed · bbbbbbb · intake · \/clinic\/intake/);
+  e['close-evidence'].onclick();assert.equal(e['evidence-dialog'].open,false);assert.equal(e['evidence-image'].src,undefined);
+  e['finding-filter'].value='open';e['finding-filter'].onchange();assert.equal(e.findings.children.length,1);
+  e['finding-filter'].value='all';e['finding-filter'].onchange();assert.equal(e.findings.children.length,2);
+  assert.equal(e.findings.children[0].children.find(n=>n.placeholder==='Describe the retest result').value,'Retest draft');
+  e['finding-filter'].value='current';e['finding-filter'].onchange();assert.equal(e.findings.children.length,1);
 });

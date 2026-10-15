@@ -92,7 +92,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     $('review-summary').textContent=r.manifest.summary || r.title;
     $('review-source').textContent=r.manifest.source || 'Review scenario';
     $('results-counts').textContent=`${counts.passed} passed · ${counts['needs-fixes']} need fixes · ${counts.blocked} blocked · ${counts['not-applicable']} not applicable · ${counts['not-started']+counts['in-progress']} unfinished`;
-    $('results-message').textContent=canApprove(r)?'All items are accounted for. Review any exclusions, then prepare and test the integration candidate before release.':'Resolve the items below or prepare a fix request for Codex.';
+    $('results-message').textContent=canApprove(r)?'All items are accounted for. Review any exclusions and follow the next action below.':'Resolve the items below or prepare a fix request for Codex.';
     const listKey=JSON.stringify([r.id,r.checks,r.items,r.issues,r.cursor,!!enabled,$('item-search').value,$('item-filter').value]);
     if(queueKey!==listKey){
       queueKey=listKey;

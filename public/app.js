@@ -44,8 +44,10 @@ async function requestApi(path, data) {
   return result;
 }
 function error(message) {
+  const changed=$("error").textContent!==(message || "");
   $("error").textContent = message || "";
   $("error").hidden = !message;
+  if(message && changed)$("error").scrollIntoView({block:'nearest'});
 }
 function branchList() {
   const query = $("search").value.toLowerCase();
@@ -345,6 +347,7 @@ $("start").onclick = async () => {
   }
 };
 $("stop").onclick = async () => {
+  if(!await reviewWorkflow.flush())return;
   if (!confirm("Stop both previews? Save any edits first.")) return;
   try {
     await api("/api/stop", {});

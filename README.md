@@ -4,7 +4,7 @@ A Windows desktop app for reviewing local Git branches. Meta Clinic is the first
 
 ## Open
 
-Run `../desktop/Branch Review-win32-x64/Branch Review.exe`. Keep the executable with the rest of that folder. The current pilot uses the saved configuration for this workspace and restores the running intake previews. This is a local unsigned build; Meta Clinic's development prerequisites remain required.
+Run `../desktop/Branch Review-win32-x64/Branch Review.exe`. Keep the executable with the rest of that folder. The pilot restores the running preview pair and its saved review. This is a local unsigned build; Meta Clinic's development prerequisites remain required.
 
 From source:
 
@@ -18,7 +18,18 @@ npm run desktop
 
 **Open repository** selects a local Git folder. Branch listing works with Git repositories; previews and publishing currently support Meta Clinic. The branch list defaults to **Unmerged into main**, based on commit ancestry against origin/main. Identical local/remote copies are combined; divergent copies remain separate. **All branches, including merged** shows historical work. Use Refresh to fetch current remote refs. This is merge status, not a claim that a revision has been published. Search a branch, choose Previous commit or Common ancestor with main, then **Open review**. First setup installs dependencies and migrates a separate database for each revision.
 
-Original and Changed stay mounted and laid out while toggling. Scrolling either preview synchronizes the other on the same route, including horizontal scroll. Tables align by the first visible row's first-cell identifier when unique in the matching table; otherwise comparison uses pixel position. Preview forms and data remain isolated. Reopen returns both to the saved scenario; save edits first. Stop previews stops the owned stacks and preserves databases. Closing the desktop app keeps previews running and is blocked during active operations.
+Original and Changed stay mounted while toggling. Choose **Side by side** to see both, adjust the split, or disable **Link scrolling** for independent inspection. Linked tables align by the first visible row's first-cell identifier when unique in the matching table; otherwise comparison uses pixel position. Re-enabling the link aligns the other preview immediately. Preview forms and data remain isolated. **Reset item** returns both to the selected screen; save preview edits first. Stop previews stops the owned stacks and preserves databases. Closing the desktop app keeps previews running and is blocked during active operations. Window size and maximized state are restored.
+
+## Guided QA
+
+1. Choose a branch. Its description, exact comparison, changed files and review plan appear before startup. Compare against the previous commit, common ancestor, current main, or a chosen commit from history.
+2. **Open review** starts two isolated versions and opens item 1. The left queue shows progress; the right panel explains what changed, what to do, and the expected result. Hide branches to give the queue more room.
+3. Check each observed result and add notes. Notes autosave and recover after reopening. A failed save blocks navigation instead of silently losing your work.
+4. Use **Next item** / **Previous**, or select any queue item. Next skips completed items. Leaving an unfinished item requires an explicit choice and never marks it passed. Use search and Remaining / Needs attention / Completed filters for a long review.
+5. A failed or blocked item needs a reason. **Not applicable** also requires a reason and remains visible as an exclusion in the summary. Open findings override a passing checklist.
+6. The results screen shows every outcome and the next valid delivery action. **Prepare fixes for Codex** creates a scoped request with exact revisions, failed or unverified items, notes and findings. Copy or download it into the branch's Codex chat; this version does not send messages automatically.
+
+Items sharing a screen preserve its state and focus the relevant row. Moving to another screen prompts before discarding unsaved preview edits. Alt+Left / Alt+Right navigate items; Alt+V toggles versions, including when the preview has focus. These shortcuts do not intercept typing in fields. **Review code** always shows the active review's pinned revisions, even when a different branch is selected in the browser.
 
 ## Local configuration
 
@@ -46,10 +57,12 @@ Setup/start/stop use Meta Clinic's lifecycle through its shared resource queue. 
 
 ## Saved reviews
 
-1. Open a branch, compare versions, and complete each scenario check.
+1. Open a branch, compare versions, and complete each review item.
 2. Record expected and actual behavior. Capture screenshot attaches the desktop window. Findings also include the side, revision, scenario, current route and captured browser errors. These are local records, not GitHub issues.
 3. Saved reviews can reopen the latest branch commit for retesting. Unresolved findings carry forward; new revisions reset checks and approval. Resolving a finding requires a retest note.
 4. Approval binds the source, baseline, candidate, manifest and seed recipe. Checklist or finding edits invalidate approval.
+
+Findings can be filtered by current item or unresolved status. Click a screenshot to enlarge it with its original revision and route. Retest notes survive filtering and rerenders. **View / export review report** produces a portable HTML report with checks, outcomes, notes, findings, embedded screenshots, approval and delivery history. Saved reviews remain inspectable after moving to a new commit.
 
 Records are in `reviews.json`; images are under `screenshots/` in the configured local directory.
 
@@ -65,16 +78,22 @@ The pilot branch `codex/intake-completion-ui` compares `8968d0b8` with `a4948139
 
 ## Explicit scenario manifest
 
-Add `.branch-review.json` to a branch to name affected routes and checks. It is read from the committed candidate. Without a manifest, changes to `apps/api/app/services/qa/office_qa.rb` open the QA coverage scenario at `/qa?view=coverage`; other branches use the intake scenario. This is explicit file-to-scenario mapping, not general impact discovery. Up to 12 scenarios with 20 steps each are supported. Paths stay under `/clinic` or the `/qa` page. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers.
+Add `.branch-review.json` to a branch to name affected routes and checks. It is read from the exact committed candidate and validated before preview preparation. Without a manifest, changes to `apps/api/app/services/qa/office_qa.rb` use the six-item QA coverage plan; other branches use a clearly labeled starter intake plan. This is explicit mapping, not general impact discovery. Confirm the starter checks cover the actual change before approval.
+
+Versions 1 and 2 support 1–100 review items, each with 1–20 checks. The JSON file is limited to 64 KB. Paths stay under `/clinic` or the `/qa` page. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers. `originalPath` optionally provides a different destination for Original. `focus` matches a table row's first-cell identifier. Keep item IDs stable across fixes so unresolved findings carry forward correctly. The manifest guides navigation and testing; it does not execute scripts or create arbitrary seed data.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "title": "Intake controls",
+  "summary": "Answer controls make incomplete intake questions easier to find.",
   "scenarios": [{
     "id": "intake",
     "title": "Partially completed intake",
     "path": ":intake",
+    "description": "Review the changed answer controls on a partly completed intake.",
+    "instructions": "Compare both versions, then edit an answer in Changed and reopen it.",
+    "expected": "The answer persists in Changed while Original remains unchanged.",
     "steps": ["Save an answer in Changed", "Confirm Original stays unchanged"]
   }]
 }
@@ -85,13 +104,14 @@ Add `.branch-review.json` to a branch to name affected routes and checks. It is 
 ```powershell
 npm test
 npm run test:live
+node test/qa-live.mjs
 ```
 
 Unit tests cover Git comparisons, invalid refs, session separation, gateway boundaries, persisted findings, approval invalidation, merge candidates, moving refs and simulated release results. Delivery tests push only to disposable local bare repositories. Release tests never contact the hosted application.
 
-The live check requires a ready preview pair. It signs into both with one cookie jar, saves and reloads a synthetic answer in Changed, verifies Original stays unchanged, then restores the answer.
+The intake live check requires a ready intake preview pair. It signs into both with one cookie jar, saves and reloads a synthetic answer in Changed, verifies Original stays unchanged, then restores the answer. The QA live check requires the QA pair; it validates exact build IDs and the saved-result projection. Run the check matching the active plan.
 
-The Windows build launches and restores the pinned preview pair. Unit tests and the live persistence/isolation check pass. Windows Computer Use visually verified Original/Changed switching and Reopen scenario on 2026-10-15. Both sides show Workflow coverage at /qa?view=coverage: Original ecbe9d9 shows historical untested rows; Changed 3f9a686 shows WF-011 Fail and WF-012 Pass, while WF-013 remains stale. The original UI-control connector remains unavailable; native Windows automation provided this acceptance. The in-app screenshot action, folder picker and complete release click-through remain unverified. This implementation task has not merged or deployed Meta Clinic changes.
+Windows Computer Use verified the six-item QA journey, all 12 checks, persisted notes, Previous/Next, unfinished-item handling, blocked-item reasons, result summaries, fix-request preparation, screenshot capture, finding resolution, portable report display, source diffs, side-by-side views, linked scrolling, keyboard controls and restoring the correct route on 2026-10-15. Original ecbe9d9 shows historical untested rows; Changed 3f9a686 shows WF-011 Fail and WF-012 Pass, while WF-013 remains stale. Native Windows automation provides desktop acceptance; the browser-only connector cannot control this app. Live publication remains untested. This implementation task has not pushed or deployed Meta Clinic changes.
 
 ## QA grid comparison
 

@@ -36,9 +36,9 @@ async function active(id, checkFresh = false) {
     for (const side of ['original','changed']) {
       const cwd = path.join(previewRoot,side);
       if (await run('git',['rev-parse','HEAD'],{cwd}) !== state[side].sha || await run('git',['status','--porcelain'],{cwd})) throw new Error('Preview source changed. Reopen the exact committed version before approval.');
-      const ready = await fetch(`http://127.0.0.1:${state[side].api}/up`,{signal:AbortSignal.timeout(3000)});
-      if (!ready.ok) throw new Error('A preview is not running.');
     }
+    const health=await previewHealth(state);
+    for(const [side,result] of Object.entries(health.sides))if(!result.ok)throw new Error(`${side==='original'?'Original':'Changed'} preview: ${result.message}`);
   }
   return record;
 }

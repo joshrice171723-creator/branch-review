@@ -743,3 +743,4 @@ dialog::backdrop {background:#152c2b80}
 .branches.compact .search,.branches.compact #branch-filter,.branches.compact label[for="branch-filter"],.branches.compact .branch-list,.branches.compact .list-heading{display:none}
 #toggle-branches{margin:0 12px 10px;text-align:left;color:#315d46;font-size:12px}.compact #guided-queue{margin-top:0}.queue-filters input{border:1px solid #dce3d9;border-radius:5px;background:#fff;color:#20302f}.shortcut-hint{color:#65776d}
 #plan-preview{margin:15px 0}#plan-items{max-height:200px;overflow:auto}
+.evidence-thumbnail{display:block;width:100%;padding:0;border:0;background:none;cursor:zoom-in}.evidence-thumbnail img{display:block;margin:8px 0}#evidence-image{display:block;width:100%;height:auto}#evidence-context{overflow-wrap:anywhere}

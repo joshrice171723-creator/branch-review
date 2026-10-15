@@ -33,7 +33,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     notice('');
   }
   $('choose-repository').hidden = !window.desktop;
-  $('choose-repository').onclick = async () => { try { await window.desktop.chooseRepository(); } catch(e) { error(e.message); } };
+  $('choose-repository').onclick = async () => { try { if(await guide.flush())await window.desktop.chooseRepository(); } catch(e) { error(e.message); } };
   $('scenario-select').onchange = () => guide.navigate($('scenario-select').value);
   $('capture').hidden = !window.desktop;
   $('capture').onclick = async () => {
@@ -87,6 +87,8 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   $('retry-publish').onclick = () => act('retry-publish',{note:$('release-note').value});
   $('smoke').onclick = () => act('smoke',{note:$('release-note').value});
   $('history').onchange = () => { $('retest').disabled = !$('history').value || getState().busy; $('view-history').disabled=!$('history').value; };
+  $('finding-filter').onchange=()=>{rendered='';render(getState());};
+  $('close-evidence').onclick=()=>{$('evidence-dialog').close();$('evidence-image').removeAttribute('src');};
   function report(id) {
     if(!id)return;
     $('report-frame').src=`/api/report?id=${encodeURIComponent(id)}&inline=1`;
@@ -140,9 +142,15 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
         const label=node('label','', 'check'), box=document.createElement('input');box.type='checkbox';box.checked=!!r.checks[`${scenario}:${index}`];box.disabled=!enabled;
         box.onchange=()=>act('check',{scenario,index,passed:box.checked});label.append(box,node('span',step));return label;
       }));
-      $('findings').replaceChildren(...r.issues.map(issue=>{
+      const visibleFindings=r.issues.filter(issue=>$('finding-filter').value==='current'?issue.scenario===scenario:$('finding-filter').value==='open'?issue.status!=='resolved':true);
+      $('findings-title').textContent=`Findings and retests · ${r.issues.filter(issue=>issue.status!=='resolved').length} open`;
+      $('findings').replaceChildren(...visibleFindings.map(issue=>{
         const card=node('article','', 'finding');card.append(node('strong',issue.status==='needs-retest'?'Needs retest':issue.status==='resolved'?'Resolved':'Open finding'),node('p',`Expected: ${issue.expected}`),node('p',`Actual: ${issue.actual}`),node('small',`${issue.side} · ${issue.commit.slice(0,7)} · ${issue.scenario} ${issue.location}`));
-        if(issue.screenshot) { const image=document.createElement('img');image.src='/screenshots/'+issue.screenshot;image.alt='Captured review finding';image.loading='lazy';card.append(image); }
+        if(issue.screenshot) {
+          const image=document.createElement('img');image.src='/screenshots/'+issue.screenshot;image.alt='Captured review finding';image.loading='lazy';
+          const zoom=node('button','','evidence-thumbnail');zoom.type='button';zoom.setAttribute('aria-label','Enlarge finding screenshot');zoom.append(image);
+          zoom.onclick=()=>{$('evidence-context').textContent=`${issue.side} · ${issue.commit} · ${issue.scenario} · ${issue.location}`;$('evidence-image').src=image.src;$('evidence-dialog').showModal();};card.append(zoom);
+        }
         if(issue.consoleErrors.length) card.append(node('pre',issue.consoleErrors.join('\n')));
         if(issue.status!=='resolved') {
           const note=document.createElement('textarea');note.placeholder='Describe the retest result';note.setAttribute('aria-label','Retest result');note.maxLength=2000;
@@ -153,8 +161,8 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
         } else card.append(node('p',issue.resolution));
         return card;
       }));
-      if(!r.issues.length) $('findings').append(node('p','No findings recorded.','small muted'));
-      $('approval-state').textContent=r.approval?`Approved by ${r.approval.reviewer} · ${r.approval.commit.slice(0,7)}`:'Complete every check and resolve findings before approval.';
+      if(!visibleFindings.length) $('findings').append(node('p',r.issues.length?'No findings match this view.':'No findings recorded.','small muted'));
+      $('approval-state').textContent=r.approval?`Approved by ${r.approval.reviewer} · ${r.approval.commit.slice(0,7)}`:canApprove(r)?'Review complete. Enter your name to approve this exact version.':'Complete every check and resolve findings before approval.';
       $('delivery-state').textContent=r.delivery?`Delivery: ${r.delivery.stage.replaceAll('-',' ')}${r.delivery.error?' · '+r.delivery.error:''}`:r.integration?`Integration candidate ${r.integration.sha.slice(0,7)} against main ${r.integration.main.slice(0,7)}`:'Prepare the integration candidate before merging. It includes current main.';
     }
     for(const id of ['scenario-select','expected','actual','capture','report','reviewer','candidate','approve']) $(id).disabled=!enabled;

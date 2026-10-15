@@ -198,7 +198,7 @@
               <button id="report" class="secondary">Save finding</button>
             </form>
           </details>
-          <details class="workflow-section"><summary>Findings and retests</summary><div id="findings"></div></details>
+          <details class="workflow-section"><summary id="findings-title">Findings and retests</summary><label class="field-label" for="finding-filter">Show findings</label><select id="finding-filter"><option value="all">All findings</option><option value="current">Current review item</option><option value="open">Unresolved findings</option></select><div id="findings"></div></details>
           <section class="workflow-section">
             <h3>Approve this version</h3>
             <label class="field-label" for="reviewer">Reviewer</label><input id="reviewer" maxlength="100" placeholder="Your name" autocomplete="name" />
@@ -238,6 +238,7 @@
     </main>
     <dialog id="diff-dialog" aria-labelledby="diff-title"><header class="dialog-heading"><h2 id="diff-title">Code changes</h2><button id="close-diff" class="quiet">Close</button></header><p id="diff-identity" class="small"></p><label for="diff-files" class="field-label">Changed file</label><select id="diff-files"></select><p id="diff-warning" role="status" class="small"></p><pre id="diff-patch"></pre></dialog>
     <dialog id="report-dialog" aria-labelledby="report-title"><header class="dialog-heading"><h2 id="report-title">Saved review report</h2><a id="download-report" class="quiet" download>Download with screenshots</a><button id="close-report" class="quiet">Close</button></header><iframe id="report-frame" title="Saved review report" sandbox="allow-same-origin"></iframe></dialog>
+    <dialog id="evidence-dialog" aria-labelledby="evidence-title"><header class="dialog-heading"><h2 id="evidence-title">Finding screenshot</h2><button id="close-evidence" class="quiet">Close</button></header><p id="evidence-context" class="small"></p><img id="evidence-image" alt="Screenshot captured with the review finding"></dialog>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
