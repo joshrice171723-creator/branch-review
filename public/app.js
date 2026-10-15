@@ -206,6 +206,7 @@ function toggle(side) {
       frame.parentElement.classList.toggle('inactive',hidden);frame.parentElement.classList.toggle('active-pane',side===name);frame.parentElement.inert=hidden;
     }
   }
+  renderFocusStatus();
   const preview = currentState[side];
   if (preview)
     $("context").textContent =
@@ -229,10 +230,18 @@ function applyLayout() {
 try{const layout=JSON.parse(localStorage.getItem('branch-review:layout')||'{}');if(['toggle','side-by-side'].includes(layout.mode))$('layout-mode').value=layout.mode;if(typeof layout.sync==='boolean')$('sync-scroll').checked=layout.sync;if(Number(layout.split)>=30 && Number(layout.split)<=70)$('split-position').value=layout.split;}catch{}
 $('layout-mode').onchange=$('split-position').oninput=applyLayout;
 $('sync-scroll').onchange=()=>{applyLayout();if($('sync-scroll').checked)$(`frame-${active}`)?.contentWindow.postMessage({type:'review:request-scroll'},`http://127.0.0.1:${currentState[active].proxy}`);};
-let focusedItem = '';
-function focusItem(item) {
-  if(!item?.focus)return;
-  for(const side of ['original','changed'])$(`frame-${side}`)?.contentWindow.postMessage({type:'review:focus',key:item.focus},`http://127.0.0.1:${currentState[side].proxy}`);
+let focusedItem = '', focusStates = {};
+function renderFocusStatus() {
+  const item=currentState.manifest?.scenarios.find(item=>item.id===reviewWorkflow.scenario());
+  const status=focusStates[active],label=$('target-status');
+  label.hidden=!item?.focus || currentState.status!=='ready';
+  label.textContent=status==='found'?`Located ${item?.focus}`:status==='missing'?'Review target not found · inspect the screen or Reset item':status==='cancelled'?'Automatic focus paused · use Reset item to return':'Locating review target…';
+  label.classList.toggle('health-error',status==='missing');
+}
+function focusItem(item,sides=['original','changed']) {
+  if(!item?.focus){focusStates={};renderFocusStatus();return;}
+  for(const side of sides){focusStates[side]='waiting';$(`frame-${side}`)?.contentWindow.postMessage({type:'review:focus',key:item.focus},`http://127.0.0.1:${currentState[side].proxy}`);}
+  renderFocusStatus();
 }
 function mountFrames(state, force = false) {
   const item=state.manifest.scenarios.find(s=>s.id===reviewWorkflow.scenario()) || state.manifest.scenarios[0];
@@ -254,7 +263,7 @@ function mountFrames(state, force = false) {
         "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
       );
       frame.src = `http://127.0.0.1:${state[side].proxy}/__review/start?scenario=${encodeURIComponent(reviewWorkflow.scenario())}`;
-      frame.addEventListener('load',()=>focusItem(currentState.manifest?.scenarios.find(s=>s.id===reviewWorkflow.scenario())));
+      frame.addEventListener('load',()=>focusItem(currentState.manifest?.scenarios.find(s=>s.id===reviewWorkflow.scenario()),[side]));
       pane.append(label,frame);return pane;
     }),
   );
@@ -267,6 +276,7 @@ async function poll() {
     token = currentState.token;
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
+    renderFocusStatus();
     const ready = currentState.status === "ready";
     const preparing = ["preparing", "stopping"].includes(currentState.status);
     $("empty").hidden = ready || preparing;
@@ -393,6 +403,7 @@ window.addEventListener("message", (event) => {
     event.data?.type === "review:error"
   )
     error(`${side}: ${event.data.message}`);
+  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:focus-status' && event.data.key===currentState.manifest?.scenarios.find(item=>item.id===reviewWorkflow.scenario())?.focus && ['waiting','found','missing','cancelled'].includes(event.data.status)){focusStates[side]=event.data.status;renderFocusStatus();}
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context') reviewWorkflow.context(side,event.data);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:active' && $('layout-mode').value==='side-by-side')toggle(side);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:shortcut')runShortcut(event.data.command);

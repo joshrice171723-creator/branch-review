@@ -1,8 +1,9 @@
 // Runs inside each isolated preview; only its review parent can exchange positions.
 export function scrollBridge(appOrigin, shortcut) {
   let applying = false, focusing = false;
-  let focusObserver, focusTimer;
-  function cancelFocus() { focusObserver?.disconnect(); clearTimeout(focusTimer); focusing=false; }
+  let focusObserver, focusTimer, focusKey;
+  const focusStatus = status => parent.postMessage({type:'review:focus-status',key:focusKey,status},appOrigin);
+  function cancelFocus() { if(focusing)focusStatus('cancelled');focusObserver?.disconnect(); clearTimeout(focusTimer); focusing=false; }
   const route = () => location.pathname + location.search;
   const activate = event => {if(event?.type!=='focusin')cancelFocus();parent.postMessage({type:'review:active'},appOrigin);};
   addEventListener('pointerdown',activate,true);addEventListener('focusin',activate,true);addEventListener('wheel',activate,{passive:true});
@@ -64,18 +65,19 @@ export function scrollBridge(appOrigin, shortcut) {
     if (event.source === parent && event.origin === appOrigin && event.data?.type === 'review:scroll') restore(event.data.snapshot);
     if(event.source === parent && event.origin === appOrigin && event.data?.type === 'review:focus' && typeof event.data.key === 'string') {
       cancelFocus();
-      focusing=true;
+      focusKey=event.data.key;focusing=true;focusStatus('waiting');
       const find = () => {
         const row=Array.from(document.querySelectorAll('tbody tr')).find(row=>row.cells[0]?.textContent.trim()===event.data.key);
         const target=row || Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]')).find(heading=>heading.textContent.trim()===event.data.key);
         if(!target)return false;
         applying=true;focusing=false;
+        clearTimeout(focusTimer);
         target.scrollIntoView({block:row?'center':'start',behavior:'instant'});
-        requestAnimationFrame(()=>{applying=false;});return true;
+        requestAnimationFrame(()=>{applying=false;focusStatus('found');});return true;
       };
       if(!find()) {
         focusObserver=new MutationObserver(()=>{if(focusing && find())focusObserver.disconnect();});
-        focusObserver.observe(document.documentElement,{childList:true,subtree:true});focusTimer=setTimeout(cancelFocus,60000);
+        focusObserver.observe(document.documentElement,{childList:true,subtree:true});focusTimer=setTimeout(()=>{focusing=false;focusObserver.disconnect();focusStatus('missing');},60000);
       }
     }
   });
