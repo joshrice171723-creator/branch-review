@@ -13,6 +13,21 @@ let allBranches = [],
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,poll,error,reopen:()=>mountFrames(currentState,true)});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
+// Move existing controls so their state and handlers stay intact.
+$('tools-plan').prepend($('capture-item'));
+for(const id of ['choose-repository','stop'])$('workspace-actions').append($(id));
+for(const id of ['history','health-status','files'])$('workspace-details').append($(id).closest('details'));
+$('guided-results').append($('prepare-handoff'),$('handoff-panel'),$('approval-section'),$('delivery-heading').closest('details'));
+$('result-items').before($('prepare-handoff'),$('handoff-panel'));
+$('branch-brief').append($('review-context'));
+const problem=$('problem-dialog'),findingSection=$('finding-form').closest('details');
+problem.append(findingSection,$('findings-title').closest('details'));findingSection.open=true;
+$('report-problem').onclick=()=>problem.showModal();$('close-problem').onclick=()=>problem.close();
+$('problem-evidence').onclick=()=>{problem.close();reviewTools.open('evidence');};
+$('open-codex-handoff').onclick=()=>reviewTools.open('updates');
+const comparisonMenu=document.createElement('details');comparisonMenu.className='comparison-menu';
+const comparisonSummary=document.createElement('summary');comparisonSummary.textContent='Compare options';comparisonMenu.append(comparisonSummary,document.querySelector('.comparison-options'));
+$('reopen').before(comparisonMenu);$('review-code').after($('focus'));
 let branchVisibility=null;
 try{branchVisibility=JSON.parse(localStorage.getItem('branch-review:branches-visible') || 'null');}catch{}
 function branchVisibilityUI() {
@@ -145,7 +160,8 @@ async function select(branch,reveal=false) {
     if($('baseline').value==='commit' && commitBranchSha!==branch.sha){
       const commits=await api(`/api/commits?sha=${branch.sha}`);if(generation!==selectionGeneration)return;
       $('baseline-commit').replaceChildren(...commits.map(commit=>{const option=document.createElement('option');option.value=commit.sha;option.textContent=`${commit.sha.slice(0,7)} · ${commit.subject}`;return option;}));
-      $('baseline-commit').value=commits[1]?.sha || commits[0]?.sha || '';commitBranchSha=branch.sha;
+      const reviewed=currentState.record?.identity;
+      $('baseline-commit').value=reviewed && [branch.ref,...branch.aliases].includes(reviewed.ref) && commits.some(commit=>commit.sha===reviewed.base)?reviewed.base:commits[1]?.sha || commits[0]?.sha || '';commitBranchSha=branch.sha;
     }
     const result = await api(
       `/api/comparison?ref=${encodeURIComponent(branch.ref)}&baseline=${$("baseline").value}&commit=${$('baseline-commit').value}`,
@@ -276,6 +292,7 @@ function mountFrames(state, force = false) {
 async function poll() {
   try {
     const previousBusy = currentState.busy;
+    const previousReview=currentState.record?.id;
     currentState = await api("/api/state");
     token = currentState.token;
     branchVisibilityUI();
@@ -328,7 +345,9 @@ async function poll() {
     }
     $("connection").textContent = "LOCAL PREVIEW";
     if(Date.now()-lastHealth>15000)void checkHealth();
-    if (previousBusy && !currentState.busy) await loadBranches();
+    const reviewChanged=ready && currentState.record?.id!==previousReview;
+    if(reviewChanged){selected=null;$('baseline').value=currentState.record.comparisonMode?.baseline || 'parent';$('commit-choice').hidden=$('baseline').value!=='commit';commitBranchSha='';}
+    if (reviewChanged || previousBusy && !currentState.busy) await loadBranches();
   } catch (e) {
     $("connection").textContent = "REVIEW SERVER DISCONNECTED";
     error(e.message);

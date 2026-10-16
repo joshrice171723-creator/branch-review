@@ -1,14 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,writeFile} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {PlanStore,retestAdvice,branchUpdate,branchRelationships} from '../plans.mjs';
 import {ReviewStore,validateManifest} from '../reviews.mjs';
 import {nextItem} from '../public/review-model.js';
-import {pixelDifference} from '../public/evidence-tools.js';
-import {ReviewJobs,scrub,configuredChecks} from '../jobs.mjs';
+import {pixelDifference,visibleCaptureRect} from '../public/evidence-tools.js';
+import {ReviewJobs,scrub,configuredChecks,codexExecutable} from '../jobs.mjs';
 import {publishedAction,publishedComplete} from '../published-review.mjs';
 import {reviewToolsBridge} from '../review-tools-bridge.mjs';
 
@@ -42,6 +44,12 @@ test('branch relationships distinguish included commits from overlapping indepen
 test('visual differences exclude masked pixels and reject mismatched viewports',()=>{
   const a={width:2,height:1,data:new Uint8ClampedArray([0,0,0,255,0,0,0,255])},b={...a,data:new Uint8ClampedArray([255,0,0,255,0,0,0,255])};
   assert.equal(pixelDifference(a,b).percent,50);const masked=pixelDifference(a,b,[{x:0,y:0,width:1,height:1}]);assert.equal(masked.percent,0);assert.equal(masked.total,1);assert.throws(()=>pixelDifference(a,{...b,width:3}));
+});
+test('preview capture excludes review panels when a wide frame is horizontally scrolled',()=>{
+  const frame={left:170,top:160,right:938,bottom:940},pane={left:200,top:160,right:875,bottom:925};
+  assert.deepEqual(visibleCaptureRect(frame,pane,1200,993),{x:200,y:160,width:675,height:765});
+  assert.deepEqual(visibleCaptureRect({...frame,right:560},pane,1200,993),{x:200,y:160,width:360,height:765});
+  assert.throws(()=>visibleCaptureRect(frame,{...pane,left:1000},1200,993),/not visible/);
 });
 test('structured evidence redaction preserves valid data and removes credentials',()=>{
   const data=scrub({token:'secret',message:'Authorization: Bearer abc',nested:{password:'secret'},list:['api_key=private','safe']});assert.equal(data.token,'[redacted]');assert.equal(data.nested.password,'[redacted]');assert.doesNotMatch(JSON.stringify(data),/private|secret|Bearer abc/);assert.equal(data.list[1],'safe');
@@ -83,4 +91,52 @@ test('preview replay rejects foreign parents and stops before a mismatched route
   vm.runInNewContext(`(${reviewToolsBridge.toString()})('http://review')`,context);messages.length=0;
   await handlers.message({source:{},origin:'http://review',data:{type:'review:tool',id:'x',command:'record',data:true}});assert.equal(messages.length,0);
   await handlers.message({source:parent,origin:'http://review',data:{type:'review:tool',id:'y',command:'replay',data:[{route:'/other'}]}});assert.match(messages[0].error,/screen differs/);
+});
+
+
+test('desktop finds the installed Codex executable without a terminal PATH',async()=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'codex-discovery-'));
+  const bin=path.join(directory,'OpenAI','Codex','bin','installed');await mkdir(bin,{recursive:true});
+  const executable=path.join(bin,'codex.exe');await writeFile(executable,'fixture');
+  assert.equal(await codexExecutable({PATH:'',LOCALAPPDATA:directory}),executable);
+  assert.equal(await codexExecutable({BRANCH_REVIEW_CODEX:'chosen.exe'}),'chosen.exe');
+  await assert.rejects(codexExecutable({PATH:''}),/not found/);
+});
+test('fix handoff preserves reviewed text and chooses new or resumed Codex chats',async()=>{
+  const {directory,record}=await fixture(),commands=[];
+  const jobs=new ReviewJobs(directory,{git:async()=>'',run:async(_command,args)=>args[0]==='rev-parse'?sha:'',previewRoot:directory,toolchain:directory,codex:'installed.exe'});
+  jobs.command=async(job,command,args,cwd,prompt)=>{commands.push({command,args,cwd,prompt});await writeFile(args[args.indexOf('--output-last-message')+1],'Done');};
+  const job={id:'first',kind:'fix',requestText:'Reviewed custom scope'};await jobs.execute(job,record,{},directory);
+  assert.equal(commands[0].command,'installed.exe');assert.equal(commands[0].args.includes('resume'),false);assert.match(commands[0].prompt,/Reviewed custom scope/);assert.match(commands[0].prompt,/Current review manifest/);
+  const chatId='12345678-1234-1234-1234-123456789abc';await jobs.execute({...job,id:'second'},record,{chatId},directory);
+  assert.equal(commands[1].args[commands[1].args.indexOf('resume')+1],chatId);
+  assert.equal(commands[0].args[commands[0].args.indexOf('--sandbox')+1],'workspace-write');
+  await assert.rejects(jobs.execute({...job,commit:sha},record,{},directory),/clean committed fix/);
+  await assert.rejects(jobs.start(record,'fix',{chatId:'------------------------------------'}),/UUID/);
+});
+
+test('committed fix branch preserves original findings and resets approval',async()=>{
+  const {store,record}=await fixture();
+  await store.issue(record.id,{scenario:'one',expected:'Correct row',actual:'Wrong row'});
+  record.checks={'one:0':true};record.approval={commit:sha};
+  const next=await store.open({...snapshot,previousReviewId:record.id,comparison:{branch:{ref:'refs/heads/fix',sha:'c'.repeat(40)}},changed:{sha:'c'.repeat(40)}},manifest,'recipe');
+  assert.equal(next.previousId,record.id);assert.equal(next.identity.base,base);
+  assert.equal(next.issues[0].status,'needs-retest');assert.equal(next.issues[0].carriedFrom,record.id);
+  assert.deepEqual(next.checks,{});assert.equal(next.approval,null);
+});
+
+test('app commits only selected fix files and preserves unrelated edits',async()=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'fix-commit-')),id='owned',worktree=path.join(directory,'fixes',id),branch='branch-review/fixes-'+id;
+  await mkdir(worktree,{recursive:true});
+  const run=async(command,args,options)=>{const result=await promisify(execFile)(command,args,options);return result.stdout.trim();};
+  const git=(...args)=>run('git',args,{cwd:worktree});
+  await git('init','-b',branch);await git('config','user.email','test@example.invalid');await git('config','user.name','Test');
+  await writeFile(path.join(worktree,'AGENTS.md'),'Existing');await git('add','.');await git('commit','-m','initial');
+  await writeFile(path.join(worktree,'AGENTS.md'),'Unrelated tooling edit');await writeFile(path.join(worktree,'.branch-review.json'),'{}');
+  const jobs=new ReviewJobs(directory,{run});jobs.rows=[{id,kind:'fix',status:'failed',branch,worktree}];
+  await assert.rejects(jobs.commitFix(id,['../outside']),/Select existing/);
+  await jobs.commitFix(id,['.branch-review.json']);
+  assert.equal(await git('show','HEAD:AGENTS.md'),'Existing');assert.equal(await git('show','HEAD:.branch-review.json'),'{}');
+  assert.equal(jobs.rows[0].status,'succeeded');assert.equal(jobs.rows[0].dirty,true);assert.match(await git('status','--porcelain'),/AGENTS.md/);
+  await git('checkout','-b','other');await assert.rejects(jobs.fixFiles(id),/changed branches/);
 });

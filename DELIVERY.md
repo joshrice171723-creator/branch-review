@@ -46,8 +46,43 @@ commit and row assertions through the normal gateways. Native recording produced
 15-second preview clip. The queue remains visible in the 1200px-wide desktop window.
 Evidence: ../desktop-verification/visual-comparison-0.4.png.
 
-Verification limits: the configured Codex CLI was detected, but no generation request or direct
-chat fix job was sent. No live Meta Clinic push, publication or hosted checklist was performed.
-Recording/replay, annotations, clip attachment, responsive presets and performance sampling
-have automated boundary coverage where applicable but do not yet all have complete
-native desktop journey evidence. Implementation completion is not full end-to-end acceptance.
+The remaining native acceptance work is recorded below. Live publishing remains outside the local test run.
+
+
+## 0.4.1 — UI cleanup and real fix handoff
+
+The main screen now prioritizes the preview, active instructions, checks, notes and Previous/Next.
+Comparison controls, branch metadata and advanced tools are collapsed. Findings use a dedicated
+dialog; delivery controls live in results. Screenshot thumbnails and Codex output stay compact.
+
+Native desktop acceptance on October 15:
+
+- Real Codex dispatch found the installed Windows CLI without relying on terminal PATH.
+- A dedicated fix chat received the reviewed request, manifest, commits and evidence paths.
+- The Codex sandbox could write the fix but could not update the shared Git index. The app's
+  explicit selected-file commit flow committed only `.branch-review.json` as `efb7649`.
+  An unrelated tooling edit in AGENTS.md remained uncommitted in the isolated fix checkout.
+- Review fixed branch reopened Original `ecbe9d9` against Changed `efb7649`; eight items and
+  sixteen checks started unchecked. Two unresolved findings, their notes, PNG and WebM evidence
+  carried forward. Retest notes resolved both findings.
+- The exact-build QA check passed 116-row coverage, saved-result precedence and stale-result control.
+- Box/arrow screenshot annotations and a 15-second clip attached to a finding. The saved clip
+  played to completion after restart and survived return on the fixed branch.
+- Phone (390px) and tablet (768px) items opened the correct QA rows in both versions.
+- A recorded form edit replayed into Original. The form was not submitted, then Reset item
+  returned both previews to coverage.
+- The configured apps/web TypeScript check ran from the desktop against the isolated Changed
+  checkout and succeeded. Three-load performance measurements persisted for both versions.
+
+- Cropped tablet captures exclude review chrome; a timestamp ignore region was applied and saved.
+- Restore starting data completed in Changed, reset review checks and preserved evidence. The
+  exact-build QA check passed again after the reset. Hosted verification stayed disabled.
+
+59 automated tests pass, including clean-commit handoff validation, selected-file preservation,
+review identity carry-forward and capture clipping for horizontally scrolled previews.
+Evidence and the portable report are in ../desktop-verification.
+
+No live Meta Clinic push or publication was performed. Hosted post-publish acceptance remains
+unverified. Read-only Codex plan generation succeeded and opened a six-item draft without replacing the
+saved eight-item review. Capture-current-screen, reorder and removal worked in the draft editor.
+Resumed-chat dispatch has boundary tests; the real handoff acceptance used a new dedicated chat.

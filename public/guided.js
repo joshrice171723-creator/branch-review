@@ -118,6 +118,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     for(const id of ['item-next','item-previous','item-outcome','item-notes','item-reason','show-results','resume-review','prepare-handoff','retry-item-save'])$(id).disabled=!enabled;
     $('item-previous').disabled=!enabled || !items.slice(0,index).some(item=>!fixMode || matchesItem(r,item,'','attention'));
     $('resume-review').textContent=counts.complete===counts.total?'Revisit review items':'Continue remaining checks';
+    $('resume-review').hidden=counts.complete!==counts.total;
     $('prepare-handoff').disabled=!enabled || canApprove(r);
     $('item-next').textContent=nextItem(r,itemId,fixMode?'attention':'remaining')?(fixMode?'Next fix →':'Next item →'):'Review results →';
   }

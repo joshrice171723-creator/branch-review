@@ -17,7 +17,7 @@
         <span class="divider">/</span> Review workspace
       </div>
       <div class="header-actions">
-          <button id="updated-branch" class="secondary" hidden></button><button id="review-tools" class="quiet" disabled>Review tools</button><button id="capture-item" class="quiet" disabled>Add this screen</button><button id="choose-repository" class="quiet" hidden>Open repository</button><button id="focus" class="quiet" aria-pressed="false">
+          <button id="updated-branch" class="secondary" hidden></button><button id="review-tools" class="quiet" disabled>More tools</button><button id="capture-item" class="quiet" disabled>Add this screen</button><button id="choose-repository" class="quiet" hidden>Open repository</button><button id="focus" class="quiet" aria-pressed="false">
           Expand preview</button
         ><button id="stop" class="quiet" disabled>Stop previews</button>
       </div>
@@ -154,10 +154,10 @@
         <div id="error" role="alert" hidden></div>
         <p id="revision-warning" class="inline-choice" role="status" hidden></p>
         <section id="review-workflow" hidden>
-          <p id="active-review" class="active-review"></p>
+          <details id="review-context"><summary>About this change</summary><p id="active-review" class="active-review"></p>
           <p id="review-summary" class="small"></p>
           <p id="review-source" class="small muted"></p>
-          <p id="review-progress" class="small"></p>
+          <p id="review-progress" class="small"></p></details>
           <p id="review-notice" class="small" role="status" aria-live="polite"></p>
           <label class="field-label" for="scenario-select" hidden>Review item</label>
           <select id="scenario-select" hidden></select>
@@ -175,7 +175,7 @@
             <div id="item-reason-wrap" hidden><label class="field-label" for="item-reason">Reason / what needs fixing</label><textarea id="item-reason" maxlength="2000"></textarea></div>
             <div class="save-line"><span id="item-save" role="status" aria-live="polite">Saved</span><button id="retry-item-save" class="quiet">Save now</button></div>
             <div id="unfinished-choice" class="inline-choice" hidden><p>This item is unfinished. Leave it open and continue?</p><button id="keep-testing" class="quiet">Keep testing</button><button id="leave-unfinished" class="secondary">Leave unfinished and continue</button></div>
-            <div class="item-navigation"><button id="item-previous" class="secondary">← Previous</button><button id="item-next" class="primary">Next item →</button></div>
+            <button id="report-problem" class="secondary">Report a problem</button><div class="item-navigation"><button id="item-previous" class="secondary">← Previous</button><button id="item-next" class="primary">Next item →</button></div>
           </section>
           <section id="guided-results" hidden aria-label="Review results">
             <p class="eyebrow">REVIEW RESULTS</p><h2>Your review summary</h2>
@@ -186,9 +186,9 @@
             <button id="export-review" class="secondary">View / export review report</button>
           </section>
           <button id="prepare-handoff" class="secondary">Prepare fixes for Codex</button>
-          <section id="handoff-panel" hidden><h3>Fix request</h3><p class="small">Review this request, then copy it into the Codex chat for this branch. Nothing has been sent automatically.</p><textarea id="handoff-text" rows="12" aria-label="Codex fix request"></textarea><button id="copy-handoff" class="secondary">Copy fix request</button><button id="download-handoff" class="quiet">Download request</button><p id="handoff-status" role="status"></p></section>
+          <section id="handoff-panel" hidden><h3>Fix request</h3><p class="small">Review this request, then send it to Codex or copy it into your branch chat.</p><textarea id="handoff-text" rows="12" aria-label="Codex fix request"></textarea><button id="open-codex-handoff" class="primary">Send to Codex</button><button id="copy-handoff" class="secondary">Copy fix request</button><button id="download-handoff" class="quiet">Download request</button><p id="handoff-status" role="status"></p></section>
           <details class="workflow-section">
-            <summary>Report a finding</summary>
+            <summary>Report a problem</summary>
             <form id="finding-form">
               <p id="finding-context" class="small muted"></p>
               <label class="field-label" for="expected">Expected behavior</label>
@@ -203,14 +203,14 @@
             </form>
           </details>
           <details class="workflow-section"><summary id="findings-title">Findings and retests</summary><label class="field-label" for="finding-filter">Show findings</label><select id="finding-filter"><option value="all">All findings</option><option value="current">Current review item</option><option value="open">Unresolved findings</option></select><div id="findings"></div></details>
-          <section class="workflow-section">
+          <section id="approval-section" class="workflow-section">
             <h3>Approve this version</h3>
             <label class="field-label" for="reviewer">Reviewer</label><input id="reviewer" maxlength="100" placeholder="Your name" autocomplete="name" />
             <p id="approval-state" class="small"></p>
             <button id="approve" class="secondary">Approve tested commit</button>
           </section>
           <details class="workflow-section">
-            <summary>Merge and publish</summary>
+            <summary id="delivery-heading">Merge and publish</summary>
             <p class="small">Prepare → test → approve → merge and push → publish → verify the published workflow.</p>
             <p id="delivery-state" class="small"></p>
             <button id="candidate" class="secondary">Prepare integration candidate</button>
@@ -229,7 +229,7 @@
           <button id="retest" class="secondary" disabled>Retest latest branch commit</button>
         </details>
         <details class="workflow-section"><summary>Preview diagnostics</summary><p id="health-status" class="small" role="status">Checking preview health…</p><button id="check-health" class="secondary">Check previews now</button><pre id="diagnostic-log"></pre></details>
-        <details class="files" open>
+        <details class="files">
           <summary>
             <span>Changed files</span><span id="file-count">0</span>
           </summary>
@@ -240,14 +240,15 @@
         </p>
       </aside>
     </main>
+    <dialog id="problem-dialog" aria-labelledby="problem-title"><header class="dialog-heading"><h2 id="problem-title">Report a problem</h2><button id="close-problem" class="quiet">Close</button></header><button id="problem-evidence" class="secondary">Add evidence: screenshot, recording or replay</button><p id="problem-status" role="status"></p></dialog>
     <dialog id="diff-dialog" aria-labelledby="diff-title"><header class="dialog-heading"><h2 id="diff-title">Code changes</h2><button id="close-diff" class="quiet">Close</button></header><p id="diff-identity" class="small"></p><label for="diff-files" class="field-label">Changed file</label><select id="diff-files"></select><p id="diff-warning" role="status" class="small"></p><pre id="diff-patch"></pre></dialog>
     <dialog id="report-dialog" aria-labelledby="report-title"><header class="dialog-heading"><h2 id="report-title">Saved review report</h2><a id="download-report" class="quiet" download>Download with screenshots</a><button id="close-report" class="quiet">Close</button></header><iframe id="report-frame" title="Saved review report" sandbox="allow-same-origin"></iframe></dialog>
     <dialog id="evidence-dialog" aria-labelledby="evidence-title"><header class="dialog-heading"><h2 id="evidence-title">Finding screenshot</h2><button id="close-evidence" class="quiet">Close</button></header><p id="evidence-context" class="small"></p><img id="evidence-image" alt="Screenshot captured with the review finding"></dialog>
     <dialog id="tools-dialog" aria-labelledby="tools-title">
-      <header class="dialog-heading"><h2 id="tools-title">Review tools</h2><button id="close-tools" class="quiet">Close</button></header>
-      <nav class="tools-tabs" aria-label="Review tools"><button id="tab-plan">Plan</button><button id="tab-updates">Updates &amp; fixes</button><button id="tab-evidence">Evidence</button><button id="tab-checks">Checks</button><button id="tab-release">Published review</button></nav>
+      <header class="dialog-heading"><h2 id="tools-title">More tools</h2><button id="close-tools" class="quiet">Close</button></header>
+      <nav class="tools-tabs" aria-label="Review tools"><button id="tab-plan">Plan</button><button id="tab-updates">Updates &amp; fixes</button><button id="tab-evidence">Evidence</button><button id="tab-checks">Checks</button><button id="tab-release">Published review</button><button id="tab-workspace">Workspace</button></nav>
       <p id="tools-status" role="status" aria-live="polite"></p>
-      <section id="tools-plan">
+      <section id="tools-workspace" hidden><h3>Workspace</h3><div id="workspace-actions" class="tool-actions"></div><div id="workspace-details"></div></section><section id="tools-plan">
         <p>Edit the checks for this exact version. Saving creates a new review and resets checks and approval; previous evidence stays in history.</p>
         <label class="field-label" for="plan-summary-edit">What changed</label><textarea id="plan-summary-edit" maxlength="2000"></textarea>
         <div class="tool-actions"><button id="generate-plan">Generate with Codex</button><button id="copy-plan-instructions">Copy Codex branch instructions</button><button id="plan-export">Export manifest</button></div>
@@ -262,7 +263,7 @@
           <label>Affected files (one per line)<textarea id="plan-files" rows="3"></textarea></label><label>Required viewport<select id="plan-viewport"><option value="">Any size</option><option value="desktop">Desktop</option><option value="tablet">Tablet</option><option value="phone">Phone</option></select></label>
         </div><button id="plan-save" class="primary">Save new review plan</button>
       </section>
-      <section id="tools-updates" hidden><h3>Branch updates</h3><p id="update-summary"></p><pre id="update-commits"></pre><div class="tool-actions"><button id="refresh-updates">Refresh analysis</button><button id="open-updated">Open updated branch</button></div><h3>Recommended retest order</h3><p class="small">Recommendations never carry a pass forward. Every new commit has its own checklist.</p><ol id="retest-advice"></ol><h3>Related branches</h3><div id="branch-relations"></div><h3>Send fixes to Codex</h3><p>Resume the specified chat in a new isolated fix checkout. Review its resulting branch before merging.</p><label for="codex-chat">Codex chat UUID</label><input id="codex-chat" placeholder="Exact chat ID"><button id="send-codex" class="secondary">Review and send fix request</button></section>
+      <section id="tools-updates" hidden><h3>Send fixes to Codex</h3><p>Codex works in a dedicated isolated checkout. Leave the chat field blank for a new fix chat, or resume an existing one. Review the resulting branch before merging.</p><label for="codex-chat">Existing Codex chat UUID (optional)</label><input id="codex-chat" placeholder="New dedicated fix chat"><button id="send-codex" class="secondary">Review and send fix request</button><hr><h3>Branch updates</h3><p id="update-summary"></p><pre id="update-commits"></pre><div class="tool-actions"><button id="refresh-updates">Refresh analysis</button><button id="open-updated">Open updated branch</button></div><h3>Recommended retest order</h3><p class="small">Recommendations never carry a pass forward. Every new commit has its own checklist.</p><ol id="retest-advice"></ol><h3>Related branches</h3><div id="branch-relations"></div></section>
       <section id="tools-evidence" hidden><h3>Starting state</h3><p>Restore the active version's scenario data when you need a repeatable starting point.</p><button id="restore-data">Restore starting data</button><div id="evidence-tools"></div></section>
       <section id="tools-checks" hidden><h3>Automated checks</h3><p>Runs configured scripts in the isolated Changed checkout. These results are separate from manual QA.</p><label for="check-select">Check</label><select id="check-select"></select><pre id="check-command"></pre><button id="run-check">Run selected check</button><h3>Prepare the next branch</h3><p>Starts its isolated database and servers in a spare environment while you keep reviewing. Opening that commit reuses the prepared preview.</p><select id="warm-branch" aria-label="Branch to prepare"></select><button id="warm-preview">Prepare next preview</button><div id="screen-checks"></div></section>
       <section id="tools-release" hidden><h3>Verify the published workflow</h3><div id="published-tools"></div></section>

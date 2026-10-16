@@ -671,6 +671,7 @@ textarea {min-height:72px;resize:vertical;font-size:12px}
 .finding p,.finding small {font-size:11px;line-height:1.6}
 .finding pre {white-space:pre-wrap;font-size:10px}
 .finding img,#attachment {width:100%;height:auto;border:1px solid #dce3d9;margin:8px 0}
+.finding img {max-height:180px;object-fit:contain}
 #delivery-state {overflow-wrap:anywhere}
 
 main {grid-template-columns:230px minmax(360px,1fr) 360px}
@@ -775,3 +776,33 @@ dialog::backdrop {background:#152c2b80}
 #item-queue {min-height:80px}
 .branches:has(#guided-queue:not([hidden])) .branch-list {flex-basis:125px;min-height:70px}
 .branches {overflow-y:auto}
+.topbar .edition,.project .divider {display:none}
+.rail-heading {padding:18px 18px 10px}
+.rail-heading .eyebrow,.rail-footer,.shortcut-hint,.scope-note {display:none}
+.rail-heading h1 {font-size:20px}
+.search {margin-bottom:10px}
+#branch-filter {margin-bottom:10px}
+.list-heading {padding-top:0;padding-bottom:6px}
+#guided-queue {min-height:370px}
+#item-queue {min-height:180px}
+.preview-toolbar {position:relative;height:60px;justify-content:flex-start}
+.preview-label {margin-right:auto}
+.comparison-menu {position:static;font-size:11px;color:#52685b}
+.comparison-menu summary {cursor:pointer;white-space:nowrap;padding:8px}
+.comparison-menu .comparison-options {position:absolute;top:100%;right:8px;z-index:10;width:300px;display:grid;grid-template-columns:auto 1fr;gap:12px;padding:18px;background:#fff;border:1px solid #ccd7cc;border-radius:8px;box-shadow:0 8px 28px #18302522}
+.comparison-menu .viewport-control,.comparison-menu .sync-option,.comparison-menu #target-status {grid-column:1/-1}
+.comparison-menu #target-status {max-width:none;text-align:left;margin:0}
+#review-context {margin-top:16px;font-size:11px}
+#review-notice:empty {display:none}
+.item-heading {margin-top:18px}
+#guided-item h2 {font-size:21px}
+#guided-item h3 {margin-top:16px}
+#report-problem {background:white;margin:14px 0}
+#problem-dialog {width:min(680px,92vw)}
+#problem-dialog .workflow-section {font-size:12px}
+#problem-status {color:#315e46;font-size:12px;white-space:pre-wrap}
+#problem-dialog > .workflow-section:first-of-type > summary {display:none}
+#problem-dialog #attachment {max-height:240px;object-fit:contain;background:#f6f8f4}
+#workspace-actions button {width:auto}
+#review-fixes:disabled {display:none}
+#tools-dialog .tools-tabs button[aria-pressed="true"] {background:#244e40;color:white}

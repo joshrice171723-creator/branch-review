@@ -50,7 +50,7 @@ export class ReviewStore {
     const id = digest(identity);
     let record = this.records.find(r => r.id === id);
     if (!record) {
-      const previous = this.records.findLast(r => r.identity.repository === identity.repository && r.identity.ref === identity.ref);
+      const previous = this.records.findLast(r => r.identity.repository === identity.repository && (snapshot.previousReviewId ? r.id === snapshot.previousReviewId : r.identity.ref === identity.ref));
       record = { id, identity, manifest, title: snapshot.comparison.branch.subject, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), checks: {}, items:{}, cursor:{itemId:manifest.scenarios[0].id,view:'item'}, previousId:previous?.id || null, issues: previous?.issues.filter(i => i.status !== 'resolved').map(i => ({ ...i, status: 'needs-retest', carriedFrom: previous.id })) || [], events: [], approval: null, integration: null, delivery: null };
       record.comparisonMode={baseline:snapshot.comparison.baseline || 'parent',baselineCommit:snapshot.comparison.baselineCommit};
       for (const [itemId, saved] of Object.entries(previous?.items || {})) {

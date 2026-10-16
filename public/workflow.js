@@ -16,7 +16,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   });
   const guide = guided({api,getState,poll,error,needsNavigation,onSelect:next=>{scenario=next;rendered='';render(getState());reopen(needsNavigation(getState().record.manifest.scenarios.find(item=>item.id===next)));}});
   const currentKey = () => findingKey(getState().record?.id, scenario, getSide());
-  const notice = message => { $('review-notice').textContent = message; };
+  const notice = message => { $('review-notice').textContent = message; if($('problem-status'))$('problem-status').textContent=message; };
   async function act(action, data = {}) {
     try { if(!await guide.flush())return;error(''); await api('/api/' + action, {id:getState().record?.id, ...data});if(action==='resolve'){const key=`${getState().record.id}:${data.issueId}`;retestNotes.delete(key);saveDraft(localStorage,`branch-review:retest:${key}`,{expected:'',actual:''});} notice(action === 'check' ? 'Checklist saved.' : action === 'resolve' ? 'Retest result saved.' : action === 'approve' ? 'Approval saved for this exact version.' : 'Request accepted.'); }
     catch(e) { error(e.message); }
@@ -47,7 +47,8 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     try {
       capturing = true;
       $('capture').disabled = true;
-      const captured = await window.desktop.capture();
+      const problem=$('problem-dialog');const wasOpen=problem?.open;if(wasOpen)problem.close();
+      let captured;try{if(wasOpen)await new Promise(resolve=>setTimeout(resolve,100));captured=await window.desktop.capture();}finally{if(wasOpen)problem.showModal();}
       if (key !== currentKey()) { notice('The version changed during capture. Capture a new screenshot.'); return; }
       screenshot = captured; screenshotKey = key; screenshotContext = context; $('attachment').src = screenshot; $('attachment').hidden = false; $('remove-attachment').hidden = false;
       notice('Screenshot attached to this version. Switching versions clears the attachment.');
@@ -185,7 +186,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     void history(state);
   }
   return {render, viewChanged, flush:guide.flush, needsNavigation,
-    attachScreenshot(data,notes=''){screenshot=data;screenshotKey=currentKey();screenshotContext=contexts[getSide()];$('attachment').src=data;$('attachment').hidden=false;$('remove-attachment').hidden=false;if(notes){$('actual').value=[$('actual').value,notes].filter(Boolean).join('\n');saveFindingDraft();}$('finding-form').closest('details').open=true;$('finding-form').scrollIntoView({block:'start'});},
-    attachVideo(data){video=data;videoKey=currentKey();$('video-attachment').src=data;$('video-attachment').hidden=false;$('remove-attachment').hidden=false;$('finding-form').closest('details').open=true;$('finding-form').scrollIntoView({block:'start'});},
+    attachScreenshot(data,notes=''){screenshot=data;screenshotKey=currentKey();screenshotContext=contexts[getSide()];$('attachment').src=data;$('attachment').hidden=false;$('remove-attachment').hidden=false;if(notes){$('actual').value=[$('actual').value,notes].filter(Boolean).join('\n');saveFindingDraft();}$('finding-form').closest('details').open=true;if($('problem-dialog')?.showModal && !$('problem-dialog').open)$('problem-dialog').showModal();$('finding-form').scrollIntoView({block:'start'});},
+    attachVideo(data){video=data;videoKey=currentKey();$('video-attachment').src=data;$('video-attachment').hidden=false;$('remove-attachment').hidden=false;$('finding-form').closest('details').open=true;if($('problem-dialog')?.showModal && !$('problem-dialog').open)$('problem-dialog').showModal();$('finding-form').scrollIntoView({block:'start'});},
     getContext:side=>contexts[side] || {}, resetContexts:()=>{contexts.original={};contexts.changed={};clearScreenshot();}, scenario:()=>scenario, context:(side,data)=>{contexts[side]={location:String(data.location||'').slice(0,700),heading:String(data.heading||'').slice(0,160),anchor:String(data.anchor||'').slice(0,160),errors:Array.isArray(data.errors)?data.errors.slice(-10):[]};}};
 }

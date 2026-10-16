@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
 const state = await fetch('http://127.0.0.1:4310/api/state').then(r=>r.json());
 assert.equal(state.status,'ready','Open qa-grid-freshness and wait until both previews are ready.');
-assert.equal(state.comparison.branch.ref,'refs/heads/codex/qa-grid-freshness');
+assert.equal(state.comparison.branch.ref,process.env.BRANCH_REVIEW_QA_REF || 'refs/heads/codex/qa-grid-freshness');
 assert.equal(state.manifest.scenarios[0].path,'/qa?view=coverage');
 const results={};
 for (const side of ['original','changed']) {

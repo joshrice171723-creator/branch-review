@@ -2,6 +2,12 @@ import {download} from './workbench.js';
 const $=id=>document.getElementById(id);
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const decode=src=>new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(Error('Could not decode screenshot.'));image.src=src;});
+export function visibleCaptureRect(frame,pane,width,height){
+  const x=Math.ceil(Math.max(0,frame.left,pane.left)),y=Math.ceil(Math.max(0,frame.top,pane.top));
+  const rect={x,y,width:Math.floor(Math.min(frame.right,pane.right,width)-x),height:Math.floor(Math.min(frame.bottom,pane.bottom,height)-y)};
+  if(rect.width<1 || rect.height<1)throw Error('The preview is not visible.');
+  return rect;
+}
 export function pixelDifference(a,b,masks=[],threshold=25){
   if(a.width!==b.width||a.height!==b.height)throw Error('Both screenshots must have the same viewport size.');
   const output=new Uint8ClampedArray(a.data),width=a.width,height=a.height;let changed=0,total=0;
@@ -48,7 +54,7 @@ export function evidenceTools({api,getState,getSide,workflow,toggle,reopen,poll}
   function viewportUI(){const width=viewport==='phone'?390:viewport==='tablet'?768:null;for(const side of ['original','changed']){const frame=$(`frame-${side}`);if(!frame)continue;frame.style.width=width?`${width}px`:'100%';frame.parentElement.style.overflow='auto';}try{localStorage.setItem('branch-review:viewport',viewport);}catch{}}
   try{const stored=localStorage.getItem('branch-review:viewport');if(['desktop','tablet','phone'].includes(stored))viewport=stored;}catch{}
   $('viewport-preset').value=viewport;$('viewport-preset').onchange=()=>{viewport=$('viewport-preset').value;viewportUI();};
-  async function snapshot(){if(!window.desktop)throw Error('Screenshots require the desktop app.');const frame=$(`frame-${getSide()}`);if(!frame)throw Error('Open a preview first.');const rect=frame.getBoundingClientRect();const x=Math.max(0,Math.ceil(rect.x)),y=Math.max(0,Math.ceil(rect.y)),width=Math.floor(Math.min(rect.right,innerWidth)-x),height=Math.floor(Math.min(rect.bottom,innerHeight)-y);return window.desktop.capture({x,y,width,height});}
+  async function snapshot(){if(!window.desktop)throw Error('Screenshots require the desktop app.');const frame=$(`frame-${getSide()}`);if(!frame)throw Error('Open a preview first.');const pane=frame.parentElement,bounds=pane.getBoundingClientRect();return window.desktop.capture(visibleCaptureRect(frame.getBoundingClientRect(),{left:bounds.left+pane.clientLeft,top:bounds.top+pane.clientTop,right:bounds.left+pane.clientLeft+pane.clientWidth,bottom:bounds.top+pane.clientTop+pane.clientHeight},innerWidth,innerHeight));}
   function draw(){const canvas=$('annotation-canvas'),ctx=canvas.getContext('2d');if(!canvasBase)return;canvas.width=canvasBase.width;canvas.height=canvasBase.height;ctx.drawImage(canvasBase,0,0);ctx.strokeStyle='#e53445';ctx.fillStyle='#e53445';ctx.lineWidth=Math.max(3,canvas.width/400);ctx.font=`bold ${Math.max(18,canvas.width/60)}px system-ui`;
     for(const [i,shape] of annotations.entries()){
       if(shape.tool==='box')ctx.strokeRect(shape.x,shape.y,shape.dx,shape.dy);

@@ -29,10 +29,10 @@ const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-
 async function manifestFor(sha) {
   return await plans.get(sha) || loadPlan(git,sha,state.comparison.files);
 }
-async function activate() {
+async function activate(previousReviewId) {
   if (state.status !== 'ready') return;
   const manifest = await manifestFor(state.changed.sha);
-  const record = await store.open({...state, repository:repo}, manifest, digest(await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8')));
+  const record = await store.open({...state, repository:repo, previousReviewId}, manifest, digest(await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8')));
   state.recordId = record.id; state.manifest = manifest;
   if (state.integration?.sha === state.changed.sha) { record.integration = state.integration; await store.persist(); }
   await writeFile(path.join(local,'review.json'),JSON.stringify({comparison:state.comparison,original:state.original,changed:state.changed,integration:state.integration},null,2));
@@ -57,7 +57,15 @@ async function body(req) { let buffer=''; for await(const chunk of req) { buffer
 async function mutate(endpoint, data) {
   if(['/api/start','/api/stop','/api/retest','/api/candidate','/api/reset-data','/api/ship','/api/publish'].includes(endpoint) && jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running review job before changing environments or delivering code.');
   if(endpoint==='/api/tools-settings'){if(typeof data.autoPlan!=='boolean')throw new Error('Choose whether to generate plans automatically.');const next={autoPlan:data.autoPlan};await writeFile(path.join(local,'tools-settings.json'),JSON.stringify(next));toolsSettings=next;return next;}
-  if (endpoint === '/api/start') { state.integration = null; await startReview(data.ref,data.baseline,data.baselineCommit); await activate(); return; }
+  if (endpoint === '/api/start') {
+    let prior;
+    if(data.fixJob){
+      const job=jobs.rows.find(row=>row.id===data.fixJob && row.kind==='fix' && row.status==='succeeded');
+      if(!job || data.ref!=='refs/heads/'+job.branch || await git('rev-parse',data.ref)!==job.resultCommit)throw new Error('Choose an unchanged, committed fix job before retesting.');
+      prior=store.get(job.reviewId);
+    }
+    state.integration=null;await startReview(data.ref,prior?'commit':data.baseline,prior?prior.identity.base:data.baselineCommit);await activate(prior?.id);return;
+  }
   if (endpoint === '/api/stop') return stopReview();
   if (endpoint === '/api/fetch') return git('fetch','origin');
   if (endpoint === '/api/retest') { const prior=store.get(data.id); state.integration=null; await startReview(prior.identity.ref,prior.comparisonMode?.baseline || 'parent',prior.comparisonMode?.baselineCommit); await activate(); return; }
@@ -71,6 +79,10 @@ async function mutate(endpoint, data) {
     await plans.save(record.identity.changed,data.manifest);await activate();return state.recordId;
   }
   if(endpoint==='/api/job')return jobs.start(record,data.kind,data);
+  if(endpoint==='/api/fix-commit'){
+    if(!jobs.rows.some(job=>job.id===data.jobId && job.reviewId===record.id))throw Error('Choose a fix job from this review.');
+    return jobs.commitFix(data.jobId,data.files);
+  }
   if(endpoint==='/api/published-review')return publishedAction(store,record,data);
   if(endpoint==='/api/reset-data'){
     if(data.confirmation!==`RESET ${data.side} ${record.identity.changed}`)throw new Error('Confirm the exact preview before restoring its starting data.');
@@ -122,6 +134,7 @@ const actions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','/api
 const longActions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','/api/candidate','/api/ship','/api/publish']);
 actions.add('/api/published-review');
 actions.add('/api/tools-settings');
+actions.add('/api/fix-commit');
 const server=http.createServer(async(req,res)=>{
   try {
     if(req.headers.host!==`127.0.0.1:${port}`) return json(res,403,{error:'Invalid host'});
@@ -130,6 +143,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await branches());
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
+    if(req.method==='GET' && url.pathname==='/api/fix-files')return json(res,200,await jobs.fixFiles(url.searchParams.get('job')));
     if(req.method==='GET' && url.pathname==='/api/tools-settings')return json(res,200,toolsSettings);
     if(req.method==='GET' && url.pathname==='/api/checks')return json(res,200,await configuredChecks(git,store.get(url.searchParams.get('id')).identity.changed));
     if(req.method==='GET' && url.pathname==='/api/update')return json(res,200,await branchUpdate(git,store.get(url.searchParams.get('id'))));
