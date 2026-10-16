@@ -195,7 +195,7 @@ server.listen(port,'127.0.0.1',()=>console.log(`Branch Review: ${origin}`));
 let checkingMuse=false;
 setInterval(async()=>{
   if(busy || checkingMuse)return;checkingMuse=true;
-  try{for(const record of store.records.filter(record=>record.museQa && ['published','verified'].includes(record.delivery?.stage) && !['completed','result_confirmed','blocked'].includes(record.museQa.status))){
+  try{for(const record of store.records.filter(record=>record.museQa && ['published','verified'].includes(record.delivery?.stage) && (!['completed','result_confirmed','evidence-missing'].includes(record.museQa.status) || !record.museQa.evidenceChecked))){
     try{await muse.refresh(record);}catch{record.museQa.statusError='Office status is temporarily unavailable; the last reported state is shown.';await store.persist();}
   }}finally{checkingMuse=false;}
 },15000).unref();

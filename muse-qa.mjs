@@ -72,6 +72,6 @@ export class MuseQa {
     else if(task.lease_expired){status='lease-expired';statusError='Muse stopped checking in before finishing. Inspect the Office task before restarting.';}
     else if(status==='blocked')statusError=task.result?.summary || 'Muse is blocked. Inspect its Office task.';
     else if(status==='queued' && Date.now()-Date.parse(qa.queuedAt)>120000)statusError='Muse has not acknowledged this request. Check its connection; this task will not be duplicated.';
-    if(qa.status!==status || qa.statusError!==statusError){qa.status=status;qa.statusError=statusError;await this.store.persist();}
+    if(qa.status!==status || qa.statusError!==statusError || !qa.evidenceChecked){qa.status=status;qa.statusError=statusError;qa.evidenceChecked=true;await this.store.persist();}
   }
 }
