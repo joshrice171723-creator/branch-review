@@ -1,6 +1,7 @@
 import { readFile, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { digest } from './reviews.mjs';
+import { redact } from './jobs.mjs';
 export const target = 'https://aimetaclinic.com';
 export async function publish(record, { local, repo, run, git, store, confirmation, toolchain, muse, fetcher = fetch }) {
   const sha = record.identity.changed;
@@ -24,9 +25,11 @@ export async function publish(record, { local, repo, run, git, store, confirmati
   await g('fetch','origin','main');
   if (await g('rev-parse','origin/main') !== sha) throw new Error('Remote changed while preparing release.');
   await g('checkout','-B','main',sha);
-  record.delivery.stage = 'deploying'; record.delivery.target = target; await store.persist();
+  record.delivery.stage = 'deploying'; record.delivery.target = target;
+  record.delivery.deployStartedAt=new Date().toISOString();record.delivery.progress='Starting the release pipeline';
+  await store.persist();
   try {
-    const output = await run('pwsh',['-NoProfile','-File',path.join(directory,'ops/lightsail/release.ps1'),'-KeyPath',config.keyPath,'-RecoveryDirectory',config.recoveryDirectory,'-Server','ubuntu@aimetaclinic.com','-BuildWebOnHost','-StreamImages'],{cwd:directory,env:{...process.env,PATH:toolchain ? `${toolchain}${path.delimiter}${process.env.PATH}` : process.env.PATH}});
+    const output = await run('pwsh',['-NoProfile','-File',path.join(directory,'ops/lightsail/release.ps1'),'-KeyPath',config.keyPath,'-RecoveryDirectory',config.recoveryDirectory,'-Server','ubuntu@aimetaclinic.com','-BuildWebOnHost','-StreamImages'],{cwd:directory,onOutput:chunk=>{const line=redact(chunk).replace(/\x1b\[[0-9;]*[A-Za-z]/g,'').split(/[\r\n]+/).filter(line=>line.trim()).at(-1);if(line){record.delivery.progress=line.slice(-250);record.delivery.lastOutputAt=new Date().toISOString();}},env:{...process.env,PATH:toolchain ? `${toolchain}${path.delimiter}${process.env.PATH}` : process.env.PATH}});
     await writeFile(path.join(local,'release.log'),output);
     const buildResponse = await fetcher(target + '/build.json', {cache:'no-store',signal:AbortSignal.timeout(15000)});
     if (!buildResponse.ok) throw new Error('Could not read published build identity.');

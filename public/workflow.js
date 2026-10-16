@@ -133,6 +133,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('retest').disabled=state.busy || !$('history').value;
     $('view-history').disabled=!$('history').value;
     if(!r) { void history(state); return; }
+    if(state.busy && r.delivery?.stage==='deploying')officeAfterPublish=r.identity.changed;
     if(officeAfterPublish===r.identity.changed && ['published','verified'].includes(r.delivery?.stage) && !state.busy){officeAfterPublish=null;if(window.desktop)void window.desktop.openPublished(state.publishTarget+'/qa?view=office').catch(e=>error(e.message));}
     const qa=r.museQa;
     $('muse-qa-state').textContent=qa?`Muse QA: ${qa.status.replaceAll('-',' ')}${qa.status==='queued'?' · waiting for automatic pickup (usually within 60 seconds)':''}${qa.taskId?' · Office task '+qa.taskId:''}${qa.error?' · '+qa.error:''}${qa.statusError?' · '+qa.statusError:''}`:'';

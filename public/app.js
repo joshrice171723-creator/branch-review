@@ -300,6 +300,10 @@ async function poll() {
     reviewTools.render(currentState);
     renderFocusStatus();
     const ready = currentState.status === "ready";
+      const publishing=currentState.busy && currentState.record?.delivery?.stage==='deploying';
+      const release=currentState.record?.delivery;
+      $('publish-progress').hidden=!publishing;
+      if(publishing){const elapsed=Math.max(0,Math.floor((Date.now()-Date.parse(release.deployStartedAt || release.startedAt))/60000));$('publish-progress').textContent=`Publishing ${release.commit.slice(0,7)}${Number.isFinite(elapsed)?` · ${elapsed} min elapsed`:''}. ${release.progress || 'Building and transferring the release, then verifying the live site.'} Review controls unlock when publishing finishes. Keep this app open.`;}
     const preparing = ["preparing", "stopping"].includes(currentState.status);
     $("empty").hidden = ready || preparing;
     $("loading").hidden = !preparing;
@@ -321,8 +325,8 @@ async function poll() {
           ? "Needs attention"
           : "Not running";
     $("start").disabled = !selectedComparison || currentState.busy;
-    $("start").textContent = currentState.busy
-      ? "Preparing…"
+      $("start").textContent = currentState.busy
+        ? publishing ? "Publishing…" : "Working…"
       : ready
         ? "Open selected review ↗"
         : "Open review ↗";

@@ -15,7 +15,7 @@ test('publish requires exact confirmation, checks build identity and persists fa
   let deploys=0, mismatch=false, preflights=0, handoffs=0;
   const options={local,repo:'unused',confirmation:`PUBLISH ${sha} TO ${target}`,
     git:async(...args)=>args[0]==='remote'?'https://github.com/joshrice171723-creator/meta_clinic.git':`${sha}\trefs/heads/main`,
-    run:async(command,args)=>{if(command==='pwsh'){deploys++;return 'release complete';}return args[0]==='rev-parse'?sha:'';},
+    run:async(command,args,settings)=>{if(command==='pwsh'){deploys++;settings.onOutput('Building release\n');assert.equal(record.delivery.progress,'Building release');assert.ok(record.delivery.lastOutputAt);return 'release complete';}return args[0]==='rev-parse'?sha:'';},
     muse:{preflight:async()=>{preflights++;},prepare:r=>{r.museQa={status:'pending'};},dispatch:async r=>{assert.equal(r.delivery.stage,'published');handoffs++;}},
     store:{persist:async()=>{},event:async()=>{}},fetcher:async(url)=>({ok:true,json:async()=>({revision:mismatch?'b'.repeat(40):sha,dirty:false})})};
   await assert.rejects(publish(record,{...options,confirmation:'yes'}),/exact commit/);assert.equal(deploys,0);
