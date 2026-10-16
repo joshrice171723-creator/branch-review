@@ -4,12 +4,26 @@ import { canApprove,deliveryStep } from './review-model.js';
 import { previewDestination } from './preview-routes.js';
 const $ = id => document.getElementById(id);
 const node = (tag, text, className) => { const el = document.createElement(tag); el.textContent = text; if (className) el.className = className; return el; };
+export async function mergeAndPublish(api, state, wait = ms => new Promise(resolve=>setTimeout(resolve,ms))) {
+  const id=state.record.id, sha=state.record.identity.changed;
+  if(state.record.delivery?.stage!=='pushed') {
+    await api('/api/ship',{id,confirmation:`MERGE ${sha} TO origin/main`});
+    for(let attempt=0;attempt<120;attempt++) {
+      const next=await api('/api/state');
+      if(next.record?.id!==id || next.record.identity.changed!==sha)throw Error('The active review changed. Publishing stopped.');
+      if(!next.busy){if(next.error)throw Error(next.error);if(next.record.delivery?.stage!=='pushed')throw Error('Push was not confirmed. Publishing stopped.');break;}
+      if(attempt===119)throw Error('Push is still running. Wait for it to finish, then resume publishing.');
+      await wait(1000);
+    }
+  }
+  await api('/api/publish',{id,confirmation:`PUBLISH ${sha} TO ${state.publishTarget}`});
+}
 export function workflow({api, getState, getSide, error, poll, reopen}) {
   let scenario = 'intake', rendered = '', screenshot = null, screenshotKey = null, screenshotContext = null, draftKey = '', savingFinding = false, capturing = false;
   const retestNotes = new Map();
   const contexts = {original:{}, changed:{}};
   let video=null,videoKey=null;
-  let officeAfterPublish=null;
+  let officeAfterPublish=null, delivering=false;
   const needsNavigation=item=>['original','changed'].some(side=>{
     const actual=contexts[side].location;if(!actual)return false;
     const expected=previewDestination(item,side,getState());
@@ -74,10 +88,20 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     finally { savingFinding = false; await poll(); }
   };
   $('approve').onclick = () => act('approve', {reviewer:$('reviewer').value});
-  $('results-action').onclick=()=>{
+  $('results-action').onclick=async()=>{
+    const state=getState(),r=state.record;
+    if(delivering || state.busy)return;
+    if(['published','verified'].includes(r.delivery?.stage)){try{await api('/api/published-review',{id:r.id,action:'start'});await window.desktop.openPublished(state.publishTarget+'/qa?view=office');}catch(e){error(e.message);}return;}
+    if(canApprove(r) && r.approval && r.integration?.sha===r.identity.changed && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(r.delivery?.stage)){
+      if(!await guide.flush())return;
+      if(!confirm(`Merge and publish this approved version to ${state.publishTarget}, then start Muse QA?`))return;
+      delivering=true;officeAfterPublish=r.identity.changed;render(state);
+      try{error('');await mergeAndPublish(api,state);}catch(e){officeAfterPublish=null;error(e.message);}finally{delivering=false;await poll();}return;
+    }
+
     const action=deliveryStep(getState().record,getState().releaseConfigured).action;if(!action)return;
     const target=$(action);
-    if(['reviewer','release-note'].includes(action)){const section=target.closest('details');if(section)section.open=true;target.scrollIntoView({block:'center'});target.focus();}
+    if(['reviewer','release-note'].includes(action)){$('results-options').open=true;const section=target.closest('details');if(section)section.open=true;target.scrollIntoView({block:'center'});target.focus();}
     else if(!target.disabled)target.click();
   };
   $('candidate').onclick = () => { if(confirm('Prepare the merged result against current main? Save your preview edits first. The new candidate needs its own completed checklist and approval.')) act('candidate'); };
@@ -128,6 +152,15 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     const r=state.record, enabled=state.status==='ready' && !!r && !state.busy;
     guide.render(state);
     if(r){const step=deliveryStep(r,state.releaseConfigured);$('results-action').textContent=step.label;$('results-action-detail').textContent=step.detail;$('results-action').disabled=!enabled || !step.action || step.action==='release-settings' && !window.desktop;}
+    if(r){
+      const stage=r.delivery?.stage,done=['published','verified'].includes(stage),approved=canApprove(r) && !!r.approval && r.integration?.sha===r.identity.changed;
+      $('results-title').textContent=done?'Published':stage==='deploying'?'Publishing…':delivering?'Merging…':approved?'Ready to publish':'Your review summary';
+      $('results-action-detail').hidden=true;
+      $('approval-section').hidden=!!r.approval;
+      $('review-notice').hidden=r.cursor?.view==='results';
+      if(done){$('results-action').textContent='Watch Muse in Office';$('results-action').disabled=!enabled || !window.desktop;}
+      else if(approved && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(stage)){$('results-action').textContent=stage==='deploying'?'Publishing…':delivering?'Merging…':stage==='pushed'?'Publish':'Merge & publish';$('results-action').disabled=!enabled || delivering;}
+    }
     $('review-workflow').hidden=!r;
     $('choose-repository').disabled=state.busy;
     $('retest').disabled=state.busy || !$('history').value;

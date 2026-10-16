@@ -17,8 +17,10 @@ const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,w
 $('tools-plan').prepend($('capture-item'));
 for(const id of ['choose-repository','stop'])$('workspace-actions').append($(id));
 for(const id of ['history','health-status','files'])$('workspace-details').append($(id).closest('details'));
-$('guided-results').append($('prepare-handoff'),$('handoff-panel'),$('approval-section'),$('delivery-heading').closest('details'));
-$('result-items').before($('prepare-handoff'),$('handoff-panel'));
+$('results-options').append($('approval-section'),$('export-review'),$('delivery-heading').closest('details'));
+$('results-checks').append($('resume-review'));
+$('results-action').after($('muse-qa-state'),$('retry-muse'));
+$('results-checks').before($('prepare-handoff'),$('handoff-panel'));
 $('branch-brief').append($('review-context'));
 const problem=$('problem-dialog'),findingSection=$('finding-form').closest('details');
 problem.append(findingSection,$('findings-title').closest('details'));findingSection.open=true;
@@ -303,7 +305,7 @@ async function poll() {
     const reviewedBranch=allBranches.find(branch=>[branch.ref,...branch.aliases].includes(currentState.record?.identity.ref));
     const reviewedRelease=currentState.record?.delivery;
     const published=reviewedRelease?.stage==='published' && reviewedRelease.commit===currentState.record?.identity.changed;
-    $('review-branch-status').hidden=!currentState.record;
+    $('review-branch-status').hidden=!currentState.record || currentState.record.cursor?.view==='results';
     $('review-branch-status').textContent=currentState.record ? `${published?'Published':reviewedBranch?.merged && reviewedBranch.sha===currentState.record.identity.source?'Merged into main':'Reviewing'} · ${currentState.record.identity.ref.replace(/^refs\/(heads|remotes)\//,'')} · ${currentState.record.identity.changed.slice(0,7)}${published?' — completed review; choose another branch to review new work.':''}`:'';
     reviewTools.render(currentState);
     renderFocusStatus();

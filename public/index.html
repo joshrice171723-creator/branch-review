@@ -180,10 +180,11 @@
             <button id="report-problem" class="secondary">Report a problem</button><div class="item-navigation"><button id="item-previous" class="secondary">← Previous</button><button id="item-next" class="primary">Next item →</button></div>
           </section>
           <section id="guided-results" hidden aria-label="Review results">
-            <p class="eyebrow">REVIEW RESULTS</p><h2>Your review summary</h2>
+            <h2 id="results-title">Your review summary</h2>
             <p id="results-counts"></p><p id="results-message"></p>
             <button id="results-action" class="primary">Continue remaining checks</button><p id="results-action-detail" class="small muted"></p>
-            <div id="result-items"></div>
+            <details id="results-checks"><summary>Review checks</summary><div id="result-items"></div></details>
+            <details id="results-options"><summary>More options</summary></details>
             <button id="resume-review" class="primary">Continue remaining checks</button>
             <button id="export-review" class="secondary">View / export review report</button>
           </section>
