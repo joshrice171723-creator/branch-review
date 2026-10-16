@@ -5,7 +5,7 @@ import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
 const openingSummary=document.createElement('p');openingSummary.id='opening-summary';$('phase').before(openingSummary);
 const fixNotice=document.createElement('p');fixNotice.style.cssText='font-size:12px;line-height:1.5;white-space:normal';fixNotice.hidden=true;$('review-branch-status').after(fixNotice);
-const versionHistory=document.createElement('details'),versionHeading=document.createElement('summary'),versionResults=document.createElement('div');versionHeading.textContent='Earlier review results';versionHistory.append(versionHeading,versionResults);versionHistory.hidden=true;fixNotice.after(versionHistory);
+const versionHistory=document.createElement('details'),versionHeading=document.createElement('summary'),versionResults=document.createElement('div');versionHeading.textContent='Review history';versionHistory.append(versionHeading,versionResults);versionHistory.hidden=true;fixNotice.after(versionHistory);
 let allBranches = [],
   selected = null, openingSelection = null,
   token = "",
@@ -341,8 +341,18 @@ async function poll() {
     fixNotice.hidden=versionHistory.hidden=!fixRecord?.fixComparison;
     if(fixRecord?.fixComparison){
       const findings=fixRecord.issues.filter(issue=>issue.scenario===fixRecord.cursor?.itemId && issue.status!=='resolved');
-      fixNotice.textContent=`Compare before and after this fix. ${findings.length?`${findings.length} saved finding${findings.length===1?'':'s'} to retest.`:'Check the affected behavior below.'}`;
+      fixNotice.textContent=`Compare before and after this fix. ${findings.some(issue=>issue.status==='needs-retest')?'Ready to retest the latest fix.':'Check the affected behavior below.'}`;
+      const historyKey=JSON.stringify([fixRecord.id,fixRecord.previousResults,fixRecord.requestHistory]);
+      if(versionResults.dataset.key!==historyKey){
+      versionResults.dataset.key=historyKey;
       versionResults.replaceChildren(...(fixRecord.previousResults || []).map(result=>{const p=document.createElement('p');p.textContent=`${result.title} · ${result.status} at ${result.commit.slice(0,7)}`;return p;}));
+      for(const request of fixRecord.requestHistory || []){
+        const entry=document.createElement('details'),heading=document.createElement('summary'),body=document.createElement('p');
+        heading.textContent=`Earlier request · ${(request.commit || '').slice(0,7)}`;
+        body.textContent=`Requested: ${request.expected || ''} — Observed: ${request.actual || ''}`;
+        entry.append(heading,body);versionResults.append(entry);
+      }
+      }
     }
     for(const side of ['original','changed'])$(side).firstChild.textContent=currentState.record?.fixComparison?(side==='original'?'Before fix ':'After fix '):(side==='original'?'Original ':'Changed ');
     if(currentState.record?.fixComparison)openingSummary.textContent='Retesting fixes in the same review';

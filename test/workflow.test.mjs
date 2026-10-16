@@ -256,3 +256,15 @@ test('failed approval keeps the reviewer and approval action available',async t=
   assert.equal(e.reviewer.value,'Josh');assert.equal(e['results-action'].textContent,'Approve changes');assert.equal(e['results-action'].disabled,false);assert.equal(r.approval,undefined);
   assert.match(e.error.textContent,/Main changed/);
 });
+
+test('latest fix opens a retest panel and requires completed checks before explicit verification',async t=>{
+ const h=harness(t),r=h.state.record,item=r.manifest.scenarios[0],e=h.elements;
+ r.fixComparison={before:'aaaaaaa',after:'bbbbbbb'};r.cursor={itemId:item.id,view:'item'};
+ r.issues=[{id:'latest',status:'needs-retest',expected:'Restore rust',actual:'Pink',side:'changed',commit:'aaaaaaa',scenario:item.id,consoleErrors:[]}];
+ h.view.render(h.state);
+ assert.equal(e['guided-item'].hidden,false);assert.equal(e['guided-results'].hidden,true);assert.equal(e['item-status'].textContent,'Ready to retest');assert.equal(e['latest-fix-expected'].textContent,'Restore rust');assert.equal(e['verify-fix'].disabled,true);
+ await e['verify-fix'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,0);
+ item.steps.forEach((_,i)=>r.checks[`${item.id}:${i}`]=true);h.view.render(h.state);assert.equal(e['verify-fix'].disabled,false);
+ await e['verify-fix'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,1);assert.equal(h.calls.find(c=>c.path==='/api/resolve').data.issueId,'latest');
+ assert.equal(e['prepare-handoff'].hidden,true);
+});

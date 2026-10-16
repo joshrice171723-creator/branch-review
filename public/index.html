@@ -62,7 +62,7 @@
           <div class="queue-filters"><input id="item-search" type="search" placeholder="Find a review item…" aria-label="Find a review item"><select id="item-filter" aria-label="Filter review items"><option value="all">All items</option><option value="remaining">Remaining</option><option value="attention">Needs attention</option><option value="complete">Completed</option></select></div>
           <div id="item-queue"></div>
           <button id="review-fixes" class="secondary">Review fixes</button>
-          <div id="fix-mode-note" class="small" hidden>Reviewing failed and blocked items only. <button id="exit-fix-mode" class="quiet">Return to all items</button></div>
+          <div id="fix-mode-note" class="small" hidden>Showing items ready to retest or needing attention. <button id="exit-fix-mode" class="quiet">Return to all items</button></div>
           <button id="show-results" class="quiet">Review results</button><small class="shortcut-hint">Alt + ← / → Previous / Next<br>Alt + V Toggle versions</small>
         </section>
         <div class="rail-footer">
@@ -169,6 +169,7 @@
             <h2 id="item-title"></h2>
             <p id="item-description"></p>
             <p id="item-instructions"></p>
+            <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Fix verified</button><p class="small muted">Complete the checks below, then verify the fix. If it is still wrong, report a problem.</p></section>
             <details><summary>Expected result</summary><p id="item-expected"></p></details>
             <p class="small muted">Check means passed. Leave untested checks empty; use Needs fixes to report a failure.</p><div id="checks"></div>
             <label class="field-label" for="item-notes">Notes</label>

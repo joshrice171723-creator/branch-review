@@ -1,9 +1,10 @@
 export const isPublished = record => ["published","verified"].includes(record?.delivery?.stage);
-export const statusLabels = {'not-started':'Not started','in-progress':'In progress',passed:'Passed','needs-fixes':'Needs fixes',blocked:'Blocked','not-applicable':'Not applicable'};
+export const statusLabels = {'not-started':'Not started','in-progress':'In progress',passed:'Passed','ready-to-retest':'Ready to retest','needs-fixes':'Needs fixes',blocked:'Blocked','not-applicable':'Not applicable'};
 export function itemStatus(record, item) {
   const saved = record.items?.[item.id] || {};
-  if (record.issues.some(issue => issue.scenario === item.id && issue.status !== 'resolved')) return 'needs-fixes';
+  if (record.issues.some(issue => issue.scenario === item.id && !['resolved','needs-retest'].includes(issue.status))) return 'needs-fixes';
   if (['needs-fixes','blocked','not-applicable'].includes(saved.outcome)) return saved.outcome;
+  if (record.issues.some(issue => issue.scenario === item.id && issue.status === 'needs-retest')) return 'ready-to-retest';
   if (item.steps.every((_,index) => record.checks[`${item.id}:${index}`])) return 'passed';
   return saved.visitedAt || saved.notes || item.steps.some((_,index) => record.checks[`${item.id}:${index}`]) ? 'in-progress' : 'not-started';
 }
@@ -11,7 +12,7 @@ export const isComplete = status => status === 'passed' || status === 'not-appli
 export function matchesItem(record,item,query='',filter='all') {
   const status=itemStatus(record,item);
   return `${item.title} ${item.id} ${item.description || ''} ${item.instructions || ''} ${item.expected || ''} ${item.steps.join(' ')}`.toLowerCase().includes(query.toLowerCase().trim()) &&
-    (filter==='all' || filter==='remaining' && !isComplete(status) || filter==='attention' && ['needs-fixes','blocked'].includes(status) || filter==='complete' && isComplete(status));
+    (filter==='all' || filter==='remaining' && !isComplete(status) || filter==='attention' && ['ready-to-retest','needs-fixes','blocked'].includes(status) || filter==='complete' && isComplete(status));
 }
 export function reviewCounts(record) {
   const counts = Object.fromEntries(Object.keys(statusLabels).map(key => [key,0]));

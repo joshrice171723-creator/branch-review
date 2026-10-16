@@ -56,6 +56,15 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const next=nextItem(r,itemId,fixMode?'attention':'all');await navigate(next || itemId,next?'item':'results');
     } finally { advancing=false; }
   }
+  $('verify-fix').onclick=async()=>{
+    try {
+      if(!await flush())return;
+      const r=getState().record,item=r.manifest.scenarios.find(item=>item.id===itemId);
+      if(!item.steps.every((_,i)=>r.checks[`${item.id}:${i}`]))return;
+      for(const issue of r.issues.filter(issue=>issue.scenario===item.id && issue.status==='needs-retest'))await api('/api/resolve',{id:r.id,issueId:issue.id,note:r.items?.[item.id]?.notes?.trim() || 'Verified the latest fix using Before fix / After fix and completed this item’s checklist.'});
+      await poll();
+    }catch(e){error(e.message);}
+  };
   $('item-next').onclick=()=>advance();
   $('item-search').oninput=$('item-filter').onchange=()=>render(getState());
   $('leave-unfinished').onclick=()=>advance(true);
@@ -82,7 +91,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const currentKey=`${r.id}:${current.id}`;
     const moved=key!==currentKey;
     if(moved){
-      if(recordId!==r.id)fixMode=false;
+      if(recordId!==r.id){fixMode=!!r.fixComparison;$('item-search').value='';$('item-filter').value=fixMode?'attention':'all';}
       key=currentKey;recordId=r.id;itemId=current.id;dirty=false;version++;
       let saved=r.items?.[itemId]||{};
       try{const local=JSON.parse(localStorage.getItem(draftKey())||'null');if(local){saved=local;dirty=true;}}catch{}
@@ -98,18 +107,22 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const currentStatus=itemStatus(displayRecord,current);
     $('guided-item').hidden=results;$('guided-results').hidden=!results;
     $('fix-mode-note').hidden=!fixMode;
-    $('review-fixes').textContent=`Review fixes (${counts['needs-fixes']+counts.blocked})`;
-    $('review-fixes').disabled=!enabled || !(counts['needs-fixes']+counts.blocked);
+    $('review-fixes').textContent=`Review fixes (${counts['ready-to-retest']+counts['needs-fixes']+counts.blocked})`;
+    $('review-fixes').disabled=!enabled || !(counts['ready-to-retest']+counts['needs-fixes']+counts.blocked);
     $('item-reason-wrap').hidden=!$('item-outcome').value;
     $('item-number').textContent=`ITEM ${index+1} OF ${items.length}`;
     $('item-title').textContent=current.title;$('item-description').textContent=current.description || r.manifest.summary || 'Compare this behavior in Original and Changed.';
     $('item-instructions').textContent=current.instructions || 'Follow each check below in the live preview.';
     $('item-expected').textContent=current.expected || current.steps.join(' ');
+    const retests=r.issues.filter(issue=>issue.scenario===current.id && issue.status==='needs-retest');
+    $('latest-fix').hidden=!retests.length;
+    $('latest-fix-expected').textContent=retests.map(issue=>issue.expected).join('\n');
+    $('verify-fix').disabled=!enabled || currentStatus!=='ready-to-retest' || !current.steps.every((_,i)=>r.checks[`${current.id}:${i}`]);
     $('item-status').textContent=statusLabels[currentStatus]+(dirty?' · unsaved':'');$('item-status').className=`item-status status-${currentStatus}`;
     $('queue-progress').textContent=`${counts.complete} of ${counts.total} complete`;
     $('review-summary').textContent=r.manifest.summary || r.title;
     $('review-source').textContent=r.manifest.source || 'Review scenario';
-    $('results-counts').textContent=[`${counts.passed===counts.total?'✓ ':''}${counts.passed} of ${counts.total} review items passed`,counts['needs-fixes'] && `${counts['needs-fixes']} need fixes`,counts.blocked && `${counts.blocked} blocked`,counts['not-applicable'] && `${counts['not-applicable']} excluded`,(counts['not-started']+counts['in-progress']) && `${counts['not-started']+counts['in-progress']} unfinished`,r.approval && `Approved by ${r.approval.reviewer}`].filter(Boolean).join(' · ');
+    $('results-counts').textContent=[`${counts.passed===counts.total?'✓ ':''}${counts.passed} of ${counts.total} review items passed`,counts['ready-to-retest'] && `${counts['ready-to-retest']} ready to retest`,counts['needs-fixes'] && `${counts['needs-fixes']} need fixes`,counts.blocked && `${counts.blocked} blocked`,counts['not-applicable'] && `${counts['not-applicable']} excluded`,(counts['not-started']+counts['in-progress']) && `${counts['not-started']+counts['in-progress']} unfinished`,r.approval && `Approved by ${r.approval.reviewer}`].filter(Boolean).join(' · ');
     $('results-message').textContent=canApprove(r)?'All items are accounted for. Review any exclusions and follow the next action below.':'Resolve the items below or prepare a fix request for Codex.';
     const listKey=JSON.stringify([r.id,r.checks,r.items,r.issues,r.cursor,published,!!enabled,$('item-search').value,$('item-filter').value]);
     if(queueKey!==listKey){
@@ -129,7 +142,8 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     $('resume-review').textContent=counts.complete===counts.total?'Revisit review items':'Continue remaining checks';
     $('resume-review').hidden=published || counts.complete!==counts.total;
     $('prepare-handoff').disabled=!enabled || canApprove(r);
-    $('prepare-handoff').hidden=canApprove(r);
+    $('prepare-handoff').hidden=canApprove(r) || !(counts['needs-fixes']+counts.blocked);
+    if($('prepare-handoff').hidden)$('handoff-panel').hidden=true;
     $('results-message').hidden=canApprove(r);
     $('item-next').textContent=nextItem(r,itemId,fixMode?'attention':'all')?(fixMode?'Next fix →':'Next item →'):'Review results →';
   }

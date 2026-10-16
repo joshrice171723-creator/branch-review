@@ -4,6 +4,7 @@ import path from 'node:path';
 import { qaManifest } from './qa-manifest.mjs';
 import { canApprove, reviewCounts } from './public/review-model.js';
 import { isReviewDestination } from './public/preview-routes.js';
+import { prepareRetest } from './fix-review.mjs';
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const defaultManifest = { version: 1, title: 'Jordan Review · intake', scenarios: [{ id: 'intake', title: 'Partially completed intake', path: ':intake', focus: 'Guided intake · staff assisted', steps: ['Compare the answer controls in Original and Changed.', 'Edit and save an answer in Changed.', 'Confirm Original retains its previous answer.', 'Reopen Changed and confirm the saved answer persists.'] }] };
 export function scenarioRecipe(files = []) { return files.some(file => ['apps/api/app/services/qa/office_qa.rb','apps/web/src/features/qa/QaOfficeQa.tsx'].includes(file)) ? 'qa-scenario.rb' : 'scenario.rb'; }
@@ -36,6 +37,7 @@ export class ReviewStore {
     this.records = JSON.parse(await readFile(path.join(this.directory, 'reviews.json'), 'utf8').catch(e => { if (e.code === 'ENOENT') return '[]'; throw e; }));
     this.saved=JSON.stringify(this.records);
     for (const record of this.records) {
+      prepareRetest(record);
       if (record.delivery?.stage === 'deploying') record.delivery.stage = 'deployment-needs-inspection';
       if (record.delivery?.stage === 'pushing') record.delivery.stage = 'push-unconfirmed';
     }
@@ -54,6 +56,7 @@ export class ReviewStore {
       const previous = this.records.findLast(r => r.identity.repository === identity.repository && (snapshot.previousReviewId ? r.id === snapshot.previousReviewId : r.identity.ref === identity.ref));
       record = { id, identity, manifest, title: snapshot.comparison.branch.subject, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), checks: {}, items:{}, cursor:{itemId:manifest.scenarios[0].id,view:'item'}, previousId:previous?.id || null, issues: previous ? [...previous.issues,...(previous.publishedFindings || [])].filter(i => i.status !== 'resolved').map(i => ({ ...i, status: 'needs-retest', carriedFrom: previous.id })) : [], events: [], approval: null, integration: null, delivery: null };
       record.comparisonMode={baseline:snapshot.comparison.baseline || 'parent',baselineCommit:snapshot.comparison.baselineCommit};
+      record.requestHistory=structuredClone(previous?.requestHistory || []);
       for (const [itemId, saved] of Object.entries(previous?.items || {})) {
         if (!['needs-fixes','blocked'].includes(saved.outcome)) continue;
         if (manifest.scenarios.some(item=>item.id===itemId)) record.items[itemId]={...saved,carriedFrom:previous.id};
