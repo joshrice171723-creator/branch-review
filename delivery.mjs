@@ -13,14 +13,21 @@ export class Delivery {
     record.integration = await this.prepare(record.identity.ref,record.identity.source,record.integration);
     await this.store.event(record,'candidate-prepared',record.integration); return record.integration;
   }
+  async withoutChecklist(sha) {
+    const entries=await this.git('ls-tree',sha);
+    if(!entries.split('\n').some(line=>line.endsWith('\t.branch-review.json')))return sha;
+    const tree=await this.git('mktree',{input:entries.split('\n').filter(line=>!line.endsWith('\t.branch-review.json')).join('\n')+'\n'});
+    return this.git('commit-tree',tree,'-p',sha,'-m','Exclude legacy Branch Review checklist metadata');
+  }
   async prepare(ref, expectedSource, previous) {
     const {main,source} = await this.refs({identity:{ref,source:expectedSource}});
     const common = await this.git('merge-base',main,source);
     if (common === source) throw new Error('This branch is already included in main. There is nothing to merge.');
     let sha = source;
-    if (common !== main) {
-      if (previous?.main === main && previous.source === source) return previous;
-      const output = await this.git('merge-tree','--write-tree',main,source).catch(e => { throw new Error('Merge conflict: resolve the branch against current main, then review again.\n' + e.message); });
+    const cleanMain=await this.withoutChecklist(main),cleanSource=await this.withoutChecklist(source);
+    if (common !== main || cleanMain!==main || cleanSource!==source) {
+      if (previous?.main === main && previous.source === source && !await this.git('ls-tree','--name-only',previous.sha,'--','.branch-review.json')) return previous;
+      const output = await this.git('merge-tree','--write-tree',cleanMain,cleanSource).catch(e => { throw new Error('Merge conflict: this branch conflicts with GitHub main. Resolve the code conflicts, then open it again.\n\nTechnical details\n' + e.message); });
       const tree = output.split('\n')[0];
       if (!/^[0-9a-f]{40}$/.test(tree)) throw new Error('Could not produce a merge candidate.');
       sha = await this.git('commit-tree',tree,'-p',main,'-p',source,'-m',`Merge reviewed branch ${ref.replace('refs/heads/','')}`);

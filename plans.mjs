@@ -1,4 +1,4 @@
-import {validateManifest,manifestForFiles} from './reviews.mjs';
+import {validateManifest} from './reviews.mjs';
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {itemStatus} from './public/review-model.js';
@@ -42,21 +42,11 @@ export async function branchRelationships(git,inventory,ref) {
 }
 export async function loadPlan(git,sha,files) {
   if(!/^[a-f0-9]{40}$/.test(sha))throw new Error('Choose an exact commit for the review plan.');
-  const found=await git('ls-tree','--name-only',sha,'--','.branch-review.json');
-  if(!found)return validateManifest(manifestForFiles(files));
-  const raw=await git('show',`${sha}:.branch-review.json`);
-  if(Buffer.byteLength(raw)>64000)throw new Error('Review manifest is too large.');
-  let plan;try{plan=validateManifest(JSON.parse(raw));}catch(error){throw new Error(`Invalid .branch-review.json: ${error.message}`);}
-  if(files.length && plan.scenarios.every(item=>item.files?.length)){
-    const scenarios=plan.scenarios.filter(item=>item.files.some(file=>files.some(changed=>changed===file || changed.startsWith(file.endsWith('/')?file:file+'/'))));
-    if(!scenarios.length)return validateManifest(manifestForFiles(files));
-    return {...plan,scenarios};
-  }
-  return plan;
+  return validateManifest({version:2,title:'Checklist pending',summary:'Opening this branch generates a checklist from its changes against GitHub main.',source:'Pending diff analysis',scenarios:[{id:'pending',title:'Generate branch checklist',path:'/',steps:['Wait for the generated checklist before reviewing.']}]});
 }
 
 export async function candidateComparison(git,comparison,candidate) {
-  const files=(await git('diff','--name-only','-z',candidate.main,candidate.sha,'--')).split('\0').filter(Boolean);
+  const files=(await git('diff','--name-only','-z',candidate.main,candidate.sha,'--')).split('\0').filter(file=>file && file!=='.branch-review.json');
   const plan=await loadPlan(git,comparison.branch.sha,files);
   return {...comparison,base:candidate.main,main:candidate.main,files,plan};
 }

@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, startReview, stopReview, restoreReview, prepare, resetScenario } from './adapter.mjs';
+import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario } from './adapter.mjs';
 import { previewProxy } from './proxy.mjs';
 import { ReviewStore, scenarioRecipe, digest } from './reviews.mjs';
 import { loadPlan, candidateComparison, PlanStore, branchUpdate, branchRelationships, retestAdvice } from './plans.mjs';
@@ -19,7 +19,7 @@ const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).
 let busy = false;
 const store = await new ReviewStore(local).load();
 const muse=new MuseQa(local,store);
-const plans=new PlanStore(local);
+const plans=new PlanStore(path.join(local,'diff-reviews'));
 const jobs=await new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,changedCwd:()=>path.join(previewRoot,state.changed?.runtime || 'changed'),prepareNext:async sha=>{
   const branch=(await branches()).find(branch=>branch.sha===sha);if(!branch)throw new Error('Choose a current branch.');
   const selected=await comparison(branch.ref,'parent'),runtime=state.changed?.runtime==='standby'?'changed':'standby';
@@ -29,14 +29,21 @@ let toolsSettings=JSON.parse(await readFile(path.join(local,'tools-settings.json
 const delivery = new Delivery(git, store);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
 async function manifestFor(sha) {
-  const source=state.comparison.branch.sha;
-  return await plans.get(sha) || await plans.get(source) || loadPlan(git,source,state.comparison.files);
+  const plan=await plans.get(sha);
+  if(!plan)throw Error('Reopen this branch to generate its checklist from the current changes.');
+  return plan;
 }
 async function startCandidate(ref, previousReviewId) {
+  state.status='preparing';progress('Checking changes against GitHub main');
   const selected=await comparison(ref,'main');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
   const integration=await delivery.prepare(ref,selected.branch.sha,previous);
   const combined=await candidateComparison(git,selected,integration);
+  if(!combined.files.length)throw Error('This branch has no application changes left to review against GitHub main. Its old checklist is no longer part of the code.');
+  progress('Generating checklist from branch changes');
+  let plan=await plans.get(integration.sha);
+  if(!plan){plan=await jobs.generatePlan(integration.main,integration.sha,combined.files,combined.plan);await plans.save(integration.sha,plan);}
+  combined.plan=plan;
   await startReview(ref,'main',undefined,{comparison:combined,integration});
   await activate(previousReviewId);
 }
@@ -47,7 +54,6 @@ async function activate(previousReviewId) {
   state.recordId = record.id; state.manifest = manifest;
   if (state.integration?.sha === state.changed.sha) { record.integration = state.integration; await store.persist(); }
   await writeFile(path.join(local,'review.json'),JSON.stringify({comparison:state.comparison,original:state.original,changed:state.changed,integration:state.integration},null,2));
-  if(toolsSettings.autoPlan && !await plans.get(state.changed.sha) && !(await git('ls-tree','--name-only',state.changed.sha,'--','.branch-review.json')) && !jobs.rows.some(job=>job.kind==='plan'&&job.commit===state.changed.sha) && !jobs.rows.some(job=>job.status==='running'))await jobs.start(record,'plan');
 }
 async function active(id, checkFresh = false) {
   if (state.status !== 'ready' || id !== state.recordId) throw new Error('Open this exact review before changing its results.');
@@ -197,7 +203,7 @@ const server=http.createServer(async(req,res)=>{
     res.end(await readFile(path.join(root,'public',filename)));
   }catch(error){if(!res.headersSent)json(res,400,{error:error.message});else res.end();}
 });
-await restoreReview();state.prepared=JSON.parse(await readFile(path.join(local,'prepared.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return 'null';throw e;})); await activate();
+await restoreReview();state.prepared=JSON.parse(await readFile(path.join(local,'prepared.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return 'null';throw e;})); await activate().catch(error=>{state.status='error';state.error=error.message;});
 for(const [side,slot] of Object.entries(slots).filter(([side])=>side!=='standby')) { const proxy=previewProxy(side,slot,()=>state,origin);proxy.on('error',error=>{console.error(error.message);process.exit(1);});proxy.listen(slot.proxy,'127.0.0.1'); }
 server.on('error',error=>{console.error(error.message);process.exit(1);});
 server.listen(port,'127.0.0.1',()=>console.log(`Branch Review: ${origin}`));

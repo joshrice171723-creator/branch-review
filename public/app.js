@@ -66,11 +66,17 @@ async function requestApi(path, data) {
   if (!response.ok) throw new Error(result.error);
   return result;
 }
+let lastErrorMessage=null;
 function error(message) {
-  const changed=$("error").textContent!==(message || "");
-  $("error").textContent = message || "";
+  message=message || '';
+  if(message===lastErrorMessage)return;
+  lastErrorMessage=message;
+  $("error").replaceChildren();
+  const [summary,technical]=(message || '').split('\n\nTechnical details\n');
+  $("error").append(document.createTextNode(summary));
+  if(technical){const details=document.createElement('details'),label=document.createElement('summary'),body=document.createElement('pre');label.textContent='Technical details';body.textContent=technical;body.style.whiteSpace='pre-wrap';details.append(label,body);$("error").append(details);}
   $("error").hidden = !message;
-  if(message && changed)$("error").scrollIntoView({block:'nearest'});
+  if(message)$("error").scrollIntoView({block:'nearest'});
 }
 function branchList() {
   const query = $("search").value.toLowerCase();
@@ -242,7 +248,7 @@ async function loadDiff(comparison,filename) {
 }
 $('view-diff').onclick=()=>openDiff();
 $('review-code').onclick=()=>{const r=currentState.record;if(r)void openDiff(undefined,{base:r.identity.base,branch:{sha:r.identity.changed,name:r.identity.ref.replace(/^refs\/(heads|remotes)\//,'')}});};
-$('download-plan').onclick=()=>{if(!selectedComparison)return;const url=URL.createObjectURL(new Blob([JSON.stringify(selectedComparison.plan,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='.branch-review.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+$('download-plan').onclick=()=>{if(!selectedComparison)return;const url=URL.createObjectURL(new Blob([JSON.stringify(selectedComparison.plan,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='review-checklist.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 $('close-diff').onclick=()=>{diffGeneration++;$('diff-dialog').close();};
 function toggle(side) {
   active = side;

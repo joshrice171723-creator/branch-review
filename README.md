@@ -90,9 +90,13 @@ The app checks hosted build identity and health before recording Published. Test
 
 The pilot branch `codex/intake-completion-ui` compares `8968d0b8` with `a4948139`. It is already included in main and is blocked from merging again. These older revisions lack readable build metadata: comparison still works, but approval health remains blocked with an explanation.
 
-## Explicit scenario manifest
+## Generated review checklists
 
-Add `.branch-review.json` to a branch to name affected routes and checks. It is read from the exact committed candidate and validated before preview preparation. Without a manifest, changes to `apps/api/app/services/qa/office_qa.rb` use the six-item QA coverage plan; other branches use a clearly labeled starter intake plan. This is explicit mapping, not general impact discovery. Confirm the starter checks cover the actual change before approval.
+Opening a branch fetches GitHub main, prepares the combined code, then asks the installed Codex CLI to inspect the exact diff and relevant screen routes in a separate detached checkout. The checklist is validated and saved under Branch Review's local `diff-reviews/plans` directory, keyed by the exact candidate commit. Reopening the same candidate reuses it; changed code gets a new checklist and review. Generation failures stop review startup rather than showing unrelated checks.
+
+Legacy `.branch-review.json` files are ignored as guidance and removed from both merge inputs using temporary Git objects, without touching either checkout. The final candidate retains the actual main and branch parents. Application conflicts still block preparation. Fix handoffs no longer request checklist commits. You can edit or export `review-checklist.json` from the app; it does not belong in the application repository.
+
+Generated checks are proposed instructions, not test evidence. Verify their relevance before approval. The generator uses your configured Codex account and requires its CLI to be available.
 
 Versions 1 and 2 support 1–100 review items, each with 1–20 checks. The JSON file is limited to 64 KB. Paths stay under `/clinic`, on `/qa`, or on the explicit public pages `/`, `/meta-clinic` and `/demo` (including query strings and anchors). Public pages open directly without development login in both previews; the existing isolated recipes still prepare clinic and QA starting data. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers. `originalPath` optionally provides a different destination for Original. `focus` matches a table row's first-cell identifier or an exact heading label. Keep item IDs stable across fixes so unresolved findings carry forward correctly. The manifest guides navigation and testing; it does not execute scripts or create arbitrary seed data.
 

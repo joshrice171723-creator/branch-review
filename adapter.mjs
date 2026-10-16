@@ -51,6 +51,7 @@ export function run(command, args, options = {}) {
       ...options,
       shell: false,
     });
+    if(options.input !== undefined) child.stdin.end(options.input);
     let output = "";
     child.stdout?.on("data", (chunk) => {
       output = (output + chunk).slice(-120000);
@@ -70,7 +71,7 @@ export function run(command, args, options = {}) {
     );
   });
 }
-export const git = (...args) => run("git", args);
+export const git = (...args) => run("git", args, typeof args.at(-1) === "object" ? args.pop() : {});
 export function progress(message) {
   state.phase = message;
   state.log.push({ at: new Date().toISOString(), message });

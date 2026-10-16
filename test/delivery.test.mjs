@@ -7,17 +7,18 @@ import {Delivery} from '../delivery.mjs';
 import {digest} from '../reviews.mjs';
 test('integration candidate preserves main, gates exact approval and rejects moving refs',async()=>{
   mkdirSync('.local',{recursive:true});const directory=path.resolve(mkdtempSync('.local/delivery-test-'));
-  const call=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']}).trim();
+  const call=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',windowsHide:true,stdio:['pipe','pipe','pipe'],...(typeof args.at(-1)==='object'?args.pop():{})}).trim();
   call(directory,'init','--bare','remote.git');call(directory,'init','-b','main','source');const source=path.join(directory,'source');
   const git=async(...args)=>call(source,...args);
   await git('config','user.name','Test');await git('config','user.email','test@example.invalid');
   const commit=async(file,value)=>{writeFileSync(path.join(source,file),value);await git('add','.');await git('commit','-m',value);return git('rev-parse','HEAD');};
   await commit('base.txt','base');await git('remote','add','origin',path.join(directory,'remote.git'));await git('push','origin','main');
-  await git('checkout','-b','feature');const feature=await commit('feature.txt','feature');
-  await git('checkout','main');const main=await commit('main.txt','main update');await git('push','origin','main');
+  await git('checkout','-b','feature');await commit('.branch-review.json','branch checklist');const feature=await commit('feature.txt','feature');
+  await git('checkout','main');await commit('.branch-review.json','main checklist');const main=await commit('main.txt','main update');await git('push','origin','main');
   const record={id:'test',identity:{ref:'refs/heads/feature',source:feature,changed:feature},events:[]};
   const store={persist:async()=>{},event:async(r,type)=>r.events.push(type)};const delivery=new Delivery(git,store);
   const candidate=await delivery.candidate(record);
+  assert.equal(await git('ls-tree','--name-only',candidate.sha,'--','.branch-review.json'),'');
   assert.notEqual(candidate.sha,feature);assert.equal(candidate.main,main);
   assert.equal(await git('show',`${candidate.sha}:main.txt`),'main update');assert.equal(await git('show',`${candidate.sha}:feature.txt`),'feature');
   assert.equal(await git('rev-parse','HEAD'),main);assert.equal(await git('status','--porcelain'),'');
@@ -40,6 +41,7 @@ test('review preparation fetches remote main before QA without approval or a rev
   const main='a'.repeat(40),source='b'.repeat(40),calls=[];
   const git=async(...args)=>{
     calls.push(args);
+    if(args[0]==='ls-tree')return '';
     if(args[0]==='fetch'||args[0]==='update-ref')return '';
     if(args[0]==='rev-parse')return args[1]==='refs/remotes/origin/main'?main:source;
     if(args[0]==='merge-base')return main;
@@ -71,7 +73,7 @@ test('a lost push response stays unconfirmed until the exact remote commit is re
 
 test('a conflicting integration candidate preserves the source checkout and remote main',async()=>{
   mkdirSync('.local',{recursive:true});const directory=path.resolve(mkdtempSync('.local/conflict-test-'));
-  const call=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']}).trim();
+  const call=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',windowsHide:true,stdio:['pipe','pipe','pipe'],...(typeof args.at(-1)==='object'?args.pop():{})}).trim();
   call(directory,'init','--bare','remote.git');call(directory,'init','-b','main','source');const cwd=path.join(directory,'source');
   const git=async(...args)=>call(cwd,...args);
   await git('config','user.name','Test');await git('config','user.email','test@example.invalid');

@@ -165,3 +165,12 @@ test('app commits only selected fix files and preserves unrelated edits',async()
   assert.equal(jobs.rows[0].status,'succeeded');assert.equal(jobs.rows[0].dirty,true);assert.match(await git('status','--porcelain'),/AGENTS.md/);
   await git('checkout','-b','other');await assert.rejects(jobs.fixFiles(id),/changed branches/);
 });
+
+ test('automatic plans are generated for the exact diff and reject unmapped guidance',async()=>{
+  const {directory}=await fixture();const jobs=await new ReviewJobs(directory,{}).load();
+  jobs.execute=async(job,record)=>{assert.deepEqual(record.identity,{base,changed:sha});job.plan={...structuredClone(manifest),scenarios:[{...manifest.scenarios[0],files:['changed.ts']}]};};
+  const generated=await jobs.generatePlan(base,sha,['changed.ts'],manifest);
+  assert.match(generated.source,/exact diff/);assert.equal(jobs.rows[0].status,'succeeded');
+  await assert.rejects(jobs.generatePlan(base,sha,['other.ts'],manifest),/without a changed source file/);
+  assert.equal(jobs.rows[1].status,'failed');
+});
