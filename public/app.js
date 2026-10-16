@@ -1,8 +1,7 @@
 import { workflow } from './workflow.js';
-import { reviewShortcut } from './shortcuts.js';
+import { reviewShortcut, refreshedSelection } from './shortcuts.js';
 import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
-import {refreshedSelection} from './branch-selection.js';
 const $ = (id) => document.getElementById(id);
 let allBranches = [],
   selected = null,

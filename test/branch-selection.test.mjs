@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {refreshedSelection} from '../public/branch-selection.js';
+import {refreshedSelection} from '../public/shortcuts.js';
 
 test('refresh keeps the completed review selected instead of silently selecting unrelated work',()=>{
   const pending={ref:'refs/heads/fixes',sha:'old',merged:false,aliases:[]};
