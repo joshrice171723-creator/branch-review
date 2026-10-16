@@ -86,3 +86,7 @@ No live Meta Clinic push or publication was performed. Hosted post-publish accep
 unverified. Read-only Codex plan generation succeeded and opened a six-item draft without replacing the
 saved eight-item review. Capture-current-screen, reorder and removal worked in the draft editor.
 Resumed-chat dispatch has boundary tests; the real handoff acceptance used a new dedicated chat.
+
+## 0.4.2 — isolate generated plans
+
+Plan generation now creates a detached checkout at the exact reviewed commit. Codex and its indexing tools run there, away from both active previews. The checkout is retained for diagnosis. A regression deliberately edits AGENTS.md in that checkout and verifies the active preview content, HEAD and Git index remain unchanged. All 60 automated tests pass. Packaged desktop acceptance is pending.

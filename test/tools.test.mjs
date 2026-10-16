@@ -102,6 +102,31 @@ test('desktop finds the installed Codex executable without a terminal PATH',asyn
   assert.equal(await codexExecutable({BRANCH_REVIEW_CODEX:'chosen.exe'}),'chosen.exe');
   await assert.rejects(codexExecutable({PATH:''}),/not found/);
 });
+test('plan tooling writes stay in a detached checkout and never dirty the active preview',async()=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'plan-isolation-')),preview=path.join(directory,'active');
+  await mkdir(preview);
+  const run=async(command,args,options)=>{const result=await promisify(execFile)(command,args,options);return result.stdout.trim();};
+  const git=(...args)=>run('git',args,{cwd:preview});
+  await git('init','-b','review');await git('config','user.email','test@example.invalid');await git('config','user.name','Test');
+  await writeFile(path.join(preview,'AGENTS.md'),'Committed instructions');await git('add','.');await git('commit','-m','base');
+  const base=await git('rev-parse','HEAD');await writeFile(path.join(preview,'change.txt'),'Changed');await git('add','.');await git('commit','-m','change');
+  const changed=await git('rev-parse','HEAD'),indexBefore=await readFile(path.join(preview,'.git','index'));
+  const jobs=await new ReviewJobs(directory,{git,run,changedCwd:()=>preview,codex:'test-codex'}).load();
+  jobs.command=async(job,command,args,cwd)=>{
+    assert.notEqual(cwd,preview);assert.equal(cwd,job.worktree);assert.equal(args[args.indexOf('-C')+1],cwd);
+    assert.equal(args[args.indexOf('--sandbox')+1],'read-only');
+    assert.equal(await run('git',['rev-parse','HEAD'],{cwd}),changed);
+    assert.equal(await run('git',['branch','--show-current'],{cwd}),'');
+    assert.equal(await run('git',['show',base+':AGENTS.md'],{cwd}),'Committed instructions');
+    await writeFile(path.join(cwd,'AGENTS.md'),'Indexer changed its own checkout');
+    await writeFile(args[args.indexOf('--output-last-message')+1],JSON.stringify(manifest));
+  };
+  const job={id:'isolated-plan',kind:'plan'};jobs.rows.push(job);
+  await jobs.execute(job,{identity:{base,changed},manifest},{},preview);
+  assert.deepEqual(job.plan,manifest);assert.equal(await git('status','--porcelain'),'');
+  assert.equal(await git('rev-parse','HEAD'),changed);assert.deepEqual(await readFile(path.join(preview,'.git','index')),indexBefore);
+  assert.equal(await readFile(path.join(preview,'AGENTS.md'),'utf8'),'Committed instructions');
+});
 test('fix handoff preserves reviewed text and chooses new or resumed Codex chats',async()=>{
   const {directory,record}=await fixture(),commands=[];
   const jobs=new ReviewJobs(directory,{git:async()=>'',run:async(_command,args)=>args[0]==='rev-parse'?sha:'',previewRoot:directory,toolchain:directory,codex:'installed.exe'});
