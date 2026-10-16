@@ -1,5 +1,5 @@
 export function isPublicDestination(destination) {
-  return typeof destination === 'string' && /^\/(?:meta-clinic|demo)?(?:[?#]|$)/.test(destination);
+  return typeof destination === 'string' && /^(?:\/(?:[?#]|$)|\/meta-clinic(?:[/?#]|$)|\/demo(?:[?#]|$))/.test(destination);
 }
 export function isReviewDestination(destination) {
   if (typeof destination !== 'string' || destination.length > 500 || /[\\\x00-\x20]|%5c/i.test(destination)) return false;

@@ -45,8 +45,8 @@ test('public review routes support Original and Changed while rejecting traversa
   assert.equal(previewDestination(item,'original',state),'/');
   assert.equal(previewDestination(item,'changed',state),'/demo?source=review#start');
   assert.equal(scenarioPath({path:'/meta-clinic'},undefined),'/meta-clinic');
-  for(const route of ['/','/?source=review#sandbox','/meta-clinic','/demo','/qa?view=office','/clinic/patients/3'])assert.equal(isReviewDestination(route),true,route);
-  for(const route of ['https://evil.test','//evil.test','/meta-clinic/other','/demo/other','/admin','/clinic/../','/clinic/%2e%2e/demo','/clinic/.%2e/qa','/clinic/%5cadmin','/qa/../','/demo\\evil','/clinic\t/other']){
+  for(const route of ['/','/?source=review#sandbox','/meta-clinic','/meta-clinic/resources','/meta-clinic/platform/memberships?tab=overview#start','/demo','/qa?view=office','/clinic/patients/3'])assert.equal(isReviewDestination(route),true,route);
+  for(const route of ['https://evil.test','//evil.test','/meta-clinic-other','/meta-clinic/../admin','/meta-clinic/%2e%2e/admin','/meta-clinic/%5cadmin','/demo/other','/admin','/clinic/../','/clinic/%2e%2e/demo','/clinic/.%2e/qa','/clinic/%5cadmin','/qa/../','/demo\\evil','/clinic\t/other']){
     assert.equal(isReviewDestination(route),false,route);
     assert.throws(()=>validateManifest({version:2,scenarios:[{...item,originalPath:route}]}),/inside/);
   }
