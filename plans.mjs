@@ -46,11 +46,17 @@ export async function loadPlan(git,sha,files) {
   if(!found)return validateManifest(manifestForFiles(files));
   const raw=await git('show',`${sha}:.branch-review.json`);
   if(Buffer.byteLength(raw)>64000)throw new Error('Review manifest is too large.');
-  try{return validateManifest(JSON.parse(raw));}catch(error){throw new Error(`Invalid .branch-review.json: ${error.message}`);}
+  let plan;try{plan=validateManifest(JSON.parse(raw));}catch(error){throw new Error(`Invalid .branch-review.json: ${error.message}`);}
+  if(files.length && plan.scenarios.every(item=>item.files?.length)){
+    const scenarios=plan.scenarios.filter(item=>item.files.some(file=>files.some(changed=>changed===file || changed.startsWith(file.endsWith('/')?file:file+'/'))));
+    if(!scenarios.length)return validateManifest(manifestForFiles(files));
+    return {...plan,scenarios};
+  }
+  return plan;
 }
 
 export async function candidateComparison(git,comparison,candidate) {
   const files=(await git('diff','--name-only','-z',candidate.main,candidate.sha,'--')).split('\0').filter(Boolean);
-  const plan=await loadPlan(git,candidate.sha,files);
+  const plan=await loadPlan(git,comparison.branch.sha,files);
   return {...comparison,base:candidate.main,main:candidate.main,files,plan};
 }

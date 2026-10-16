@@ -8,6 +8,7 @@ export const digest = value => createHash('sha256').update(JSON.stringify(value)
 export const defaultManifest = { version: 1, title: 'Jordan Review · intake', scenarios: [{ id: 'intake', title: 'Partially completed intake', path: ':intake', focus: 'Guided intake · staff assisted', steps: ['Compare the answer controls in Original and Changed.', 'Edit and save an answer in Changed.', 'Confirm Original retains its previous answer.', 'Reopen Changed and confirm the saved answer persists.'] }] };
 export function scenarioRecipe(files = []) { return files.some(file => ['apps/api/app/services/qa/office_qa.rb','apps/web/src/features/qa/QaOfficeQa.tsx'].includes(file)) ? 'qa-scenario.rb' : 'scenario.rb'; }
 export function manifestForFiles(files = []) {
+  if(files.length && scenarioRecipe(files)!=='qa-scenario.rb' && !files.some(file=>/intake|Intake/.test(file)))throw new Error('This branch needs a QA plan for its changed files. Add a .branch-review.json with testing instructions and the destination screen; an unrelated checklist cannot be used.');
   return scenarioRecipe(files) === 'qa-scenario.rb' ? qaManifest : {...defaultManifest,summary:'Starter intake comparison. Confirm these checks cover this branch before approving it.',source:'Built-in intake scenario. No branch-specific review plan was supplied.'};
 }
 export function validateManifest(value) {

@@ -29,7 +29,8 @@ let toolsSettings=JSON.parse(await readFile(path.join(local,'tools-settings.json
 const delivery = new Delivery(git, store);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
 async function manifestFor(sha) {
-  return await plans.get(sha) || loadPlan(git,sha,state.comparison.files);
+  const source=state.comparison.branch.sha;
+  return await plans.get(sha) || await plans.get(source) || loadPlan(git,source,state.comparison.files);
 }
 async function startCandidate(ref, previousReviewId) {
   const selected=await comparison(ref,'main');
