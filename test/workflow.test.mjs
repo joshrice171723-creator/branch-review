@@ -6,7 +6,7 @@ import { defaultManifest } from '../reviews.mjs';
 
 function harness(t, options = {}) {
   class Element {
-    value = ''; children = []; hidden = false; disabled = false;
+    value = ''; children = []; hidden = false; disabled = false; dataset = {};
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
     get firstChild() { return this.children[0]; }
@@ -200,6 +200,10 @@ test('published view replaces editable item and keeps completed review collapsed
   assert.equal(e['results-action'].textContent,'Watch Muse in Office');assert.match(e['muse-qa-state'].textContent,/working/);
   assert.equal(e['published-report'].hidden,false);assert.equal(e['results-checks-label'].textContent,'Completed review');
   assert.notEqual(e['results-checks'].open,true);
+  assert.equal(e['branch-brief'].hidden,true);
+  e['branch-brief'].dataset.selecting='true';h.view.render(h.state);
+  assert.equal(e['branch-brief'].hidden,false);
+  h.view.render(h.state);assert.equal(e['branch-brief'].hidden,false);
   e['published-expected'].value='Centered';e['published-actual'].value='Off center';e['published-problem-item'].value='intake';
   await e['published-problem-form'].onsubmit({preventDefault(){}});
   assert.equal(h.calls.find(call=>call.path==='/api/issue').data.side,'published');

@@ -152,6 +152,7 @@ async function chooseVisibleBranch() {
 }
 async function select(branch,reveal=false) {
   selected = branch;
+  if(reveal){ $('branch-brief').dataset.selecting='true'; $('branch-brief').hidden=false; }
   $('branch-brief').open = reveal || !currentState.record || ![branch.ref,...branch.aliases].includes(currentState.comparison?.branch.ref);
   if(reveal)$('branch-brief').scrollIntoView({block:'start'});
   branchList();
@@ -360,7 +361,7 @@ async function poll() {
     $("connection").textContent = "LOCAL PREVIEW";
     if(Date.now()-lastHealth>15000)void checkHealth();
     const reviewChanged=ready && currentState.record?.id!==previousReview;
-    if(reviewChanged){selected=null;$('baseline').value=currentState.record.comparisonMode?.baseline || 'parent';$('commit-choice').hidden=$('baseline').value!=='commit';commitBranchSha='';}
+    if(reviewChanged){delete $('branch-brief').dataset.selecting;selected=null;$('baseline').value=currentState.record.comparisonMode?.baseline || 'parent';$('commit-choice').hidden=$('baseline').value!=='commit';commitBranchSha='';}
     if (reviewChanged || previousBusy && !currentState.busy) await loadBranches();
   } catch (e) {
     $("connection").textContent = "REVIEW SERVER DISCONNECTED";

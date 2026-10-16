@@ -172,7 +172,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('results-checks-label').textContent=published?'Completed review':'Review checks';
     if(published)$('results-checks').append($('export-review'));else $('results-options').append($('export-review'));
     $('review-context').hidden=published;
-    $('branch-brief').hidden=published;
+    $('branch-brief').hidden=published && !$('branch-brief').dataset.selecting;
     $('published-findings').hidden=!published || !r?.publishedFindings?.length;
     if(published)$('published-findings-list').replaceChildren(...(r.publishedFindings||[]).map(finding=>{const row=node('article','','finding');row.append(node('strong',finding.scenario),node('p',finding.actual),node('small',`Expected: ${finding.expected}`));return row;}));
     if(published){$('prepare-handoff').hidden=true;$('handoff-panel').hidden=true;$('results-message').hidden=true;}
