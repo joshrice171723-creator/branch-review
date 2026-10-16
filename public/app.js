@@ -1,15 +1,16 @@
 import { workflow } from './workflow.js';
-import { reviewShortcut, refreshedSelection } from './shortcuts.js';
+import { reviewShortcut, refreshedSelection, selectedReviewState } from './shortcuts.js';
 import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
 let allBranches = [],
-  selected = null,
+  selected = null, openingSelection = null,
   token = "",
   currentState = {},
   active = "changed",
   frameKey = "",
   selectionGeneration = 0, selectedComparison = null, commitBranchSha = '', diffGeneration = 0;
+try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') || 'null');if(openingSelection){openingSelection.starting=false;selected=openingSelection;}}catch{}
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,poll,error,reopen:()=>mountFrames(currentState,true)});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
@@ -101,7 +102,8 @@ function branchList() {
         date.title=committed.toLocaleString(undefined,{dateStyle:'full',timeStyle:'long'});button.append(date);
       }
       button.title = `${branch.name}\n${branch.sha}`;
-      button.onclick = () => select(branch,true);
+      button.disabled=currentState.busy || !!openingSelection?.starting;
+      button.onclick = () => openBranch(branch);
       return button;
     }),
   );
@@ -201,6 +203,20 @@ async function select(branch,reveal=false) {
     $('plan-summary').textContent=e.message;
     error(e.message);
   }
+}
+async function openBranch(branch) {
+  if(currentState.busy || openingSelection?.starting)return;
+  if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha)return;
+  if(!await reviewWorkflow.flush())return;
+  openingSelection={...branch,starting:true};selected=branch;selectedComparison=null;
+  try{sessionStorage.setItem('branch-review:opening',JSON.stringify(openingSelection));}catch{}
+  $('frames').hidden=true;$('frames').replaceChildren();frameKey='';
+  $('review-workflow').hidden=true;$('review-branch-status').hidden=true;$('branch-brief').hidden=true;
+  $('loading').hidden=false;$('empty').hidden=true;$('loading-label').textContent='OPENING REVIEW';$('phase').textContent=`Opening ${branch.name}…`;
+  $('original-sha').textContent='';$('changed-sha').textContent='';error('');branchList();
+  $('context').textContent=`Opening ${branch.name}…`;
+  try{await api('/api/start',{ref:branch.ref,baseline:'main'});openingSelection.starting=false;await poll();}
+  catch(e){openingSelection.starting=false;currentState.busy=false;error(e.message);$('loading').hidden=true;branchList();}
 }
 async function openDiff(filename,comparison=selectedComparison) {
   if(!comparison)return;
@@ -306,10 +322,12 @@ async function poll() {
   try {
     const previousBusy = currentState.busy;
     const previousReview=currentState.record?.id;
-    currentState = await api("/api/state");
+    currentState = selectedReviewState(await api("/api/state"),openingSelection);
+    if(openingSelection && currentState.record && currentState.status==='ready' && !currentState.busy){openingSelection=null;try{sessionStorage.removeItem('branch-review:opening');}catch{}}
     token = currentState.token;
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
+    if(openingSelection)$('branch-brief').hidden=true;
     const reviewedBranch=allBranches.find(branch=>[branch.ref,...branch.aliases].includes(currentState.record?.identity.ref));
     const reviewedRelease=currentState.record?.delivery;
     const published=['published','verified'].includes(reviewedRelease?.stage) && reviewedRelease.commit===currentState.record?.identity.changed;
@@ -361,15 +379,18 @@ async function poll() {
       $("changed-sha").textContent = currentState.changed.sha.slice(0, 7);
       mountFrames(currentState);
       evidence.render();
-    } else if (preparing) {
+    } else {
       $("frames").replaceChildren();
       frameKey = "";
+      $('original-sha').textContent='';$('changed-sha').textContent='';
+      $('context').textContent=openingSelection?openingSelection.name:'No active preview';
     }
     $("connection").textContent = "LOCAL PREVIEW";
     if(Date.now()-lastHealth>15000)void checkHealth();
     const reviewChanged=ready && currentState.record?.id!==previousReview;
     if(reviewChanged){delete $('branch-brief').dataset.selecting;selected=null;$('baseline').value=currentState.record.comparisonMode?.baseline || 'parent';$('commit-choice').hidden=$('baseline').value!=='commit';commitBranchSha='';}
     if (reviewChanged || previousBusy && !currentState.busy) await loadBranches();
+    if(previousBusy!==currentState.busy)branchList();
   } catch (e) {
     $("connection").textContent = "REVIEW SERVER DISCONNECTED";
     error(e.message);

@@ -9,3 +9,13 @@ export function refreshedSelection(branches, selected, reviewedRef, showAll) {
     || branches.find(branch => branch.ref === reviewedRef || branch.aliases?.includes(reviewedRef))
     || branches.find(branch => showAll || !branch.merged);
 }
+
+export function selectedReviewState(state, selection) {
+  if(!selection)return state;
+  const matches=state.record?.identity.ref===selection.ref && state.record.identity.source===selection.sha;
+  if(matches && state.status==='ready' && !state.busy)return state;
+  const loading=selection.starting || state.busy;
+  return {...state,record:null,manifest:null,original:null,changed:null,comparison:null,
+    status:loading?'preparing':'error',busy:!!loading,
+    phase:`Opening ${selection.name}…`,error:loading?null:state.error || 'Could not open this branch. Click it to retry.'};
+}
