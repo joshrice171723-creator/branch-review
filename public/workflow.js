@@ -9,6 +9,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   const retestNotes = new Map();
   const contexts = {original:{}, changed:{}};
   let video=null,videoKey=null;
+  let officeAfterPublish=null;
   const needsNavigation=item=>['original','changed'].some(side=>{
     const actual=contexts[side].location;if(!actual)return false;
     const expected=previewDestination(item,side,getState());
@@ -88,8 +89,9 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   $('release-settings').onclick = async () => { try { const files=await window.desktop.chooseReleaseFiles(); if(files) await act('release-settings',files); } catch(e) { error(e.message); } };
   $('publish').onclick = () => {
     const state=getState(), sha=state.record.identity.changed;
-    if(confirm(`Publish commit ${sha} to ${state.publishTarget}? This runs Meta Clinic's release pipeline, including backup and database migrations.`)) act('publish',{confirmation:`PUBLISH ${sha} TO ${state.publishTarget}`});
+    if(confirm(`Publish commit ${sha} to ${state.publishTarget}? This runs Meta Clinic's release pipeline, including backup and database migrations, then requests one Muse QA pass and opens Office.`)){officeAfterPublish=sha;act('publish',{confirmation:`PUBLISH ${sha} TO ${state.publishTarget}`});}
   };
+  $('retry-muse').onclick=()=>act('retry-muse');
   $('retry-publish').onclick = () => act('retry-publish',{note:$('release-note').value});
   $('smoke').onclick = () => act('smoke',{note:$('release-note').value});
   $('history').onchange = () => { $('retest').disabled = !$('history').value || getState().busy; $('view-history').disabled=!$('history').value; };
@@ -131,6 +133,10 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('retest').disabled=state.busy || !$('history').value;
     $('view-history').disabled=!$('history').value;
     if(!r) { void history(state); return; }
+    if(officeAfterPublish===r.identity.changed && ['published','verified'].includes(r.delivery?.stage) && !state.busy){officeAfterPublish=null;if(window.desktop)void window.desktop.openPublished(state.publishTarget+'/qa?view=office').catch(e=>error(e.message));}
+    const qa=r.museQa;
+    $('muse-qa-state').textContent=qa?`Muse QA: ${qa.status.replaceAll('-',' ')}${qa.status==='queued'?' · waiting for automatic pickup (usually within 60 seconds)':''}${qa.taskId?' · Office task '+qa.taskId:''}${qa.error?' · '+qa.error:''}${qa.statusError?' · '+qa.statusError:''}`:'';
+    $('retry-muse').hidden=qa?.status!=='handoff-failed';$('retry-muse').disabled=state.busy;
     if(r.cursor?.itemId) scenario=r.cursor.itemId;
     if(!r.manifest.scenarios.some(s=>s.id===scenario)) scenario=r.manifest.scenarios[0].id;
     viewChanged();

@@ -2,7 +2,7 @@ import { readFile, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { digest } from './reviews.mjs';
 export const target = 'https://aimetaclinic.com';
-export async function publish(record, { local, repo, run, git, store, confirmation, toolchain, fetcher = fetch }) {
+export async function publish(record, { local, repo, run, git, store, confirmation, toolchain, muse, fetcher = fetch }) {
   const sha = record.identity.changed;
   if (confirmation !== `PUBLISH ${sha} TO ${target}`) throw new Error('Confirm the exact commit and publishing destination.');
   if (!record.approval || record.delivery?.stage !== 'pushed') throw new Error('The approved candidate must be pushed before publishing.');
@@ -13,6 +13,7 @@ export async function publish(record, { local, repo, run, git, store, confirmati
   if (!config.keyPath || !config.recoveryDirectory) throw new Error('Select the existing SSH key and recovery folder in Publish settings.');
   await access(config.keyPath); await access(config.recoveryDirectory);
   if ((await git('ls-remote','origin','refs/heads/main')).split(/\s/)[0] !== sha) throw new Error('Main moved. Publishing requires the exact reviewed main revision.');
+  if(muse)await muse.preflight(record);
   const directory = path.join(local,'release-checkout');
   const exists = await access(directory).then(()=>true,()=>false);
   if (!exists) { await run('git',['clone',repo,directory]); await writeFile(path.join(directory,'.branch-review-owner'),'branch-review-release/v1'); }
@@ -34,10 +35,13 @@ export async function publish(record, { local, repo, run, git, store, confirmati
     const health = await fetcher(target + '/up',{cache:'no-store',signal:AbortSignal.timeout(15000)});
     if (!health.ok) throw new Error('Published health check failed.');
     record.delivery.stage = 'published'; record.delivery.publishedAt = new Date().toISOString(); record.delivery.build = build;
+    if(muse)muse.prepare(record);
     await store.event(record,'published',{commit:sha,target});
   } catch (error) {
     record.delivery.stage = 'deployment-needs-inspection'; record.delivery.error = error.message;
     await store.event(record,'deployment-needs-inspection',{error:error.message}); throw error;
   }
+  // A failed QA handoff must never turn a successful deployment into a failed release.
+  if(muse)await muse.dispatch(record);
   return record.delivery;
 }

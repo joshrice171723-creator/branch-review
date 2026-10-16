@@ -10,6 +10,7 @@ import {ReviewJobs,configuredChecks,scrub} from './jobs.mjs';
 import {publishedAction,publishedComplete} from './published-review.mjs';
 import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
+import { MuseQa } from './muse-qa.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
 import { reviewReport } from './report.mjs';
 import { previewHealth } from './health.mjs';
@@ -17,6 +18,7 @@ import { previewHealth } from './health.mjs';
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false;
 const store = await new ReviewStore(local).load();
+const muse=new MuseQa(local,store);
 const plans=new PlanStore(local);
 const jobs=await new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,changedCwd:()=>path.join(previewRoot,state.changed?.runtime || 'changed'),prepareNext:async sha=>{
   const branch=(await branches()).find(branch=>branch.sha===sha);if(!branch)throw new Error('Choose a current branch.');
@@ -116,7 +118,8 @@ async function mutate(endpoint, data) {
     if (data.confirmation !== `MERGE ${record.identity.changed} TO origin/main`) throw new Error('Confirm the exact commit before merge and push.');
     return delivery.push(record,record.identity.changed);
   }
-  if (endpoint === '/api/publish') return publish(record,{local,repo,run,git,store,toolchain,confirmation:data.confirmation});
+  if (endpoint === '/api/publish') return publish(record,{local,repo,run,git,store,toolchain,muse,confirmation:data.confirmation});
+  if(endpoint==='/api/retry-muse')return muse.dispatch(record);
   if (endpoint === '/api/retry-publish') {
     if (record.delivery?.stage !== 'deployment-needs-inspection' || typeof data.note !== 'string' || data.note.trim().length < 10) throw new Error('Record your inspection of the failed release and recovery artifacts before enabling a retry.');
     record.delivery.stage='pushed'; return store.event(record,'release-retry-enabled',{note:data.note.slice(0,2000)});
@@ -135,6 +138,7 @@ const longActions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','
 actions.add('/api/published-review');
 actions.add('/api/tools-settings');
 actions.add('/api/fix-commit');
+actions.add('/api/retry-muse');
 const server=http.createServer(async(req,res)=>{
   try {
     if(req.headers.host!==`127.0.0.1:${port}`) return json(res,403,{error:'Invalid host'});
@@ -188,3 +192,10 @@ await restoreReview();state.prepared=JSON.parse(await readFile(path.join(local,'
 for(const [side,slot] of Object.entries(slots).filter(([side])=>side!=='standby')) { const proxy=previewProxy(side,slot,()=>state,origin);proxy.on('error',error=>{console.error(error.message);process.exit(1);});proxy.listen(slot.proxy,'127.0.0.1'); }
 server.on('error',error=>{console.error(error.message);process.exit(1);});
 server.listen(port,'127.0.0.1',()=>console.log(`Branch Review: ${origin}`));
+let checkingMuse=false;
+setInterval(async()=>{
+  if(busy || checkingMuse)return;checkingMuse=true;
+  try{for(const record of store.records.filter(record=>record.museQa && ['published','verified'].includes(record.delivery?.stage) && !['completed','result_confirmed','blocked'].includes(record.museQa.status))){
+    try{await muse.refresh(record);}catch{record.museQa.statusError='Office status is temporarily unavailable; the last reported state is shown.';await store.persist();}
+  }}finally{checkingMuse=false;}
+},15000).unref();

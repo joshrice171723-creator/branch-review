@@ -31,6 +31,18 @@ function harness(t, options = {}) {
   return {elements,state,view,calls,saved,switchSide(next){side=next;view.viewChanged();}};
 }
 
+test('successful Publish opens Office automatically once, and handoff failure stays visible',async t=>{
+  const h=harness(t),opened=[];
+  window.desktop.openPublished=async url=>opened.push(url);globalThis.confirm=()=>true;
+  h.state.publishTarget='https://aimetaclinic.com';h.state.record.delivery={stage:'pushed'};
+  h.elements.publish.onclick();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(opened.length,0);
+  h.state.record.delivery.stage='published';h.state.record.museQa={status:'handoff-failed',error:'Connection unavailable'};
+  h.view.render(h.state);h.view.render(h.state);
+  assert.deepEqual(opened,['https://aimetaclinic.com/qa?view=office']);
+  assert.equal(h.elements['retry-muse'].hidden,false);assert.match(h.elements['muse-qa-state'].textContent,/Connection unavailable/);
+});
+
 test('finding drafts stay with their exact review, scenario and side; screenshots never cross sides', async t => {
   const h = harness(t), {elements:e,view,state} = h;
   e.expected.value='Changed expectation';e.actual.value='Changed observation';e.expected.oninput();
