@@ -150,7 +150,8 @@ test('retest drafts recover after remount and failed item saves block approval',
   h.view.render(h.state);
   // Recreate the original event handlers before testing a failed save.
   const failing=workflow({api:async(path)=>{h.calls.push({path});if(path==='/api/item')throw Error('Disk unavailable');return [];},getState:()=>h.state,getSide:()=> 'changed',error:()=>{},poll:async()=>{},reopen:()=>{}});failing.render(h.state);
-  e['item-notes'].value='Unsaved approval context';e['item-notes'].oninput();await e.approve.onclick();
+  h.state.record.issues=[];for(const item of h.state.record.manifest.scenarios)item.steps.forEach((_,i)=>h.state.record.checks[`${item.id}:${i}`]=true);
+  e.reviewer.value='Josh';e['item-notes'].value='Unsaved approval context';e['item-notes'].oninput();await e.approve.onclick();
   assert.equal(h.calls.some(call=>call.path==='/api/approve'),false);
 });
 
