@@ -90,3 +90,11 @@ Resumed-chat dispatch has boundary tests; the real handoff acceptance used a new
 ## 0.4.2 — isolate generated plans
 
 Plan generation now creates a detached checkout at the exact reviewed commit. Codex and its indexing tools run there, away from both active previews. The checkout is retained for diagnosis. A regression deliberately edits AGENTS.md in that checkout and verifies the active preview content, HEAD and Git index remain unchanged. All 60 automated tests pass. Packaged desktop acceptance is pending.
+
+## 0.4.3 — interview demo destinations
+
+Guided plans now support the public homepage, /meta-clinic and /demo without forcing a development login. The same destination boundary validates plans, preview routing and published desktop links. Open Office checks the exact published revision before opening the hosted workflow grid.
+
+All 62 automated tests pass and the Windows package builds. Native desktop acceptance compares main f0a0e74 with Meta Clinic demo db234c81: Original has the rust hero button; Changed has the purple hero button. The toggle retains the same screen, keyboard focus is visible, Enter opens sandbox account selection, Reset item returns home, and Next preserves unfinished checks. Screenshots are in ../desktop-verification/interview-*.png. The initial native test found a shared marketing CSS override; the demo branch fixes it and corrects the original-color instructions.
+
+Muse's two existing tunnels were restored after Joshua directly re-enabled them. Both connectors respond, a fresh authenticated Office check-in advanced revision 454 to 455, and the exact-build inbox exchange returned Muse's acknowledgment at 2026-10-16T02:57:30Z. This is connection/handoff evidence, not a QA verdict. Recurring QA and the standing heartbeat remain off. Inbox delivery alone does not wake Muse; a post-publish assignment must be followed by an active Muse turn. Publishing and the live activity pulse remain pending Joshua's review and release.

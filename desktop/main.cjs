@@ -75,7 +75,8 @@ async function launch() {
     const png = await window.webContents.capturePage(rect);
     return png.toDataURL();
   });
-  ipcMain.handle('review:open-published',async(event,url)=>{trusted(event);const destination=new URL(url);if(destination.origin!=='https://aimetaclinic.com'||destination.username||destination.password||!/^\/(clinic(?:\/|$)|qa$)/.test(destination.pathname))throw new Error('Choose a Meta Clinic workflow URL.');await shell.openExternal(destination.href);});
+  const { isReviewDestination } = await import(pathToFileURL(path.join(root, 'public/preview-routes.js')).href);
+  ipcMain.handle('review:open-published',async(event,url)=>{trusted(event);const destination=new URL(url);if(destination.origin!=='https://aimetaclinic.com'||destination.username||destination.password||!isReviewDestination(url.slice(destination.origin.length)))throw new Error('Choose a Meta Clinic workflow URL.');await shell.openExternal(destination.href);});
   ipcMain.handle('review:release-files', async event => {
     trusted(event);
     const key = await dialog.showOpenDialog(window, { title: 'Select the existing Lightsail SSH key', properties: ['openFile'] });

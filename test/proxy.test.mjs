@@ -91,6 +91,10 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
   state.manifest={scenarios:[{id:'chart',path:'/clinic/patients/:patientId#chart'}]};
   const bootstrap=await fetch(origin+'/__review/start?scenario=chart').then(r=>r.text());
   assert.match(bootstrap,/\/clinic\/patients\/3#chart/);
+  state.manifest={scenarios:[{id:'homepage',path:'/demo',originalPath:'/'}]};
+  const homepage=await fetch(origin+'/__review/start?scenario=homepage').then(r=>r.text());
+  assert.match(homepage,/"path":"\/","public":true/);
+  assert.match(homepage,/if \(scenario.public === true\) \{ location.replace\(scenario.path\); return; \}/);
   assert.equal((await fetch(origin+'/__review/start?scenario=unknown')).status,400);
   const document=await fetch(origin+'/document').then(r=>r.text());
   assert.match(document,/review:context/);assert.match(document,/<body>Clinic<\/body>/);

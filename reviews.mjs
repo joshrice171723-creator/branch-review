@@ -3,9 +3,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { qaManifest } from './qa-manifest.mjs';
 import { canApprove, reviewCounts } from './public/review-model.js';
+import { isReviewDestination } from './public/preview-routes.js';
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const defaultManifest = { version: 1, title: 'Jordan Review · intake', scenarios: [{ id: 'intake', title: 'Partially completed intake', path: ':intake', focus: 'Guided intake · staff assisted', steps: ['Compare the answer controls in Original and Changed.', 'Edit and save an answer in Changed.', 'Confirm Original retains its previous answer.', 'Reopen Changed and confirm the saved answer persists.'] }] };
-export function scenarioRecipe(files = []) { return files.includes('apps/api/app/services/qa/office_qa.rb') ? 'qa-scenario.rb' : 'scenario.rb'; }
+export function scenarioRecipe(files = []) { return files.some(file => ['apps/api/app/services/qa/office_qa.rb','apps/web/src/features/qa/QaOfficeQa.tsx'].includes(file)) ? 'qa-scenario.rb' : 'scenario.rb'; }
 export function manifestForFiles(files = []) {
   return scenarioRecipe(files) === 'qa-scenario.rb' ? qaManifest : {...defaultManifest,summary:'Starter intake comparison. Confirm these checks cover this branch before approving it.',source:'Built-in intake scenario. No branch-specific review plan was supplied.'};
 }
@@ -16,8 +17,7 @@ export function validateManifest(value) {
     if (!/^[a-z0-9-]{1,60}$/.test(item.id) || ids.has(item.id)) throw new Error('Scenario IDs must be unique lowercase names.');
     ids.add(item.id);
     if (typeof item.title !== 'string' || !item.title.trim() || item.title.length > 160) throw new Error('Each scenario needs a short title.');
-    if (typeof item.path !== 'string' || !(item.path === ':intake' || /^\/(?:clinic(?:[/?#]|$)|qa(?:[?#]|$))/.test(item.path)) || /[\\\r\n]|%5c/i.test(item.path) || item.path.length > 500) throw new Error('Scenario destinations must stay inside /clinic or /qa.');
-    if (item.path !== ':intake' && !/^(?:\/clinic(?:\/|$)|\/qa$)/.test(new URL(item.path, 'http://localhost').pathname)) throw new Error('Scenario destinations must stay inside /clinic or /qa.');
+    if (item.path !== ':intake' && !isReviewDestination(item.path)) throw new Error('Scenario destinations must stay inside /clinic, /qa, /, /meta-clinic or /demo.');
     if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 20 || item.steps.some(s => typeof s !== 'string' || !s.trim() || s.length > 500)) throw new Error('Each scenario needs 1–20 short test steps.');
     for (const field of ['description','instructions','expected']) if (item[field] !== undefined && (typeof item[field] !== 'string' || item[field].length > 2000)) throw new Error('Item descriptions must be text up to 2,000 characters.');
     if (item.focus !== undefined && (typeof item.focus !== 'string' || item.focus.length > 160)) throw new Error('Item focus must be a short row identifier or heading.');

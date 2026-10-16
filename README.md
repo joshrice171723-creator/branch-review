@@ -94,7 +94,7 @@ The pilot branch `codex/intake-completion-ui` compares `8968d0b8` with `a4948139
 
 Add `.branch-review.json` to a branch to name affected routes and checks. It is read from the exact committed candidate and validated before preview preparation. Without a manifest, changes to `apps/api/app/services/qa/office_qa.rb` use the six-item QA coverage plan; other branches use a clearly labeled starter intake plan. This is explicit mapping, not general impact discovery. Confirm the starter checks cover the actual change before approval.
 
-Versions 1 and 2 support 1–100 review items, each with 1–20 checks. The JSON file is limited to 64 KB. Paths stay under `/clinic` or the `/qa` page. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers. `originalPath` optionally provides a different destination for Original. `focus` matches a table row's first-cell identifier or an exact heading label. Keep item IDs stable across fixes so unresolved findings carry forward correctly. The manifest guides navigation and testing; it does not execute scripts or create arbitrary seed data.
+Versions 1 and 2 support 1–100 review items, each with 1–20 checks. The JSON file is limited to 64 KB. Paths stay under `/clinic`, on `/qa`, or on the explicit public pages `/`, `/meta-clinic` and `/demo` (including query strings and anchors). Public pages open directly without development login in both previews; the existing isolated recipes still prepare clinic and QA starting data. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers. `originalPath` optionally provides a different destination for Original. `focus` matches a table row's first-cell identifier or an exact heading label. Keep item IDs stable across fixes so unresolved findings carry forward correctly. The manifest guides navigation and testing; it does not execute scripts or create arbitrary seed data.
 
 ```json
 {
@@ -114,6 +114,8 @@ Versions 1 and 2 support 1–100 review items, each with 1–20 checks. The JSON
 ```
 
 ## Validation
+
+After publishing, **Review tools → Published review → Open Office** verifies that the hosted build matches the reviewed commit and opens `https://aimetaclinic.com/qa?view=office`. It opens Office without starting a Muse run or recording a QA result.
 
 ```powershell
 npm test

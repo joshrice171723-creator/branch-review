@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,rename,rmdir,readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {ReviewStore,defaultManifest,validateManifest,scenarioPath,manifestForFiles,scenarioRecipe} from '../reviews.mjs';
+import {isReviewDestination,previewDestination} from '../public/preview-routes.js';
 await mkdir('.local',{recursive:true});
 const snapshot = {repository:'test',comparison:{branch:{ref:'refs/heads/feature',sha:'b',subject:'Intake'}},original:{sha:'a'},changed:{sha:'b'}};
 test('review approval persists and changes invalidate it; new revisions carry unresolved findings',async()=>{
@@ -28,11 +29,27 @@ test('review approval persists and changes invalidate it; new revisions carry un
 test('scenario destinations and identifiers are constrained',()=>{
   const files=['apps/api/app/services/qa/office_qa.rb'];
   assert.equal(scenarioRecipe(files),'qa-scenario.rb');
+  assert.equal(scenarioRecipe(['apps/web/src/features/qa/QaOfficeQa.tsx']),'qa-scenario.rb');
   assert.equal(validateManifest(manifestForFiles(files)).scenarios[0].path,'/qa?view=coverage');
   assert.equal(scenarioRecipe([]),'scenario.rb');
   assert.equal(scenarioPath({path:'/clinic/patients/:patientId/encounters/:encounterId#intake'},{path:'/clinic/patients/3/encounters/1'}),'/clinic/patients/3/encounters/1#intake');
   for(const destination of ['https://evil.test','//evil.test','/clinic/../admin','/clinic/%2e%2e/admin','/clinic\\evil']) assert.throws(()=>validateManifest({version:1,scenarios:[{id:'test',title:'Test',path:destination,steps:['Test']}]}),/inside/);
   assert.throws(()=>validateManifest({...defaultManifest,scenarios:[defaultManifest.scenarios[0],defaultManifest.scenarios[0]]}),/unique/);
+});
+
+test('public review routes support Original and Changed while rejecting traversal and outside URLs',()=>{
+  const item={id:'homepage',title:'Homepage sandbox button',path:'/demo?source=review#start',originalPath:'/',steps:['Compare the sandbox button.']};
+  const manifest=validateManifest({version:2,scenarios:[item]});
+  assert.equal(manifest.scenarios[0].originalPath,'/');
+  const state={original:{scenario:{path:'/clinic/patients/3/encounters/1'}},changed:{scenario:{public:true,path:'/qa'}}};
+  assert.equal(previewDestination(item,'original',state),'/');
+  assert.equal(previewDestination(item,'changed',state),'/demo?source=review#start');
+  assert.equal(scenarioPath({path:'/meta-clinic'},undefined),'/meta-clinic');
+  for(const route of ['/','/?source=review#sandbox','/meta-clinic','/demo','/qa?view=office','/clinic/patients/3'])assert.equal(isReviewDestination(route),true,route);
+  for(const route of ['https://evil.test','//evil.test','/meta-clinic/other','/demo/other','/admin','/clinic/../','/clinic/%2e%2e/demo','/clinic/.%2e/qa','/clinic/%5cadmin','/qa/../','/demo\\evil','/clinic\t/other']){
+    assert.equal(isReviewDestination(route),false,route);
+    assert.throws(()=>validateManifest({version:2,scenarios:[{...item,originalPath:route}]}),/inside/);
+  }
 });
 
 test('a failed disk write cannot leave a checked result or approval in memory',async()=>{

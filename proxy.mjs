@@ -1,7 +1,8 @@
 import http from "node:http";
 import { scrollBridge } from './scroll-bridge.mjs';
 import { reviewShortcut } from './public/shortcuts.js';
-import { defaultManifest, scenarioPath } from './reviews.mjs';
+import { defaultManifest } from './reviews.mjs';
+import { previewDestination, isPublicDestination } from './public/preview-routes.js';
 import {reviewToolsBridge} from './review-tools-bridge.mjs';
 import {readFile} from 'node:fs/promises';
 
@@ -68,13 +69,14 @@ export function previewProxy(side, slot, getState, appOrigin) {
       const manifest = current.manifest || defaultManifest;
       const scenario = manifest.scenarios.find(s => s.id === (url.searchParams.get('scenario') || manifest.scenarios[0].id));
       if (!scenario) return res.writeHead(400).end('Unknown test scenario');
+      const destination = previewDestination(scenario, side, current);
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "Content-Security-Policy": `frame-ancestors ${appOrigin}`,
       });
       res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Open review item</title></head><body style="font:16px Segoe UI;padding:40px;color:#283a39"><p id="status">Opening the review screen…</p><script>
-        const scenario = ${escapeJSON({...preview.scenario, path: scenarioPath({...scenario,path:side==='original' && scenario.originalPath ? scenario.originalPath : scenario.path}, preview.scenario)})};
+        const scenario = ${escapeJSON({...preview.scenario, path: destination, public: preview.scenario.public === true || isPublicDestination(destination)})};
         (async () => {
           if (scenario.public === true) { location.replace(scenario.path); return; }
           const csrf = await fetch('/api/csrf').then(async r => { if (!r.ok) throw Error('Could not establish a session.'); return r.json(); });
