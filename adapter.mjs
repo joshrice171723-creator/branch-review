@@ -290,12 +290,18 @@ export async function startReview(ref, baseline, baselineCommit, preparedReview)
     const selected = preparedReview?.comparison || await comparison(ref, baseline, baselineCommit);
     const changedSha = preparedReview?.integration.sha || selected.branch.sha;
     Object.assign(state, { comparison: selected, integration: preparedReview?.integration || null });
-    state.original = await prepare("original", selected.base);
-    let runtime=previousRuntime;
+    let runtime=previousRuntime==='changed'?'standby':'changed';
+    for(const candidate of [previousRuntime,runtime]){
+      const head=await run('git',['rev-parse','HEAD'],{cwd:path.join(previewRoot,candidate)}).catch(()=>'');
+      if(head===changedSha){runtime=candidate;break;}
+    }
     if(state.prepared?.sha===changedSha && state.prepared.recipe===scenarioRecipe(selected.files))runtime=state.prepared.runtime;
-    state.changed = {...await prepare(runtime, changedSha),side:'changed',proxy:slots.changed.proxy};
-    state.status = "ready";
-    progress("Both previews are ready");
+    const prepared=await Promise.allSettled([prepare('original',selected.base,selected.files),prepare(runtime,changedSha,selected.files)]);
+    const failed=prepared.find(result=>result.status==='rejected');if(failed)throw failed.reason;
+    state.original=prepared[0].value;
+    state.changed = {...prepared[1].value,side:'changed',proxy:slots.changed.proxy};
+    state.status = preparedReview?.deferReady?'preparing':'ready';
+    progress(preparedReview?.deferReady?'Previews ready; finishing checklist':'Both previews are ready');
     await writeFile(
       path.join(local, "review.json"),
       JSON.stringify(

@@ -2,6 +2,8 @@
 
 A Windows desktop app for reviewing local Git branches. Meta Clinic is the first supported preview adapter.
 
+Selecting a branch immediately shows its commit summary. After checking GitHub main, checklist generation and both previews prepare concurrently. Review controls unlock only when all preparation succeeds. Two Changed preview slots retain recent branches; returning to an unchanged, healthy cached version reuses its running services and saved checklist. A new main revision, changed source, stopped services, or a changed seed recipe can still require preparation. Opening a third distinct version replaces the older slot; Stop previews stops all three runtimes, including Original.
+
 ## Open
 
 Run `../desktop/Branch Review-win32-x64/Branch Review.exe`. Keep the executable with the rest of that folder. The pilot restores the running preview pair and its saved review. This is a local unsigned build; Meta Clinic's development prerequisites remain required.

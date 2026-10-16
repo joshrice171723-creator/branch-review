@@ -3,6 +3,7 @@ import { reviewShortcut, refreshedSelection, selectedReviewState } from './short
 import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
+const openingSummary=document.createElement('p');openingSummary.id='opening-summary';$('phase').before(openingSummary);
 let allBranches = [],
   selected = null, openingSelection = null,
   token = "",
@@ -215,6 +216,7 @@ async function openBranch(branch) {
   if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha)return;
   if(!await reviewWorkflow.flush())return;
   openingSelection={...branch,starting:true};selected=branch;selectedComparison=null;
+  openingSummary.textContent=`${branch.subject} · ${branch.name} · ${branch.sha.slice(0,7)}`;
   try{sessionStorage.setItem('branch-review:opening',JSON.stringify(openingSelection));}catch{}
   $('frames').hidden=true;$('frames').replaceChildren();frameKey='';
   $('review-workflow').hidden=true;$('review-branch-status').hidden=true;$('branch-brief').hidden=true;
@@ -352,7 +354,7 @@ async function poll() {
     $("frames").hidden = !ready;
     $("phase").textContent = currentState.phase;
     $('loading-label').textContent=currentState.status==='stopping'?'STOPPING PREVIEWS':'PREPARING YOUR WORKSPACE';
-    $('loading-description').textContent=currentState.status==='stopping'?'Saved reviews and preview databases will be kept.':'First startup installs dependencies and prepares a database for each version.';
+    $('loading-description').textContent=currentState.status==='stopping'?'Saved reviews and preview databases will be kept.':'Checklist and previews prepare together. The two most recent branch previews stay available for reuse.';
     $('diagnostic-log').textContent=currentState.log.map(entry=>`${entry.at} ${entry.message}`).join('\n')+(currentState.error?`\n${currentState.error}`:'');
     $("progress").textContent =
       currentState.log.map((entry) => entry.message).join("\n") +

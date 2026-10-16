@@ -17,5 +17,5 @@ export function selectedReviewState(state, selection) {
   const loading=selection.starting || state.busy;
   return {...state,record:null,manifest:null,original:null,changed:null,comparison:null,
     status:loading?'preparing':'error',busy:!!loading,
-    phase:`Opening ${selection.name}…`,error:loading?null:state.error || 'Could not open this branch. Click it to retry.'};
+    phase:loading && state.busy?state.phase:`Opening ${selection.name}…`,error:loading?null:state.error || 'Could not open this branch. Click it to retry.'};
 }

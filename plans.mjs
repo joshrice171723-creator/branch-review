@@ -3,6 +3,13 @@ import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {itemStatus} from './public/review-model.js';
 
+export async function prepareTogether(previews, checklist) {
+  const results=await Promise.allSettled([previews(),checklist()]);
+  const failed=results.find(result=>result.status==='rejected');
+  if(failed)throw failed.reason;
+  return results[1].value;
+}
+
 export class PlanStore {
   constructor(directory){this.directory=directory;}
   file(sha){if(!/^[a-f0-9]{40}$/.test(sha))throw new Error('An exact commit is required.');return path.join(this.directory,'plans',sha+'.json');}

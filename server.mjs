@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario } from './adapter.mjs';
 import { previewProxy } from './proxy.mjs';
 import { ReviewStore, scenarioRecipe, digest } from './reviews.mjs';
-import { loadPlan, candidateComparison, PlanStore, branchUpdate, branchRelationships, retestAdvice } from './plans.mjs';
+import { loadPlan, candidateComparison, PlanStore, branchUpdate, branchRelationships, retestAdvice, prepareTogether } from './plans.mjs';
 import {ReviewJobs,configuredChecks,scrub} from './jobs.mjs';
 import {publishedAction,publishedComplete} from './published-review.mjs';
 import { Delivery } from './delivery.mjs';
@@ -40,11 +40,11 @@ async function startCandidate(ref, previousReviewId) {
   const integration=await delivery.prepare(ref,selected.branch.sha,previous);
   const combined=await candidateComparison(git,selected,integration);
   if(!combined.files.length)throw Error('This branch has no application changes left to review against GitHub main. Its old checklist is no longer part of the code.');
-  progress('Generating checklist from branch changes');
-  let plan=await plans.get(integration.sha);
-  if(!plan){plan=await jobs.generatePlan(integration.main,integration.sha,combined.files,combined.plan);await plans.save(integration.sha,plan);}
-  combined.plan=plan;
-  await startReview(ref,'main',undefined,{comparison:combined,integration});
+  combined.plan=await prepareTogether(
+    async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true});if(state.status==='error')throw Error(state.error);},
+    async()=>{let plan=await plans.get(integration.sha);if(!plan){progress('Generating checklist while previews prepare');plan=await jobs.generatePlan(integration.main,integration.sha,combined.files,combined.plan);await plans.save(integration.sha,plan);}return plan;}
+  );
+  state.status='ready';progress('Checklist and previews are ready');
   await activate(previousReviewId);
 }
 async function activate(previousReviewId) {
