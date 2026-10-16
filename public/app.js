@@ -304,8 +304,8 @@ async function poll() {
     reviewWorkflow.render(currentState);
     const reviewedBranch=allBranches.find(branch=>[branch.ref,...branch.aliases].includes(currentState.record?.identity.ref));
     const reviewedRelease=currentState.record?.delivery;
-    const published=reviewedRelease?.stage==='published' && reviewedRelease.commit===currentState.record?.identity.changed;
-    $('review-branch-status').hidden=!currentState.record || currentState.record.cursor?.view==='results';
+    const published=['published','verified'].includes(reviewedRelease?.stage) && reviewedRelease.commit===currentState.record?.identity.changed;
+    $('review-branch-status').hidden=published || !currentState.record || currentState.record.cursor?.view==='results';
     $('review-branch-status').textContent=currentState.record ? `${published?'Published':reviewedBranch?.merged && reviewedBranch.sha===currentState.record.identity.source?'Merged into main':'Reviewing'} · ${currentState.record.identity.ref.replace(/^refs\/(heads|remotes)\//,'')} · ${currentState.record.identity.changed.slice(0,7)}${published?' — completed review; choose another branch to review new work.':''}`:'';
     reviewTools.render(currentState);
     renderFocusStatus();

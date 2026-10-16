@@ -4,7 +4,7 @@ import {itemStatus,statusLabels,reviewCounts} from './public/review-model.js';
 export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 export async function reviewReport(record, directory) {
   const counts=reviewCounts(record),h=escapeHTML;
-  const findings=await Promise.all(record.issues.map(async issue=>{
+  const findings=await Promise.all([...record.issues,...(record.publishedFindings || [])].map(async issue=>{
     let evidence='';
     if(/^[a-f0-9-]{36}\.png$/.test(issue.screenshot || '')){
       const image=await readFile(path.join(directory,'screenshots',issue.screenshot)).catch(()=>null);

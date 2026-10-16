@@ -167,9 +167,9 @@
             <div class="item-heading"><span id="item-number" class="eyebrow"></span><span id="item-status" class="item-status"></span></div>
             <h2 id="item-title"></h2>
             <p id="item-description"></p>
-            <h3>What to do</h3><p id="item-instructions"></p>
-            <h3>Expected result</h3><p id="item-expected"></p>
-            <div id="checks"></div>
+            <p id="item-instructions"></p>
+            <details><summary>Expected result</summary><p id="item-expected"></p></details>
+            <p class="small muted">Check means passed. Leave untested checks empty; use Needs fixes to report a failure.</p><div id="checks"></div>
             <label class="field-label" for="item-notes">Notes</label>
             <textarea id="item-notes" maxlength="4000" placeholder="What did you observe?"></textarea>
             <label class="field-label" for="item-outcome">Outcome</label>
@@ -183,7 +183,8 @@
             <h2 id="results-title">Your review summary</h2>
             <p id="results-counts"></p><p id="results-message"></p>
             <button id="results-action" class="primary">Continue remaining checks</button><p id="results-action-detail" class="small muted"></p>
-            <details id="results-checks"><summary>Review checks</summary><div id="result-items"></div></details>
+            <button id="published-report" class="secondary" hidden>Report a problem</button><p id="published-findings-status" class="small" role="status" hidden></p>
+            <details id="published-findings" hidden><summary>Reported problems</summary><div id="published-findings-list"></div></details><details id="results-checks"><summary id="results-checks-label">Review checks</summary><div id="result-items"></div></details>
             <details id="results-options"><summary>More options</summary></details>
             <button id="resume-review" class="primary">Continue remaining checks</button>
             <button id="export-review" class="secondary">View / export review report</button>
@@ -245,6 +246,7 @@
         </p>
       </aside>
     </main>
+    <dialog id="published-problem" aria-labelledby="published-problem-title"><header class="dialog-heading"><h2 id="published-problem-title">Report a published problem</h2><button id="close-published-problem" class="quiet">Close</button></header><p class="small">This creates a new finding. Your completed review and approval stay unchanged.</p><form id="published-problem-form"><label for="published-problem-item">Review item</label><select id="published-problem-item"></select><label for="published-expected">Expected behavior</label><textarea id="published-expected" maxlength="4000" required></textarea><label for="published-actual">What went wrong?</label><textarea id="published-actual" maxlength="4000" required></textarea><button id="published-problem-save" class="primary">Save finding</button><p id="published-problem-status" role="status"></p></form></dialog>
     <dialog id="problem-dialog" aria-labelledby="problem-title"><header class="dialog-heading"><h2 id="problem-title">Report a problem</h2><button id="close-problem" class="quiet">Close</button></header><button id="problem-evidence" class="secondary">Add evidence: screenshot, recording or replay</button><p id="problem-status" role="status"></p></dialog>
     <dialog id="diff-dialog" aria-labelledby="diff-title"><header class="dialog-heading"><h2 id="diff-title">Code changes</h2><button id="close-diff" class="quiet">Close</button></header><p id="diff-identity" class="small"></p><label for="diff-files" class="field-label">Changed file</label><select id="diff-files"></select><p id="diff-warning" role="status" class="small"></p><pre id="diff-patch"></pre></dialog>
     <dialog id="report-dialog" aria-labelledby="report-title"><header class="dialog-heading"><h2 id="report-title">Saved review report</h2><a id="download-report" class="quiet" download>Download with screenshots</a><button id="close-report" class="quiet">Close</button></header><iframe id="report-frame" title="Saved review report" sandbox="allow-same-origin"></iframe></dialog>

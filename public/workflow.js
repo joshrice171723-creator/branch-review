@@ -1,6 +1,6 @@
 import { findingKey, loadDraft, saveDraft } from './drafts.js';
 import { guided } from './guided.js';
-import { canApprove,deliveryStep } from './review-model.js';
+import { canApprove,deliveryStep,isPublished } from './review-model.js';
 import { previewDestination } from './preview-routes.js';
 const $ = id => document.getElementById(id);
 const node = (tag, text, className) => { const el = document.createElement(tag); el.textContent = text; if (className) el.className = className; return el; };
@@ -87,6 +87,18 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     } catch(e) { error(e.message); }
     finally { savingFinding = false; await poll(); }
   };
+  $('published-report').onclick=()=>{
+    const r=getState().record;
+    $('published-problem-item').replaceChildren(...r.manifest.scenarios.map(item=>{const option=node('option',item.title);option.value=item.id;return option;}));
+    $('published-problem-status').textContent='';$('published-problem').showModal();
+  };
+  $('close-published-problem').onclick=()=>$('published-problem').close();
+  $('published-problem-form').onsubmit=async event=>{
+    event.preventDefault();const r=getState().record,button=$('published-problem-save');if(button.disabled)return;
+    button.disabled=true;$('published-problem-status').textContent='Saving…';
+    try{await api('/api/issue',{id:r.id,scenario:$('published-problem-item').value,side:'published',expected:$('published-expected').value,actual:$('published-actual').value,location:getState().publishTarget});$('published-problem-form').reset();$('published-problem-status').textContent='Finding saved. Completed review unchanged.';await poll();}
+    catch(e){$('published-problem-status').textContent='Save failed: '+e.message;}finally{button.disabled=false;}
+  };
   $('approve').onclick = () => act('approve', {reviewer:$('reviewer').value});
   $('results-action').onclick=async()=>{
     const state=getState(),r=state.record;
@@ -151,13 +163,26 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('repository-path').title = state.repository;
     const r=state.record, enabled=state.status==='ready' && !!r && !state.busy;
     guide.render(state);
+    const published=isPublished(r);
+    $('published-report').hidden=!published;
+    $('published-findings-status').hidden=!published;
+    $('published-findings-status').textContent=r?.publishedFindings?.length?`${r.publishedFindings.length} published finding(s) saved`:' ';
+    $('results-counts').hidden=published;
+    $('results-options').hidden=published;
+    $('results-checks-label').textContent=published?'Completed review':'Review checks';
+    if(published)$('results-checks').append($('export-review'));else $('results-options').append($('export-review'));
+    $('review-context').hidden=published;
+    $('branch-brief').hidden=published;
+    $('published-findings').hidden=!published || !r?.publishedFindings?.length;
+    if(published)$('published-findings-list').replaceChildren(...(r.publishedFindings||[]).map(finding=>{const row=node('article','','finding');row.append(node('strong',finding.scenario),node('p',finding.actual),node('small',`Expected: ${finding.expected}`));return row;}));
+    if(published){$('prepare-handoff').hidden=true;$('handoff-panel').hidden=true;$('results-message').hidden=true;}
     if(r){const step=deliveryStep(r,state.releaseConfigured);$('results-action').textContent=step.label;$('results-action-detail').textContent=step.detail;$('results-action').disabled=!enabled || !step.action || step.action==='release-settings' && !window.desktop;}
     if(r){
       const stage=r.delivery?.stage,done=['published','verified'].includes(stage),approved=canApprove(r) && !!r.approval && r.integration?.sha===r.identity.changed;
       $('results-title').textContent=done?'Published':stage==='deploying'?'Publishing…':delivering?'Merging…':approved?'Ready to publish':'Your review summary';
       $('results-action-detail').hidden=true;
       $('approval-section').hidden=!!r.approval;
-      $('review-notice').hidden=r.cursor?.view==='results';
+      $('review-notice').hidden=published || r.cursor?.view==='results';
       if(done){$('results-action').textContent='Watch Muse in Office';$('results-action').disabled=!enabled || !window.desktop;}
       else if(approved && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(stage)){$('results-action').textContent=stage==='deploying'?'Publishing…':delivering?'Merging…':stage==='pushed'?'Publish':'Merge & publish';$('results-action').disabled=!enabled || delivering;}
     }
@@ -185,7 +210,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
       const complete = r.manifest.scenarios.reduce((sum,s)=>sum+s.steps.filter((_,i)=>r.checks[`${s.id}:${i}`]).length,0);
       $('review-progress').textContent = `${complete} of ${total} checks passed · ${r.issues.filter(i=>i.status!=='resolved').length} open findings`;
       $('checks').replaceChildren(...item.steps.map((step,index)=>{
-        const label=node('label','', 'check'), box=document.createElement('input');box.type='checkbox';box.checked=!!r.checks[`${scenario}:${index}`];box.disabled=!enabled;
+        const label=node('label','', 'check'), box=document.createElement('input');box.type='checkbox';box.checked=!!r.checks[`${scenario}:${index}`];box.disabled=!enabled || published;
         box.onchange=()=>act('check',{scenario,index,passed:box.checked});label.append(box,node('span',step));return label;
       }));
       const visibleFindings=r.issues.filter(issue=>$('finding-filter').value==='current'?issue.scenario===scenario:$('finding-filter').value==='open'?issue.status!=='resolved':true);
@@ -216,7 +241,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     for(const id of ['expected','actual','capture','report']) $(id).disabled=!enabled || savingFinding;
     $('capture').disabled ||= capturing;
     $('report').disabled ||= capturing;
-    $('approve').disabled=!enabled || !canApprove(r);
+    $('approve').disabled=published || !enabled || !canApprove(r);
     $('ship').disabled=!enabled || !r.approval || r.integration?.sha!==r.identity.changed || ['pushed','deploying','published','verified'].includes(r.delivery?.stage);
     $('publish').disabled=!enabled || !r.approval || r.delivery?.stage!=='pushed' || !state.releaseConfigured;
     $('release-settings').disabled=state.busy;

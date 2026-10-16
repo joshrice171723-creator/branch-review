@@ -190,3 +190,26 @@ test('Review fixes enters a scoped queue and Next skips unrelated unfinished wor
   await h.elements['review-fixes'].onclick();assert.equal(h.elements['fix-mode-note'].hidden,false);await h.elements['item-next'].onclick();assert.equal(h.state.record.cursor.itemId,'third');
   h.elements['exit-fix-mode'].onclick();assert.equal(h.elements['fix-mode-note'].hidden,true);assert.equal(h.elements['item-filter'].value,'all');
 });
+
+test('published view replaces editable item and keeps completed review collapsed',async t=>{
+  const h=harness(t),e=h.elements;
+  h.state.record.delivery={stage:'published'};h.state.record.cursor={itemId:'intake',view:'item'};
+  h.state.record.museQa={status:'working',taskId:14};h.view.render(h.state);
+  assert.equal(e['guided-item'].hidden,true);assert.equal(e['guided-results'].hidden,false);
+  assert.equal(e['guided-queue'].hidden,true);assert.equal(e['results-options'].hidden,true);
+  assert.equal(e['results-action'].textContent,'Watch Muse in Office');assert.match(e['muse-qa-state'].textContent,/working/);
+  assert.equal(e['published-report'].hidden,false);assert.equal(e['results-checks-label'].textContent,'Completed review');
+  assert.notEqual(e['results-checks'].open,true);
+  e['published-expected'].value='Centered';e['published-actual'].value='Off center';e['published-problem-item'].value='intake';
+  await e['published-problem-form'].onsubmit({preventDefault(){}});
+  assert.equal(h.calls.find(call=>call.path==='/api/issue').data.side,'published');
+});
+
+test('unsaved outcome updates badge immediately and requires a reason',async t=>{
+  const h=harness(t),e=h.elements;
+  for(let i=0;i<4;i++)h.state.record.checks[`intake:${i}`]=true;
+  h.view.render(h.state);assert.equal(e['item-status'].textContent,'Passed');
+  e['item-outcome'].value='needs-fixes';e['item-outcome'].onchange();
+  assert.equal(e['item-status'].textContent,'Needs fixes · unsaved');
+  assert.equal(await h.view.flush(),false);assert.match(e['item-save'].textContent,/reason/);
+});

@@ -1,3 +1,4 @@
+export const isPublished = record => ["published","verified"].includes(record?.delivery?.stage);
 export const statusLabels = {'not-started':'Not started','in-progress':'In progress',passed:'Passed','needs-fixes':'Needs fixes',blocked:'Blocked','not-applicable':'Not applicable'};
 export function itemStatus(record, item) {
   const saved = record.items?.[item.id] || {};

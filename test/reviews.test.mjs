@@ -63,3 +63,19 @@ test('a failed disk write cannot leave a checked result or approval in memory',a
   await rmdir(destination);await rename(backup,destination);
   await store.check(record.id,'intake',0,true);assert.equal((await new ReviewStore(directory).load()).get(record.id).checks['intake:0'],true);
 });
+
+test('published findings preserve historical approval and carry forward separately',async()=>{
+  const directory=await mkdtemp('.local/published-findings-'),store=await new ReviewStore(directory).load();
+  const r=await store.open(snapshot,defaultManifest,'recipe');
+  for(let i=0;i<4;i++)await store.check(r.id,'intake',i,true);
+  await store.approve(r.id,'Reviewer');r.delivery={stage:'published'};
+  const approval=structuredClone(r.approval),checks=structuredClone(r.checks);
+  await assert.rejects(store.item(r.id,'intake',{outcome:'needs-fixes',notes:'',reason:'New'}),/read-only/);
+  await assert.rejects(store.check(r.id,'intake',0,false),/read-only/);
+  await assert.rejects(store.issue(r.id,{scenario:'intake',side:'changed',expected:'A',actual:'B'}),/read-only/);
+  await store.issue(r.id,{scenario:'intake',side:'published',expected:'A',actual:'B'});
+  assert.deepEqual(r.approval,approval);assert.deepEqual(r.checks,checks);assert.equal(r.issues.length,0);
+  assert.equal(r.publishedFindings[0].side,'published');
+  const next=await store.open({...snapshot,changed:{sha:'c'}},defaultManifest,'recipe');
+  assert.equal(next.issues[0].status,'needs-retest');assert.equal(next.issues[0].commit,'b');
+});
