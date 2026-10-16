@@ -134,7 +134,7 @@ async function loadBranches(refreshSelection=true) {
   $('revision-warning').textContent=reviewed && latest?.sha!==reviewed.source ? latest?`This branch has a new commit (${latest.sha.slice(0,7)}). You are reviewing ${reviewed.source.slice(0,7)}. Open the latest branch to retest; saved results stay attached to their original version.`:'The reviewed branch is no longer listed. Saved evidence remains available.':'';
   const latestSelection=selected && allBranches.find(branch=>branch.ref===selected.ref);
   if(refreshSelection || selected && latestSelection?.sha!==selected.sha){
-    const next=refreshedSelection(allBranches,selected,reviewed?.ref,$('branch-filter').value==='all');
+    const next=(!openingSelection && currentState.status==='ready' && allBranches.find(branch=>[branch.ref,...branch.aliases].includes(reviewed?.ref))) || refreshedSelection(allBranches,selected,reviewed?.ref,$('branch-filter').value==='all');
     if(next)await select(next);else await chooseVisibleBranch();
   }
   else branchList();
@@ -340,8 +340,8 @@ async function poll() {
     const fixRecord=currentState.record;
     fixNotice.hidden=versionHistory.hidden=!fixRecord?.fixComparison;
     if(fixRecord?.fixComparison){
-      const finding=fixRecord.issues.find(issue=>issue.scenario===fixRecord.cursor?.itemId && issue.status!=='resolved');
-      fixNotice.textContent=`Retesting this fix. ${finding?'Requested: '+finding.expected:'Check the affected behavior below.'}`;
+      const findings=fixRecord.issues.filter(issue=>issue.scenario===fixRecord.cursor?.itemId && issue.status!=='resolved');
+      fixNotice.textContent=`Compare before and after this fix. ${findings.length?`${findings.length} saved finding${findings.length===1?'':'s'} to retest.`:'Check the affected behavior below.'}`;
       versionResults.replaceChildren(...(fixRecord.previousResults || []).map(result=>{const p=document.createElement('p');p.textContent=`${result.title} · ${result.status} at ${result.commit.slice(0,7)}`;return p;}));
     }
     for(const side of ['original','changed'])$(side).firstChild.textContent=currentState.record?.fixComparison?(side==='original'?'Before fix ':'After fix '):(side==='original'?'Original ':'Changed ');
