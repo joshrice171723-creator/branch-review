@@ -2,6 +2,7 @@ import { workflow } from './workflow.js';
 import { reviewShortcut } from './shortcuts.js';
 import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
+import {refreshedSelection} from './branch-selection.js';
 const $ = (id) => document.getElementById(id);
 let allBranches = [],
   selected = null,
@@ -113,7 +114,10 @@ async function loadBranches(refreshSelection=true) {
   $('revision-warning').hidden=!reviewed || latest?.sha===reviewed.source;
   $('revision-warning').textContent=reviewed && latest?.sha!==reviewed.source ? latest?`This branch has a new commit (${latest.sha.slice(0,7)}). You are reviewing ${reviewed.source.slice(0,7)}. Open the latest branch to retest; saved results stay attached to their original version.`:'The reviewed branch is no longer listed. Saved evidence remains available.':'';
   const latestSelection=selected && allBranches.find(branch=>branch.ref===selected.ref);
-  if(refreshSelection || selected && latestSelection?.sha!==selected.sha)await chooseVisibleBranch();
+  if(refreshSelection || selected && latestSelection?.sha!==selected.sha){
+    const next=refreshedSelection(allBranches,selected,reviewed?.ref,$('branch-filter').value==='all');
+    if(next)await select(next);else await chooseVisibleBranch();
+  }
   else branchList();
   }finally{inventoryLoading=false;}
 }
@@ -297,6 +301,11 @@ async function poll() {
     token = currentState.token;
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
+    const reviewedBranch=allBranches.find(branch=>[branch.ref,...branch.aliases].includes(currentState.record?.identity.ref));
+    const reviewedRelease=currentState.record?.delivery;
+    const published=reviewedRelease?.stage==='published' && reviewedRelease.commit===currentState.record?.identity.changed;
+    $('review-branch-status').hidden=!currentState.record;
+    $('review-branch-status').textContent=currentState.record ? `${published?'Published':reviewedBranch?.merged && reviewedBranch.sha===currentState.record.identity.source?'Merged into main':'Reviewing'} · ${currentState.record.identity.ref.replace(/^refs\/(heads|remotes)\//,'')} · ${currentState.record.identity.changed.slice(0,7)}${published?' — completed review; choose another branch to review new work.':''}`:'';
     reviewTools.render(currentState);
     renderFocusStatus();
     const ready = currentState.status === "ready";
