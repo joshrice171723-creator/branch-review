@@ -118,9 +118,27 @@ export class ReviewJobs {
     await mkdir(path.dirname(worktree),{recursive:true});await this.git('worktree','add','-b',branch,worktree,record.identity.source);
     job.worktree=worktree;job.branch=branch;await this.save();
     const attachments=record.issues.filter(issue=>issue.status!=='resolved').flatMap(issue=>[issue.screenshot&&/^[a-f0-9-]{36}\.png$/.test(issue.screenshot)?path.join(this.directory,'screenshots',issue.screenshot):null,issue.video&&/^[a-f0-9-]{36}\.webm$/.test(issue.video)?path.join(this.directory,'recordings',issue.video):null].filter(Boolean));
-    const prompt=`Work only in ${worktree} on ${branch}. This is an isolated fix checkout for Branch Review. Preserve unrelated work. Do not merge, publish, push main, or message other chats. Commit fixes on this branch. Do not create or edit .branch-review.json; Branch Review generates and stores checklists separately. The human requested this fix run from Branch Review.\n\n${job.requestText}\n\nCurrent review manifest:\n${JSON.stringify(record.manifest)}\n\nEvidence files (read-only):\n${attachments.join('\n')}`;
+    const prompt=`Work only in ${worktree} on ${branch}. This is an isolated fix checkout for Branch Review. Preserve unrelated work. Edit and validate the requested fix, but do not stage, commit, merge, publish, push, or message other chats. Branch Review owns Git finalization outside your sandbox. Do not edit AGENTS.md or .branch-review.json; Branch Review generates and stores checklists separately. The human requested this fix run from Branch Review. The reported finding's expected behavior supersedes the old checklist when they disagree.\n\n${job.requestText}\n\nPrevious review manifest (historical context, not the new acceptance criteria):\n${JSON.stringify(record.manifest)}\n\nEvidence files (read-only):\n${attachments.join('\n')}`;
     await this.command(job,codex,['-a','never','-C',worktree,'exec','--sandbox','workspace-write',...(input.chatId?['resume',input.chatId]:[]),'--json','--output-last-message',output,'-'],worktree,prompt);
-    job.result=redact(await readFile(output,'utf8')).slice(-12000);job.resultCommit=await this.run('git',['rev-parse','HEAD'],{cwd:worktree});job.dirty=!!await this.run('git',['status','--porcelain'],{cwd:worktree});
-    if(job.dirty || job.resultCommit===job.commit)throw new Error('Codex returned without a clean committed fix. Inspect its result and worktree; the review is not ready.');
+    job.result=redact(await readFile(output,'utf8')).slice(-12000);
+    await this.finalizeFix(job,record.identity.source);
+  }
+  async finalizeFix(job,source){
+    const cwd=job.worktree;
+    if(path.resolve(cwd)!==path.resolve(this.directory,'fixes',job.id) || job.branch!==`branch-review/fixes-${job.id}` || await this.run('git',['branch','--show-current'],{cwd})!==job.branch)throw Error('The fix checkout changed. Your edits are saved; inspect it before retrying.');
+    if(await this.run('git',['rev-parse','HEAD'],{cwd})!==source)throw Error('Codex changed the commit history. Review its commits before continuing.');
+    const files=new Set();
+    for(const args of [['diff','--name-only','-z','HEAD','--'],['ls-files','--others','--exclude-standard','-z']])for(const file of (await this.run('git',args,{cwd})).split('\0').filter(Boolean))files.add(file);
+    job.excludedFiles=[...files].filter(file=>['AGENTS.md','.branch-review.json'].includes(path.posix.basename(file)));
+    const selected=[...files].filter(file=>!job.excludedFiles.includes(file));
+    if(!selected.length)throw Error('Codex made no code changes. Your review is unchanged; inspect its response before retrying.');
+    try{
+      await this.run('git',['diff','--check','HEAD','--',...selected],{cwd});
+      await this.run('git',['add','--',...selected],{cwd});
+      await this.run('git',['commit','--only','-m','fix: address Branch Review findings','--',...selected],{cwd});
+    }catch(error){throw Error('Your fix is saved, but Branch Review could not commit it. Use Review files to commit to recover.\n'+error.message);}
+    job.resultCommit=await this.run('git',['rev-parse','HEAD'],{cwd});
+    if(job.resultCommit===source)throw Error('No new fix commit was created. Review the saved files before retrying.');
+    job.committedFiles=selected;job.dirty=!!await this.run('git',['status','--porcelain'],{cwd});
   }
 }

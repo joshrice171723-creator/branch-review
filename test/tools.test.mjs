@@ -130,13 +130,13 @@ test('plan tooling writes stay in a detached checkout and never dirty the active
 test('fix handoff preserves reviewed text and chooses new or resumed Codex chats',async()=>{
   const {directory,record}=await fixture(),commands=[];
   const jobs=new ReviewJobs(directory,{git:async()=>'',run:async(_command,args)=>args[0]==='rev-parse'?sha:'',previewRoot:directory,toolchain:directory,codex:'installed.exe'});
+  jobs.finalizeFix=async(job,source)=>{assert.equal(source,record.identity.source);job.resultCommit=sha;};
   jobs.command=async(job,command,args,cwd,prompt)=>{commands.push({command,args,cwd,prompt});await writeFile(args[args.indexOf('--output-last-message')+1],'Done');};
   const job={id:'first',kind:'fix',requestText:'Reviewed custom scope'};await jobs.execute(job,record,{},directory);
-  assert.equal(commands[0].command,'installed.exe');assert.equal(commands[0].args.includes('resume'),false);assert.match(commands[0].prompt,/Reviewed custom scope/);assert.match(commands[0].prompt,/Current review manifest/);
+  assert.equal(commands[0].command,'installed.exe');assert.equal(commands[0].args.includes('resume'),false);assert.match(commands[0].prompt,/Reviewed custom scope/);assert.match(commands[0].prompt,/Previous review manifest/);assert.match(commands[0].prompt,/do not stage, commit/);
   const chatId='12345678-1234-1234-1234-123456789abc';await jobs.execute({...job,id:'second'},record,{chatId},directory);
   assert.equal(commands[1].args[commands[1].args.indexOf('resume')+1],chatId);
   assert.equal(commands[0].args[commands[0].args.indexOf('--sandbox')+1],'workspace-write');
-  await assert.rejects(jobs.execute({...job,commit:sha},record,{},directory),/clean committed fix/);
   await assert.rejects(jobs.start(record,'fix',{chatId:'------------------------------------'}),/UUID/);
 });
 
@@ -173,4 +173,23 @@ test('app commits only selected fix files and preserves unrelated edits',async()
   assert.match(generated.source,/exact diff/);assert.equal(jobs.rows[0].status,'succeeded');
   await assert.rejects(jobs.generatePlan(base,sha,['other.ts'],manifest),/without a changed source file/);
   assert.equal(jobs.rows[1].status,'failed');
+});
+
+test('host finalizes sandbox edits in a linked worktree without committing tooling or empty fixes',async()=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'fix-host-')),repo=path.join(directory,'repo');await mkdir(repo);
+  const run=async(command,args,options)=>{const result=await promisify(execFile)(command,args,options);return result.stdout.trim();};
+  const git=(...args)=>run('git',args,{cwd:repo});
+  await git('init','-b','main');await git('config','user.email','test@example.invalid');await git('config','user.name','Test');
+  await writeFile(path.join(repo,'button.txt'),'purple');await writeFile(path.join(repo,'AGENTS.md'),'original');await git('add','.');await git('commit','-m','base');
+  const source=await git('rev-parse','HEAD'),id='host',worktree=path.join(directory,'fixes',id),branch='branch-review/fixes-'+id;
+  await mkdir(path.dirname(worktree),{recursive:true});await git('worktree','add','-b',branch,worktree,source);
+  const jobs=new ReviewJobs(directory,{run}),job={id,kind:'fix',worktree,branch};
+  await assert.rejects(jobs.finalizeFix(job,source),/no code changes/);
+  await writeFile(path.join(worktree,'button.txt'),'blue');await writeFile(path.join(worktree,'AGENTS.md'),'indexer change');await writeFile(path.join(worktree,'.branch-review.json'),'{}');
+  await jobs.finalizeFix(job,source);
+  assert.notEqual(job.resultCommit,source);assert.deepEqual(job.committedFiles,['button.txt']);assert.equal(job.dirty,true);
+  assert.equal(await git('show',job.resultCommit+':button.txt'),'blue');assert.equal(await git('show',job.resultCommit+':AGENTS.md'),'original');
+  assert.equal(await git('status','--porcelain'),'');assert.equal(await readFile(path.join(worktree,'AGENTS.md'),'utf8'),'indexer change');
+  await assert.rejects(jobs.finalizeFix(job,source),/changed the commit history/);
+  await run('git',['checkout','-b','unexpected'],{cwd:worktree});await assert.rejects(jobs.finalizeFix(job,job.resultCommit),/checkout changed/);
 });

@@ -40,7 +40,7 @@ export function deliveryStep(record,configured=false) {
   return{action:'ship',label:stage==='push-unconfirmed'?'Reconcile merge and push':'Merge and push to main',detail:stage==='push-unconfirmed'?'The previous push is unconfirmed. Recheck remote main before proceeding.':'Push only the approved candidate. A moving branch or main stops this action.'};
 }
 export function fixRequest(record) {
-  const lines = ['# Branch Review: fixes requested', '', `Repository: ${record.identity.repository}`, `Branch: ${record.identity.ref}`, `Reviewed commit: ${record.identity.changed}`, `Original commit: ${record.identity.base}`, '', 'Fix the findings below, preserve unrelated work, and update the review manifest with any additional checks. Do not merge or publish.'];
+  const lines = ['# Branch Review: fixes requested', '', `Repository: ${record.identity.repository}`, `Branch: ${record.identity.ref}`, `Reviewed commit: ${record.identity.changed}`, `Original commit: ${record.identity.base}`, '', 'Fix the findings below and preserve unrelated work. The findings supersede the previous checklist where they disagree. Do not edit review manifests; Branch Review regenerates the checklist. Do not merge or publish.'];
   for (const [index,item] of record.manifest.scenarios.entries()) {
     const status = itemStatus(record,item), saved = record.items?.[item.id] || {};
     if (isComplete(status)) continue;
