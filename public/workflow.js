@@ -23,7 +23,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   const retestNotes = new Map();
   const contexts = {original:{}, changed:{}};
   let video=null,videoKey=null;
-  let officeAfterPublish=null, delivering=false;
+  let officeAfterPublish=null, delivering=false, approving=false;
   const needsNavigation=item=>['original','changed'].some(side=>{
     const actual=contexts[side].location;if(!actual)return false;
     const expected=previewDestination(item,side,getState());
@@ -99,10 +99,16 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     try{await api('/api/issue',{id:r.id,scenario:$('published-problem-item').value,side:'published',expected:$('published-expected').value,actual:$('published-actual').value,location:getState().publishTarget});$('published-problem-form').reset();$('published-problem-status').textContent='Finding saved. Completed review unchanged.';await poll();}
     catch(e){$('published-problem-status').textContent='Save failed: '+e.message;}finally{button.disabled=false;}
   };
-  $('approve').onclick = () => act('approve', {reviewer:$('reviewer').value});
+  $('approve').onclick = async () => {
+    const state=getState();if(approving || state.busy || !canApprove(state.record))return;
+    const reviewer=$('reviewer').value.trim();
+    if(!reviewer){error('Enter your name to approve these changes.');$('reviewer').focus();return;}
+    approving=true;render(state);
+    try{await act('approve',{reviewer});}finally{approving=false;render(getState());}
+  };
   $('results-action').onclick=async()=>{
     const state=getState(),r=state.record;
-    if(delivering || state.busy)return;
+    if(delivering || approving || state.busy)return;
     if(['published','verified'].includes(r.delivery?.stage)){try{await api('/api/published-review',{id:r.id,action:'start'});await window.desktop.openPublished(state.publishTarget+'/qa?view=office');}catch(e){error(e.message);}return;}
     if(canApprove(r) && r.approval && r.integration?.sha===r.identity.changed && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(r.delivery?.stage)){
       if(!await guide.flush())return;
@@ -112,6 +118,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     }
 
     const action=deliveryStep(getState().record,getState().releaseConfigured).action;if(!action)return;
+    if(action==='reviewer'){await $('approve').onclick();return;}
     const target=$(action);
     if(['reviewer','release-note'].includes(action)){$('results-checks').open=true;const section=target.closest('details');if(section)section.open=true;target.scrollIntoView({block:'center'});target.focus();}
     else if(!target.disabled)target.click();
@@ -182,10 +189,11 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
       $('results-title').textContent=done?'Published':stage==='deploying'?'Publishing…':delivering?'Merging…':r.manifest.title || 'Review summary';
       if(!published){$('results-message').hidden=false;if(canApprove(r) && r.integration?.sha===r.identity.changed)$('results-message').textContent=r.approval?'Approved. Ready to merge and publish.':'Reviewed against GitHub main. Ready to approve.';}
       $('results-action-detail').hidden=true;
-      $('approval-section').hidden=!!r.approval;
+      $('approval-section').hidden=published || !!r.approval || !canApprove(r) || r.integration?.sha!==r.identity.changed;
       $('review-notice').hidden=published || r.cursor?.view==='results';
       if(done){$('results-action').textContent='Watch Muse in Office';$('results-action').disabled=!enabled || !window.desktop;}
       else if(approved && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(stage)){$('results-action').textContent=stage==='deploying'?'Publishing…':delivering?'Merging…':stage==='pushed'?'Publish':'Merge and publish';$('results-action').disabled=!enabled || delivering;}
+      if(approving){$('results-action').textContent='Approving…';$('results-action').disabled=true;}
     }
     $('review-workflow').hidden=!r;
     $('choose-repository').disabled=state.busy;
@@ -239,6 +247,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
       $('delivery-state').textContent=r.delivery?`Delivery: ${r.delivery.stage.replaceAll('-',' ')}${r.delivery.error?' · '+r.delivery.error:''}`:r.integration?`Integration candidate ${r.integration.sha.slice(0,7)} against main ${r.integration.main.slice(0,7)}`:'Prepare the integration candidate before merging. It includes current main.';
     }
     for(const id of ['scenario-select','expected','actual','capture','report','reviewer','candidate','approve']) $(id).disabled=!enabled;
+    $('reviewer').disabled ||= approving;
     for(const id of ['expected','actual','capture','report']) $(id).disabled=!enabled || savingFinding;
     $('capture').disabled ||= capturing;
     $('report').disabled ||= capturing;

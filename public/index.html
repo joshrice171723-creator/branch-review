@@ -187,7 +187,7 @@
             <button id="published-report" class="secondary" hidden>Report a problem</button><p id="published-findings-status" class="small" role="status" hidden></p>
             <details id="published-findings" hidden><summary>Reported problems</summary><div id="published-findings-list"></div></details><details id="results-checks"><summary id="results-checks-label">Review checks</summary><div id="result-items"></div></details>
             <div id="results-options"></div>
-            <button id="resume-review" class="primary">Continue remaining checks</button>
+            <button id="resume-review" class="quiet">Continue remaining checks</button>
             <button id="export-review" class="secondary">View / export review report</button>
           </section>
           <button id="prepare-handoff" class="secondary">Prepare fixes for Codex</button>
@@ -208,11 +208,10 @@
             </form>
           </details>
           <details class="workflow-section"><summary id="findings-title">Findings and retests</summary><label class="field-label" for="finding-filter">Show findings</label><select id="finding-filter"><option value="all">All findings</option><option value="current">Current review item</option><option value="open">Unresolved findings</option></select><div id="findings"></div></details>
-          <section id="approval-section" class="workflow-section">
-            <h3>Approve this version</h3>
+          <section id="approval-section">
             <label class="field-label" for="reviewer">Reviewer</label><input id="reviewer" maxlength="100" placeholder="Your name" autocomplete="name" />
-            <p id="approval-state" class="small"></p>
-            <button id="approve" class="secondary">Approve tested commit</button>
+            <p id="approval-state" class="small" hidden></p>
+            <button id="approve" hidden>Approve changes</button>
           </section>
           <details class="workflow-section">
             <summary id="delivery-heading">Merge and publish</summary>

@@ -17,7 +17,8 @@ const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,w
 $('tools-plan').prepend($('capture-item'));
 for(const id of ['choose-repository','stop'])$('workspace-actions').append($(id));
 for(const id of ['history','health-status','files'])$('workspace-details').append($(id).closest('details'));
-$('results-options').append($('approval-section'),$('export-review'),$('delivery-heading').closest('details'));
+$('results-options').append($('export-review'),$('delivery-heading').closest('details'));
+$('results-action').before($('approval-section'));
 $('results-checks').append($('resume-review'));
 $('results-checks').append($('review-context'),$('results-options'));
 $('results-action').after($('muse-qa-state'),$('retry-muse'));

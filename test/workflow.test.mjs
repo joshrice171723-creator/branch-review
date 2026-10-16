@@ -231,3 +231,27 @@ test('completed review shows one clear approval action and hides branch setup',t
   assert.equal(e['results-message'].textContent,'Reviewed against GitHub main. Ready to approve.');
   assert.equal(e['results-checks-label'].textContent,'Review details');
 });
+
+test('primary approve saves once then exposes merge and publish without another approval button',async t=>{
+  let h,release;
+  h=harness(t,{api:async(path,data)=>{if(path==='/api/approve'){await new Promise(resolve=>release=resolve);h.state.record.approval={reviewer:data.reviewer,commit:h.state.record.identity.changed};}}});
+  const r=h.state.record,e=h.elements;h.state.releaseConfigured=true;r.integration={sha:r.identity.changed,main:r.identity.base};
+  for(const item of r.manifest.scenarios)item.steps.forEach((_,i)=>r.checks[`${item.id}:${i}`]=true);
+  h.view.render(h.state);e.reviewer.value=' Josh ';
+  assert.equal(e['approval-section'].hidden,false);
+  const first=e['results-action'].onclick();await new Promise(resolve=>setImmediate(resolve));
+  await e['results-action'].onclick();assert.equal(e['results-action'].disabled,true);
+  release();await first;
+  assert.equal(h.calls.filter(c=>c.path==='/api/approve').length,1);
+  assert.equal(r.approval.reviewer,'Josh');assert.equal(e['approval-section'].hidden,true);
+  assert.equal(e['results-action'].textContent,'Merge and publish');
+  assert.equal(h.calls.some(c=>c.path==='/api/ship'||c.path==='/api/publish'),false);
+});
+
+test('failed approval keeps the reviewer and approval action available',async t=>{
+  const h=harness(t,{api:async path=>{if(path==='/api/approve')throw Error('Main changed');}}),r=h.state.record,e=h.elements;
+  r.integration={sha:r.identity.changed,main:r.identity.base};for(const item of r.manifest.scenarios)item.steps.forEach((_,i)=>r.checks[`${item.id}:${i}`]=true);
+  h.view.render(h.state);e.reviewer.value='Josh';await e['results-action'].onclick();
+  assert.equal(e.reviewer.value,'Josh');assert.equal(e['results-action'].textContent,'Approve changes');assert.equal(e['results-action'].disabled,false);assert.equal(r.approval,undefined);
+  assert.match(e.error.textContent,/Main changed/);
+});
