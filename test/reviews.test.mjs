@@ -79,3 +79,15 @@ test('published findings preserve historical approval and carry forward separate
   const next=await store.open({...snapshot,changed:{sha:'c'}},defaultManifest,'recipe');
   assert.equal(next.issues[0].status,'needs-retest');assert.equal(next.issues[0].commit,'b');
 });
+
+test('regenerated item IDs retain findings only with an unambiguous route and source match',async()=>{
+  const directory=await mkdtemp('.local/reviews-test-'),store=await new ReviewStore(directory).load();
+  const old=validateManifest({version:2,scenarios:[{id:'purple',title:'Button',path:'/meta-clinic/resources',files:['button.tsx'],steps:['Check purple']}]});
+  const first=await store.open(snapshot,old,'recipe');await store.issue(first.id,{scenario:'purple',expected:'Blue',actual:'Purple'});
+  const updated=validateManifest({...old,scenarios:[{...old.scenarios[0],id:'blue',steps:['Check blue']}]});
+  const nextSnapshot={...snapshot,previousReviewId:first.id,changed:{sha:'c'}};
+  const next=await store.open(nextSnapshot,updated,'recipe');assert.equal(next.issues[0].scenario,'blue');assert.equal(next.issues[0].previousScenario,'purple');assert.equal(next.issues[0].status,'needs-retest');assert.equal(first.issues[0].scenario,'purple');assert.deepEqual(next.checks,{});
+  next.issues[0].scenario='purple';await store.persist();await store.open(nextSnapshot,updated,'recipe');assert.equal(next.issues[0].scenario,'blue');
+  const ambiguous={...updated,scenarios:[...updated.scenarios,{...updated.scenarios[0],id:'another'}]};
+  const blocked=await store.open({...nextSnapshot,changed:{sha:'d'}},ambiguous,'recipe');assert.equal(blocked.issues[0].scenario,'purple');
+});

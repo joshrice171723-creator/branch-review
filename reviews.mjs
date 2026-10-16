@@ -61,6 +61,16 @@ export class ReviewStore {
       }
       this.records.push(record); await this.persist();
     }
+    let remapped=false;
+    for(const issue of record.issues){
+      if(issue.status==='resolved' || manifest.scenarios.some(item=>item.id===issue.scenario))continue;
+      const prior=this.records.find(r=>r.id===(issue.carriedFrom || record.previousId));
+      const old=prior?.manifest.scenarios.find(item=>item.id===issue.scenario);
+      const matches=old?.files?.length ? manifest.scenarios.filter(item=>item.path===old.path && item.files?.some(file=>old.files.includes(file))) : [];
+      if(matches.length!==1)continue;
+      issue.previousScenario ||= issue.scenario;issue.scenario=matches[0].id;remapped=true;
+    }
+    if(remapped)await this.event(record,'findings-remapped',{reason:'Unique matching screen and affected source file in regenerated checklist'});
     return record;
   }
   get(id) { const record = this.records.find(r => r.id === id); if (!record) throw new Error('Review not found. Reopen the branch.'); return record; }
