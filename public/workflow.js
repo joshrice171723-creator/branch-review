@@ -113,7 +113,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
 
     const action=deliveryStep(getState().record,getState().releaseConfigured).action;if(!action)return;
     const target=$(action);
-    if(['reviewer','release-note'].includes(action)){$('results-options').open=true;const section=target.closest('details');if(section)section.open=true;target.scrollIntoView({block:'center'});target.focus();}
+    if(['reviewer','release-note'].includes(action)){$('results-checks').open=true;const section=target.closest('details');if(section)section.open=true;target.scrollIntoView({block:'center'});target.focus();}
     else if(!target.disabled)target.click();
   };
   $('candidate').onclick = () => { if(confirm('Prepare the merged result against current main? Save your preview edits first. The new candidate needs its own completed checklist and approval.')) act('candidate'); };
@@ -169,22 +169,23 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('published-findings-status').textContent=r?.publishedFindings?.length?`${r.publishedFindings.length} published finding(s) saved`:' ';
     $('results-counts').hidden=published;
     $('results-options').hidden=published;
-    $('results-checks-label').textContent=published?'Completed review':'Review checks';
+    $('results-checks-label').textContent=published?'Completed review':'Review details';
     if(published)$('results-checks').append($('export-review'));else $('results-options').append($('export-review'));
     $('review-context').hidden=published;
-    $('branch-brief').hidden=published && !$('branch-brief').dataset.selecting;
+    $('branch-brief').hidden=!!r && !$('branch-brief').dataset.selecting;
     $('published-findings').hidden=!published || !r?.publishedFindings?.length;
     if(published)$('published-findings-list').replaceChildren(...(r.publishedFindings||[]).map(finding=>{const row=node('article','','finding');row.append(node('strong',finding.scenario),node('p',finding.actual),node('small',`Expected: ${finding.expected}`));return row;}));
     if(published){$('prepare-handoff').hidden=true;$('handoff-panel').hidden=true;$('results-message').hidden=true;}
     if(r){const step=deliveryStep(r,state.releaseConfigured);$('results-action').textContent=step.label;$('results-action-detail').textContent=step.detail;$('results-action').disabled=!enabled || !step.action || step.action==='release-settings' && !window.desktop;}
     if(r){
       const stage=r.delivery?.stage,done=['published','verified'].includes(stage),approved=canApprove(r) && !!r.approval && r.integration?.sha===r.identity.changed;
-      $('results-title').textContent=done?'Published':stage==='deploying'?'Publishing…':delivering?'Merging…':approved?'Ready to publish':'Your review summary';
+      $('results-title').textContent=done?'Published':stage==='deploying'?'Publishing…':delivering?'Merging…':r.manifest.title || 'Review summary';
+      if(!published){$('results-message').hidden=false;if(canApprove(r) && r.integration?.sha===r.identity.changed)$('results-message').textContent=r.approval?'Approved. Ready to merge and publish.':'Reviewed against GitHub main. Ready to approve.';}
       $('results-action-detail').hidden=true;
       $('approval-section').hidden=!!r.approval;
       $('review-notice').hidden=published || r.cursor?.view==='results';
       if(done){$('results-action').textContent='Watch Muse in Office';$('results-action').disabled=!enabled || !window.desktop;}
-      else if(approved && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(stage)){$('results-action').textContent=stage==='deploying'?'Publishing…':delivering?'Merging…':stage==='pushed'?'Publish':'Merge & publish';$('results-action').disabled=!enabled || delivering;}
+      else if(approved && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(stage)){$('results-action').textContent=stage==='deploying'?'Publishing…':delivering?'Merging…':stage==='pushed'?'Publish':'Merge and publish';$('results-action').disabled=!enabled || delivering;}
     }
     $('review-workflow').hidden=!r;
     $('choose-repository').disabled=state.busy;

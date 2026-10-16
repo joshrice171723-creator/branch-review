@@ -19,9 +19,9 @@ for(const id of ['choose-repository','stop'])$('workspace-actions').append($(id)
 for(const id of ['history','health-status','files'])$('workspace-details').append($(id).closest('details'));
 $('results-options').append($('approval-section'),$('export-review'),$('delivery-heading').closest('details'));
 $('results-checks').append($('resume-review'));
+$('results-checks').append($('review-context'),$('results-options'));
 $('results-action').after($('muse-qa-state'),$('retry-muse'));
 $('results-checks').before($('prepare-handoff'),$('handoff-panel'));
-$('branch-brief').append($('review-context'));
 const problem=$('problem-dialog'),findingSection=$('finding-form').closest('details');
 problem.append(findingSection,$('findings-title').closest('details'));findingSection.open=true;
 $('report-problem').onclick=()=>problem.showModal();$('close-problem').onclick=()=>problem.close();
@@ -152,7 +152,7 @@ async function chooseVisibleBranch() {
 }
 async function select(branch,reveal=false) {
   selected = branch;
-  if(reveal){ $('branch-brief').dataset.selecting='true'; $('branch-brief').hidden=false; }
+  if(reveal){ $('branch-brief').dataset.selecting=branch.sha===currentState.record?.identity.source && [branch.ref,...branch.aliases].includes(currentState.record?.identity.ref)?'':'true'; $('branch-brief').hidden=!!currentState.record && !$('branch-brief').dataset.selecting; }
   $('branch-brief').open = reveal || !currentState.record || ![branch.ref,...branch.aliases].includes(currentState.comparison?.branch.ref);
   if(reveal)$('branch-brief').scrollIntoView({block:'start'});
   branchList();

@@ -109,7 +109,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     $('queue-progress').textContent=`${counts.complete} of ${counts.total} complete`;
     $('review-summary').textContent=r.manifest.summary || r.title;
     $('review-source').textContent=r.manifest.source || 'Review scenario';
-    $('results-counts').textContent=[`${counts.passed} checks passed`,counts['needs-fixes'] && `${counts['needs-fixes']} need fixes`,counts.blocked && `${counts.blocked} blocked`,counts['not-applicable'] && `${counts['not-applicable']} excluded`,(counts['not-started']+counts['in-progress']) && `${counts['not-started']+counts['in-progress']} unfinished`,r.approval && `Approved by ${r.approval.reviewer}`].filter(Boolean).join(' · ');
+    $('results-counts').textContent=[`${counts.passed===counts.total?'✓ ':''}${counts.passed} of ${counts.total} review items passed`,counts['needs-fixes'] && `${counts['needs-fixes']} need fixes`,counts.blocked && `${counts.blocked} blocked`,counts['not-applicable'] && `${counts['not-applicable']} excluded`,(counts['not-started']+counts['in-progress']) && `${counts['not-started']+counts['in-progress']} unfinished`,r.approval && `Approved by ${r.approval.reviewer}`].filter(Boolean).join(' · ');
     $('results-message').textContent=canApprove(r)?'All items are accounted for. Review any exclusions and follow the next action below.':'Resolve the items below or prepare a fix request for Codex.';
     const listKey=JSON.stringify([r.id,r.checks,r.items,r.issues,r.cursor,published,!!enabled,$('item-search').value,$('item-filter').value]);
     if(queueKey!==listKey){

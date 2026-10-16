@@ -217,3 +217,17 @@ test('unsaved outcome updates badge immediately and requires a reason',async t=>
   assert.equal(e['item-status'].textContent,'Needs fixes · unsaved');
   assert.equal(await h.view.flush(),false);assert.match(e['item-save'].textContent,/reason/);
 });
+
+test('completed review shows one clear approval action and hides branch setup',t=>{
+  const h=harness(t),e=h.elements,r=h.state.record;
+  r.cursor={itemId:r.manifest.scenarios[0].id,view:'results'};
+  r.integration={sha:r.identity.changed,main:r.identity.base};
+  for(const item of r.manifest.scenarios)item.steps.forEach((_,i)=>r.checks[`${item.id}:${i}`]=true);
+  h.view.render(h.state);
+  assert.equal(e['branch-brief'].hidden,true);
+  assert.equal(e['results-title'].textContent,r.manifest.title);
+  assert.match(e['results-counts'].textContent,/of .* review items passed/);
+  assert.equal(e['results-action'].textContent,'Approve changes');
+  assert.equal(e['results-message'].textContent,'Reviewed against GitHub main. Ready to approve.');
+  assert.equal(e['results-checks-label'].textContent,'Review details');
+});
