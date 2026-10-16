@@ -94,6 +94,12 @@ function branchList() {
       sha.textContent = branch.merged ? 'Merged' : branch.sha.slice(0, 7);
       meta.append(ref, sha);
       button.append(title, meta);
+      const committed = new Date(branch.date);
+      if(Number.isFinite(committed.getTime())){
+        const date=document.createElement('time');date.className='branch-meta';date.dateTime=committed.toISOString();
+        date.textContent='Last commit: '+committed.toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+        date.title=committed.toLocaleString(undefined,{dateStyle:'full',timeStyle:'long'});button.append(date);
+      }
       button.title = `${branch.name}\n${branch.sha}`;
       button.onclick = () => select(branch,true);
       return button;
