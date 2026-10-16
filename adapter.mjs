@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { scenarioRecipe } from './reviews.mjs';
 import { loadPlan } from './plans.mjs';
 import {createHash} from 'node:crypto';
+import {frontendOnly} from './fix-review.mjs';
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
 export const local = process.env.BRANCH_REVIEW_HOME || path.join(root, ".local");
@@ -158,10 +159,11 @@ function environment(side, sha) {
     APPLY_API_READINESS_TIMEOUT: "300",
   };
 }
-async function lifecycle(side, sha, action) {
+async function lifecycle(side, sha, action, database) {
   const cwd = path.join(previewRoot, side);
   if (action === 'stop') await clearDeadPidRecords(cwd);
   const env = environment(side, sha);
+  if(database)env.APPLY_DEVELOPMENT_DATABASE=database;
   progress(`${side === "original" ? "Original" : side === "standby" ? "Next preview" : "Changed"} · ${action}`);
   const logfile = path.join(local, `${side}.log`);
   const output = await run(
@@ -231,6 +233,15 @@ export async function prepare(side, sha, files=state.comparison.files) {
     const ready=await Promise.all([slots[side].api,slots[side].web].map((port,index)=>fetch(`http://127.0.0.1:${port}/${index?'login':'up'}`,{signal:AbortSignal.timeout(2000)}).then(r=>r.ok,()=>false)));
     if(ready.every(Boolean)){progress(`${side} · reused running preview`);return cached;}
   }
+  const oldCache=JSON.parse(await readFile(path.join(local,`preview-${side}-${current}-${recipeHash}.json`),'utf8').catch(()=> 'null'));
+  const delta=current!==sha?(await git('diff','--name-only','-z',current,sha,'--')).split('\0').filter(Boolean):[];
+  if(oldCache && frontendOnly(delta)){
+    await lifecycle(side,current,'stop');
+    await run('git',['checkout','--detach',sha],{cwd});
+    progress(`${side} · reusing prepared data for frontend changes`);
+    await lifecycle(side,sha,'start',oldCache.database);
+    const result={...oldCache,sha};await writeFile(cacheFile,JSON.stringify(result));return result;
+  }
   await lifecycle(side, current, "stop");
   await run("git", ["checkout", "--detach", sha], { cwd });
   await lifecycle(side, sha, "setup");
@@ -273,7 +284,7 @@ export async function resetScenario(side){
   if(!['original','changed'].includes(side) || state.status!=='ready')throw new Error('Open a ready preview first.');
   await assertOwner();const preview=state[side],runtime=preview.runtime || side,cwd=path.join(previewRoot,runtime);
   if(await run('git',['rev-parse','HEAD'],{cwd})!==preview.sha || await run('git',['status','--porcelain'],{cwd}))throw new Error('Preview source changed. Reopen its committed version.');
-  const output=await run('ruby',['bin/postgres','exec','bin/rails','runner',path.join(root,scenarioRecipe(state.comparison.files))],{cwd:path.join(cwd,'apps/api'),env:{...environment(runtime,preview.sha),BRANCH_REVIEW_RESET:'1'}});
+  const output=await run('ruby',['bin/postgres','exec','bin/rails','runner',path.join(root,scenarioRecipe(state.comparison.files))],{cwd:path.join(cwd,'apps/api'),env:{...environment(runtime,preview.sha),APPLY_DEVELOPMENT_DATABASE:preview.database,BRANCH_REVIEW_RESET:'1'}});
   const line=output.split('\n').find(line=>line.startsWith('BRANCH_REVIEW='));if(!line)throw new Error('Scenario reset did not return a destination.');
   preview.scenario=JSON.parse(line.slice('BRANCH_REVIEW='.length));return preview.scenario;
 }
@@ -291,14 +302,23 @@ export async function startReview(ref, baseline, baselineCommit, preparedReview)
     const changedSha = preparedReview?.integration.sha || selected.branch.sha;
     Object.assign(state, { comparison: selected, integration: preparedReview?.integration || null });
     let runtime=previousRuntime==='changed'?'standby':'changed';
+    let originalRuntime='original';
+    if(preparedReview?.beforeFix){
+      for(const candidate of ['changed','standby','original']){
+        const head=await run('git',['rev-parse','HEAD'],{cwd:path.join(previewRoot,candidate)}).catch(()=>'');
+        if(head===selected.base){originalRuntime=candidate;break;}
+      }
+      runtime=['changed','standby'].find(candidate=>candidate!==originalRuntime);
+    }
     for(const candidate of [previousRuntime,runtime]){
       const head=await run('git',['rev-parse','HEAD'],{cwd:path.join(previewRoot,candidate)}).catch(()=>'');
-      if(head===changedSha){runtime=candidate;break;}
+      if(candidate!==originalRuntime && head===changedSha){runtime=candidate;break;}
     }
     if(state.prepared?.sha===changedSha && state.prepared.recipe===scenarioRecipe(selected.files))runtime=state.prepared.runtime;
-    const prepared=await Promise.allSettled([prepare('original',selected.base,selected.files),prepare(runtime,changedSha,selected.files)]);
+    if(runtime===originalRuntime)runtime=['changed','standby','original'].find(candidate=>candidate!==originalRuntime);
+    const prepared=await Promise.allSettled([prepare(originalRuntime,selected.base,selected.files),prepare(runtime,changedSha,selected.files)]);
     const failed=prepared.find(result=>result.status==='rejected');if(failed)throw failed.reason;
-    state.original=prepared[0].value;
+    state.original={...prepared[0].value,side:'original',proxy:slots.original.proxy};
     state.changed = {...prepared[1].value,side:'changed',proxy:slots.changed.proxy};
     state.status = preparedReview?.deferReady?'preparing':'ready';
     progress(preparedReview?.deferReady?'Previews ready; finishing checklist':'Both previews are ready');

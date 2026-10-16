@@ -4,6 +4,8 @@ import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
 const openingSummary=document.createElement('p');openingSummary.id='opening-summary';$('phase').before(openingSummary);
+const fixNotice=document.createElement('p');fixNotice.style.cssText='font-size:12px;line-height:1.5;white-space:normal';fixNotice.hidden=true;$('review-branch-status').after(fixNotice);
+const versionHistory=document.createElement('details'),versionHeading=document.createElement('summary'),versionResults=document.createElement('div');versionHeading.textContent='Earlier review results';versionHistory.append(versionHeading,versionResults);versionHistory.hidden=true;fixNotice.after(versionHistory);
 let allBranches = [],
   selected = null, openingSelection = null,
   token = "",
@@ -92,7 +94,7 @@ function branchList() {
       button.setAttribute("aria-current", String(selected?.ref === branch.ref));
       const title = document.createElement("span");
       title.className = "branch-title";
-      title.textContent = branch.subject;
+      title.textContent = branch.subject+(branch.fixCount?` · ${branch.fixCount} fix${branch.fixCount===1?'':'es'}`:'');
       const meta = document.createElement("span");
       meta.className = "branch-meta";
       const ref = document.createElement("span");
@@ -213,7 +215,7 @@ async function select(branch,reveal=false) {
 }
 async function openBranch(branch) {
   if(currentState.busy || openingSelection?.starting)return;
-  if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha)return;
+  if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha && (!branch.fixJob || currentState.record.fixComparison))return;
   if(!await reviewWorkflow.flush())return;
   openingSelection={...branch,starting:true};selected=branch;selectedComparison=null;
   openingSummary.textContent=`${branch.subject} · ${branch.name} · ${branch.sha.slice(0,7)}`;
@@ -223,7 +225,7 @@ async function openBranch(branch) {
   $('loading').hidden=false;$('empty').hidden=true;$('loading-label').textContent='OPENING REVIEW';$('phase').textContent=`Opening ${branch.name}…`;
   $('original-sha').textContent='';$('changed-sha').textContent='';error('');branchList();
   $('context').textContent=`Opening ${branch.name}…`;
-  try{await api('/api/start',{ref:branch.ref,baseline:'main'});openingSelection.starting=false;await poll();}
+  try{await api('/api/start',{ref:branch.ref,baseline:'main',...(branch.fixJob?{fixJob:branch.fixJob}:{})});openingSelection.starting=false;await poll();}
   catch(e){openingSelection.starting=false;currentState.busy=false;error(e.message);$('loading').hidden=true;branchList();}
 }
 async function openDiff(filename,comparison=selectedComparison) {
@@ -267,7 +269,7 @@ function toggle(side) {
   const preview = currentState[side];
   if (preview)
     $("context").textContent =
-      `${side === "original" ? "Original" : "Changed"} · ${preview.sha.slice(0, 7)} · ${currentState.manifest?.title || "Review scenario"}`;
+      `${currentState.record?.fixComparison?(side==='original'?'Before fix':'After fix'):(side === "original" ? "Original" : "Changed")} · ${preview.sha.slice(0, 7)} · ${currentState.manifest?.title || "Review scenario"}`;
 }
 function runShortcut(command) {
   if(document.querySelector('dialog[open]') || currentState.status!=='ready' || currentState.busy)return;
@@ -311,7 +313,7 @@ function mountFrames(state, force = false) {
   $("frames").replaceChildren(
     ...["original", "changed"].map((side) => {
       const pane=document.createElement('section');pane.className='preview-pane';pane.setAttribute('aria-label',`${side} preview`);
-      const label=document.createElement('div');label.className='preview-side-label';label.textContent=`${side==='original'?'Original':'Changed'} · ${state[side].sha.slice(0,7)}`;
+      const label=document.createElement('div');label.className='preview-side-label';label.textContent=`${state.record?.fixComparison?(side==='original'?'Before fix':'After fix'):(side==='original'?'Original':'Changed')} · ${state[side].sha.slice(0,7)}`;
       const frame = document.createElement("iframe");
       frame.id = `frame-${side}`;
       frame.title = `${side === "original" ? "Original" : "Changed"} Meta Clinic review`;
@@ -335,12 +337,22 @@ async function poll() {
     token = currentState.token;
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
+    const fixRecord=currentState.record;
+    fixNotice.hidden=versionHistory.hidden=!fixRecord?.fixComparison;
+    if(fixRecord?.fixComparison){
+      const finding=fixRecord.issues.find(issue=>issue.scenario===fixRecord.cursor?.itemId && issue.status!=='resolved');
+      fixNotice.textContent=`Retesting this fix. ${finding?'Requested: '+finding.expected:'Check the affected behavior below.'}`;
+      versionResults.replaceChildren(...(fixRecord.previousResults || []).map(result=>{const p=document.createElement('p');p.textContent=`${result.title} · ${result.status} at ${result.commit.slice(0,7)}`;return p;}));
+    }
+    for(const side of ['original','changed'])$(side).firstChild.textContent=currentState.record?.fixComparison?(side==='original'?'Before fix ':'After fix '):(side==='original'?'Original ':'Changed ');
+    if(currentState.record?.fixComparison)openingSummary.textContent='Retesting fixes in the same review';
     if(openingSelection)$('branch-brief').hidden=true;
     const reviewedBranch=allBranches.find(branch=>[branch.ref,...branch.aliases].includes(currentState.record?.identity.ref));
     const reviewedRelease=currentState.record?.delivery;
     const published=['published','verified'].includes(reviewedRelease?.stage) && reviewedRelease.commit===currentState.record?.identity.changed;
     $('review-branch-status').hidden=published || !currentState.record || currentState.record.cursor?.view==='results';
     $('review-branch-status').textContent=currentState.record ? `${published?'Published':reviewedBranch?.merged && reviewedBranch.sha===currentState.record.identity.source?'Merged into main':'Reviewing'} · ${currentState.record.identity.ref.replace(/^refs\/(heads|remotes)\//,'')} · ${currentState.record.identity.changed.slice(0,7)}${published?' — completed review; choose another branch to review new work.':''}`:'';
+    if(currentState.record?.reviewTitle)$('review-branch-status').textContent=`${currentState.record.reviewTitle} · Fix review · ${currentState.record.identity.changed.slice(0,7)}`;
     reviewTools.render(currentState);
     renderFocusStatus();
     const ready = currentState.status === "ready";

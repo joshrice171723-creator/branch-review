@@ -14,6 +14,7 @@ import { MuseQa } from './muse-qa.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
 import { reviewReport } from './report.mjs';
 import { previewHealth } from './health.mjs';
+import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly} from './fix-review.mjs';
 
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false;
@@ -39,19 +40,37 @@ async function startCandidate(ref, previousReviewId) {
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
   const integration=await delivery.prepare(ref,selected.branch.sha,previous);
   const combined=await candidateComparison(git,selected,integration);
+  const prior=previousReviewId?store.get(previousReviewId):null;
+  const fixFiles=prior?(await git('diff','--name-only','-z',prior.identity.changed,integration.sha,'--')).split('\0').filter(Boolean):[];
+  const narrow=prior && prior.integration?.main===integration.main && frontendOnly(fixFiles) && fixFiles.every(file=>prior.manifest.scenarios.some(item=>item.files?.includes(file)));
+  if(prior){combined.base=prior.identity.changed;combined.baseline='commit';combined.baselineCommit=prior.identity.changed;combined.fixReview={previousId:prior.id,files:fixFiles};}
   if(!combined.files.length)throw Error('This branch has no application changes left to review against GitHub main. Its old checklist is no longer part of the code.');
   combined.plan=await prepareTogether(
-    async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true});if(state.status==='error')throw Error(state.error);},
-    async()=>{let plan=await plans.get(integration.sha);if(!plan){progress('Generating checklist while previews prepare');plan=await jobs.generatePlan(integration.main,integration.sha,combined.files,combined.plan);await plans.save(integration.sha,plan);}return plan;}
+    async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior});if(state.status==='error')throw Error(state.error);},
+    async()=>{let plan=await plans.get(integration.sha);if(!plan){progress('Generating checklist while previews prepare');plan=await jobs.generatePlan(narrow?prior.identity.changed:integration.main,integration.sha,narrow?fixFiles:combined.files,prior?.manifest || combined.plan);}if(narrow)plan=mergeFixPlan(prior.manifest,{...plan,scenarios:plan.scenarios.filter(item=>item.files?.some(file=>fixFiles.includes(file)))},fixFiles);await plans.save(integration.sha,plan);return plan;}
   );
   state.status='ready';progress('Checklist and previews are ready');
   await activate(previousReviewId);
+  if(prior){
+    const record=store.get(state.recordId);
+    focusRetest(record,prior,fixFiles);
+    const root=reviewRoot(prior,store.records);record.reviewRootId=root.id;record.reviewTitle=root.title;
+    if(narrow){
+      const colorOnly=await Promise.all(fixFiles.map(async file=>{
+        const before=await git('show',`${prior.identity.changed}:${file}`),after=await git('show',`${integration.sha}:${file}`);
+        return before.replace(/#[0-9a-fA-F]{3,8}\b/g,'#COLOR')===after.replace(/#[0-9a-fA-F]{3,8}\b/g,'#COLOR');
+      }));
+      if(colorOnly.every(Boolean))carryUnchangedChecks(record,prior,fixFiles);
+    }
+    await store.persist();
+  }
 }
 async function activate(previousReviewId) {
   if (state.status !== 'ready') return;
   const manifest = await manifestFor(state.changed.sha);
-  const record = await store.open({...state, repository:repo, previousReviewId}, manifest, digest(await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8')));
+  const record = await store.open({...state, repository:repo, previousReviewId:previousReviewId || state.comparison?.fixReview?.previousId}, manifest, digest(await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8')));
   state.recordId = record.id; state.manifest = manifest;
+  if(state.comparison?.fixReview){const parent=store.get(state.comparison.fixReview.previousId),root=reviewRoot(parent,store.records);record.reviewRootId=root.id;record.reviewTitle=root.title;}
   if (state.integration?.sha === state.changed.sha) { record.integration = state.integration; await store.persist(); }
   await writeFile(path.join(local,'review.json'),JSON.stringify({comparison:state.comparison,original:state.original,changed:state.changed,integration:state.integration},null,2));
 }
@@ -76,8 +95,9 @@ async function mutate(endpoint, data) {
   if(endpoint==='/api/tools-settings'){if(typeof data.autoPlan!=='boolean')throw new Error('Choose whether to generate plans automatically.');const next={autoPlan:data.autoPlan};await writeFile(path.join(local,'tools-settings.json'),JSON.stringify(next));toolsSettings=next;return next;}
   if (endpoint === '/api/start') {
     let prior;
-    if(data.fixJob){
-      const job=jobs.rows.find(row=>row.id===data.fixJob && row.kind==='fix' && row.status==='succeeded');
+    const fixJob=data.fixJob || jobs.rows.findLast(row=>row.branch && data.ref==='refs/heads/'+row.branch && row.status==='succeeded')?.id;
+    if(fixJob){
+      const job=jobs.rows.find(row=>row.id===fixJob && row.kind==='fix' && row.status==='succeeded');
       if(!job || data.ref!=='refs/heads/'+job.branch || await git('rev-parse',data.ref)!==job.resultCommit)throw new Error('Choose an unchanged, committed fix job before retesting.');
       prior=store.get(job.reviewId);
     }
@@ -159,7 +179,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.headers.host!==`127.0.0.1:${port}`) return json(res,403,{error:'Invalid host'});
     const url=new URL(req.url,origin);
     if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,busy,jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,record:state.recordId?store.get(state.recordId):null,publishTarget:target,releaseConfigured:await access(path.join(local,'release.json')).then(()=>true,()=>false)});
-    if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await branches());
+    if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,groupedBranches(await branches(),jobs.rows,store.records));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
     if(req.method==='GET' && url.pathname==='/api/fix-files')return json(res,200,await jobs.fixFiles(url.searchParams.get('job')));

@@ -76,7 +76,7 @@ export function workbench({api,getState,getSide,workflow,poll,error,reopen}){
               const commit=node('button','Commit selected fixes');commit.onclick=async()=>{const files=boxes.filter(box=>box.checked).map(box=>box.value);if(!files.length || !confirm('Commit these files on the isolated fix branch?\n\n'+files.join('\n')))return;try{await api('/api/fix-commit',{id,jobId:row.id,files});await refresh();}catch(e){$('tools-status').textContent=e.message;}};selection.append(commit);
             }catch(e){$('tools-status').textContent=e.message;}};
           }
-          if(row.status==='succeeded' && row.resultCommit!==row.commit){const button=node('button','Review fixed branch');button.onclick=async()=>{try{if(!await workflow.flush() || !confirm('Open the committed fix branch in both previews? Uncommitted edits stay in the fix checkout. Save preview edits first.'))return;await api('/api/start',{ref:'refs/heads/'+row.branch,fixJob:row.id});$('tools-dialog').close();await poll();}catch(e){error(e.message);}};article.append(button);}
+          if(row.status==='succeeded' && row.resultCommit!==row.commit){const button=node('button','Review fix');button.onclick=async()=>{try{if(!await workflow.flush())return;await api('/api/start',{ref:'refs/heads/'+row.branch,fixJob:row.id});$('tools-dialog').close();await poll();}catch(e){error(e.message);}};article.append(button);}
         }
         const details=node('details','');details.append(node('summary','Job output'),node('pre',row.log || 'Waiting for output…'));article.append(details);return article;
       }));}
