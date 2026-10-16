@@ -276,7 +276,7 @@ export async function resetScenario(side){
   const line=output.split('\n').find(line=>line.startsWith('BRANCH_REVIEW='));if(!line)throw new Error('Scenario reset did not return a destination.');
   preview.scenario=JSON.parse(line.slice('BRANCH_REVIEW='.length));return preview.scenario;
 }
-export async function startReview(ref, baseline, baselineCommit) {
+export async function startReview(ref, baseline, baselineCommit, preparedReview) {
   const previousRuntime=state.changed?.runtime || 'changed';
   state.status = "preparing";
   state.error = null;
@@ -286,12 +286,13 @@ export async function startReview(ref, baseline, baselineCommit) {
   state.lastOutput = '';
   progress('Checking the selected branch and review plan');
   try {
-    const selected = await comparison(ref, baseline, baselineCommit);
-    Object.assign(state, { comparison: selected });
+    const selected = preparedReview?.comparison || await comparison(ref, baseline, baselineCommit);
+    const changedSha = preparedReview?.integration.sha || selected.branch.sha;
+    Object.assign(state, { comparison: selected, integration: preparedReview?.integration || null });
     state.original = await prepare("original", selected.base);
     let runtime=previousRuntime;
-    if(state.prepared?.sha===selected.branch.sha && state.prepared.recipe===scenarioRecipe(selected.files))runtime=state.prepared.runtime;
-    state.changed = {...await prepare(runtime, selected.branch.sha),side:'changed',proxy:slots.changed.proxy};
+    if(state.prepared?.sha===changedSha && state.prepared.recipe===scenarioRecipe(selected.files))runtime=state.prepared.runtime;
+    state.changed = {...await prepare(runtime, changedSha),side:'changed',proxy:slots.changed.proxy};
     state.status = "ready";
     progress("Both previews are ready");
     await writeFile(
@@ -301,6 +302,7 @@ export async function startReview(ref, baseline, baselineCommit) {
           comparison: selected,
           original: state.original,
           changed: state.changed,
+          integration: state.integration,
         },
         null,
         2,

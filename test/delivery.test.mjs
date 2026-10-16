@@ -21,6 +21,8 @@ test('integration candidate preserves main, gates exact approval and rejects mov
   assert.notEqual(candidate.sha,feature);assert.equal(candidate.main,main);
   assert.equal(await git('show',`${candidate.sha}:main.txt`),'main update');assert.equal(await git('show',`${candidate.sha}:feature.txt`),'feature');
   assert.equal(await git('rev-parse','HEAD'),main);assert.equal(await git('status','--porcelain'),'');
+  const reopened=await delivery.prepare(record.identity.ref,feature,candidate);
+  assert.equal(reopened.sha,candidate.sha,'Reopening unchanged refs reuses the exact tested candidate');
   await assert.rejects(delivery.push(record,feature),/Approve/);
   record.identity.changed=candidate.sha;record.approval={identity:digest(record.identity)};
   await assert.rejects(delivery.push(record,feature),/different commit/);
@@ -32,6 +34,20 @@ test('integration candidate preserves main, gates exact approval and rejects mov
   const second=await delivery.candidate(record);record.identity.changed=second.sha;record.approval={identity:digest(record.identity)};
   await git('checkout','main');await git('reset','--hard',candidate.sha);await commit('concurrent.txt','concurrent update');await git('push','origin','main');
   await assert.rejects(delivery.push(record,second.sha),/Main moved/);
+});
+
+test('review preparation fetches remote main before QA without approval or a review record',async()=>{
+  const main='a'.repeat(40),source='b'.repeat(40),calls=[];
+  const git=async(...args)=>{
+    calls.push(args);
+    if(args[0]==='fetch'||args[0]==='update-ref')return '';
+    if(args[0]==='rev-parse')return args[1]==='refs/remotes/origin/main'?main:source;
+    if(args[0]==='merge-base')return main;
+    throw Error('Unexpected operation: '+args.join(' '));
+  };
+  const prepared=await new Delivery(git,{}).prepare('refs/heads/feature',source);
+  assert.equal(calls[0][0],'fetch');assert.equal(prepared.main,main);assert.equal(prepared.sha,source);
+  assert.ok(!calls.some(args=>args[0]==='push'));
 });
 
 test('a lost push response stays unconfirmed until the exact remote commit is reconciled',async()=>{

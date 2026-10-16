@@ -10,20 +10,23 @@ export class Delivery {
     return {main,source};
   }
   async candidate(record) {
-    const {main,source} = await this.refs(record);
+    record.integration = await this.prepare(record.identity.ref,record.identity.source,record.integration);
+    await this.store.event(record,'candidate-prepared',record.integration); return record.integration;
+  }
+  async prepare(ref, expectedSource, previous) {
+    const {main,source} = await this.refs({identity:{ref,source:expectedSource}});
     const common = await this.git('merge-base',main,source);
     if (common === source) throw new Error('This branch is already included in main. There is nothing to merge.');
     let sha = source;
     if (common !== main) {
-      if (record.integration?.main === main && record.integration.source === source) return record.integration;
+      if (previous?.main === main && previous.source === source) return previous;
       const output = await this.git('merge-tree','--write-tree',main,source).catch(e => { throw new Error('Merge conflict: resolve the branch against current main, then review again.\n' + e.message); });
       const tree = output.split('\n')[0];
       if (!/^[0-9a-f]{40}$/.test(tree)) throw new Error('Could not produce a merge candidate.');
-      sha = await this.git('commit-tree',tree,'-p',main,'-p',source,'-m',`Merge reviewed branch ${record.identity.ref.replace('refs/heads/','')}`);
+      sha = await this.git('commit-tree',tree,'-p',main,'-p',source,'-m',`Merge reviewed branch ${ref.replace('refs/heads/','')}`);
     }
-    await this.git('update-ref',`refs/branch-review/${record.id}`,sha);
-    record.integration = {main,source,sha,preparedAt:new Date().toISOString()};
-    await this.store.event(record,'candidate-prepared',record.integration); return record.integration;
+    await this.git('update-ref',`refs/branch-review/${digest({ref,main,source})}`,sha);
+    return {main,source,sha,preparedAt:new Date().toISOString()};
   }
   async push(record, expectedCommit) {
     if (expectedCommit !== record.identity.changed) throw new Error('The shipping confirmation names a different commit.');

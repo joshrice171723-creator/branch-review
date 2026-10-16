@@ -31,6 +31,14 @@ const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-
 async function manifestFor(sha) {
   return await plans.get(sha) || loadPlan(git,sha,state.comparison.files);
 }
+async function startCandidate(ref, previousReviewId) {
+  const selected=await comparison(ref,'main');
+  const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
+  const integration=await delivery.prepare(ref,selected.branch.sha,previous);
+  const combined=await candidateComparison(git,selected,integration);
+  await startReview(ref,'main',undefined,{comparison:combined,integration});
+  await activate(previousReviewId);
+}
 async function activate(previousReviewId) {
   if (state.status !== 'ready') return;
   const manifest = await manifestFor(state.changed.sha);
@@ -66,11 +74,11 @@ async function mutate(endpoint, data) {
       if(!job || data.ref!=='refs/heads/'+job.branch || await git('rev-parse',data.ref)!==job.resultCommit)throw new Error('Choose an unchanged, committed fix job before retesting.');
       prior=store.get(job.reviewId);
     }
-    state.integration=null;await startReview(data.ref,prior?'commit':data.baseline,prior?prior.identity.base:data.baselineCommit);await activate(prior?.id);return;
+    await startCandidate(data.ref,prior?.id);return;
   }
   if (endpoint === '/api/stop') return stopReview();
   if (endpoint === '/api/fetch') return git('fetch','origin');
-  if (endpoint === '/api/retest') { const prior=store.get(data.id); state.integration=null; await startReview(prior.identity.ref,prior.comparisonMode?.baseline || 'parent',prior.comparisonMode?.baselineCommit); await activate(); return; }
+  if (endpoint === '/api/retest') { const prior=store.get(data.id); await startCandidate(prior.identity.ref,prior.id); return; }
   if (endpoint === '/api/release-settings') {
     if (typeof data.keyPath !== 'string' || typeof data.recoveryDirectory !== 'string' || !path.isAbsolute(data.keyPath) || !path.isAbsolute(data.recoveryDirectory)) throw new Error('Choose an existing key and recovery folder.');
     await access(data.keyPath); await access(data.recoveryDirectory); await writeFile(path.join(local,'release.json'),JSON.stringify({keyPath:data.keyPath,recoveryDirectory:data.recoveryDirectory})); return;
