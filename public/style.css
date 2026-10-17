@@ -847,3 +847,14 @@ dialog::backdrop {background:#152c2b80}
 #change-status{white-space:pre-wrap}
 #tools-dialog:has(#tools-plan:not([hidden])) .tools-tabs,#tools-dialog:has(#tools-plan:not([hidden])) > #tools-status,#tools-dialog:has(#tools-plan:not([hidden])) > .workflow-section{display:none}
 #tools-dialog:has(#tools-plan:not([hidden]) #checklist-advanced[open]) > .workflow-section,#tools-dialog:has(#tools-plan:not([hidden]) #checklist-advanced[open]) > #tools-status{display:block}
+
+#onboarding{width:min(680px,90vw);max-height:85vh;overflow:auto}
+#onboarding-project{overflow-wrap:anywhere;color:#65756d}
+#onboarding-checks{list-style:none;padding:0;display:grid;gap:0}
+#onboarding-checks li{display:grid;grid-template-columns:145px 1fr;gap:12px;padding:12px 0;margin:0;border-bottom:1px solid #dce4db}
+#onboarding-checks span{font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+#onboarding button{font:inherit;border:1px solid #ccd7cc;border-radius:6px;padding:10px 14px;background:#f4f7f1;color:#244e40}
+#onboarding .tool-actions{display:flex;gap:8px;flex-wrap:wrap}
+#onboarding button.primary{width:auto;margin:0 0 0 auto;background:#244e40;color:white}
+#onboarding button:hover:not(:disabled){filter:brightness(.95)}
+@media(max-width:600px){#onboarding-checks li{grid-template-columns:1fr;gap:4px}}

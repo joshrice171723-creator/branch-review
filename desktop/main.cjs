@@ -1,3 +1,4 @@
+const {chooseRepository}=require('./repository.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
 const { execFile } = require('node:child_process');
@@ -23,10 +24,9 @@ async function launch() {
   process.env.BRANCH_REVIEW_HOME = home;
   const configured=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
   if(!configured.repository && !process.env.META_CLINIC_REPO){
-    const choice=await dialog.showOpenDialog({title:'Choose a trusted Git repository to review',properties:['openDirectory']});
-    if(choice.canceled){app.quit();return;}
-    const repository=(await exec('git',['rev-parse','--show-toplevel'],{cwd:choice.filePaths[0],windowsHide:true})).stdout.trim();
-    await detectProject(repository);
+    const chosen=await chooseRepository({dialog,exec,detectProject});
+    if(!chosen){app.quit();return;}
+    const {repository}=chosen;
     const trust=await dialog.showMessageBox({buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});
     if(trust.response!==0){app.quit();return;}
     await writeFile(path.join(home,'config.json'),JSON.stringify({repository,previewRoot:path.join(home,'previews')}));
@@ -83,11 +83,9 @@ async function launch() {
   ipcMain.handle('review:show-browser-qa',event=>{trusted(event);if(qaWindow&&!qaWindow.isDestroyed()){qaWindow.show();qaWindow.focus();}});
   ipcMain.handle('review:choose-repository', async event => {
     trusted(event);
-    const result = await dialog.showOpenDialog(window, { title: 'Choose a local Git repository', properties: ['openDirectory'] });
-    if (result.canceled) return null;
-    const repository = (await exec('git', ['rev-parse', '--show-toplevel'], { cwd: result.filePaths[0], windowsHide: true })).stdout.trim();
-    const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
-    const projectInfo=await detectProject(repository);
+    const chosen=await chooseRepository({dialog,window,exec,detectProject});
+    if(!chosen)return null;
+    const {repository,projectInfo}=chosen;
     const response = await dialog.showMessageBox(window, { type: 'question', buttons: ['Open repository', 'Cancel'], defaultId: 0, cancelId: 1,
       message: 'Switch repositories?', detail: `Open ${projectInfo.name} using the ${projectInfo.kind} adapter? Previewing runs this repository’s code in isolated checkouts. Web previews install locked npm dependencies with install scripts disabled. Save preview edits first; existing reviews stay saved.` });
     if (response.response !== 0) return null;
@@ -97,8 +95,7 @@ async function launch() {
     const newHome = settings.projects?.[path.resolve(repository).toLowerCase()] || path.join(app.getPath('userData'), 'projects', project);
     await mkdir(newHome, { recursive: true });
     const existing = JSON.parse(await readFile(path.join(newHome, 'config.json'), 'utf8').catch(() => '{}'));
-    const previous = JSON.parse(await readFile(path.join(home, 'config.json'), 'utf8').catch(() => '{}'));
-    await writeFile(path.join(newHome, 'config.json'), JSON.stringify({ ...existing, repository, toolchain: existing.toolchain || previous.toolchain, previewRoot: existing.previewRoot || path.join(newHome, 'previews') }, null, 2));
+    await writeFile(path.join(newHome, 'config.json'), JSON.stringify({ ...existing, repository, previewRoot: existing.previewRoot || path.join(newHome, 'previews') }, null, 2));
     await writeFile(settingsPath, JSON.stringify({...settings,projects:{...settings.projects,[path.resolve(repository).toLowerCase()]:newHome},home:newHome,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));
     delete process.env.BRANCH_REVIEW_HOME;
     closing = true; app.relaunch(); app.exit(0);

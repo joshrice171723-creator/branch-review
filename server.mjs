@@ -1,3 +1,5 @@
+import {setupChecks} from './setup-checks.mjs';
+import {npmEntry} from './web-project.mjs';
 import http from 'node:http';
 import { readFile, writeFile, access, rename } from 'node:fs/promises';
 import path from 'node:path';
@@ -116,8 +118,14 @@ async function active(id, checkFresh = false) {
 }
 function json(res,status,data) { res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(data)); }
 async function body(req) { let buffer=''; for await(const chunk of req) { buffer += chunk; if(Buffer.byteLength(buffer)>16_000_000) throw new Error('Request too large'); } return JSON.parse(buffer || '{}'); }
+const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>readRecipe(local),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
 async function mutate(endpoint, data) {
   if(qaRunning() && !['/api/browser-qa-result','/api/check','/api/item','/api/cursor','/api/issue'].includes(endpoint))throw Error('Stop browser QA before changing its review, settings or runtime.');
+  if(endpoint==='/api/onboarding'){
+    const rows=await diagnostics();
+    if(rows.some(row=>!row.ok))throw Error('Finish setup before continuing: '+rows.filter(row=>!row.ok).map(row=>row.name).join(', '));
+    await writeFile(path.join(local,'onboarding.json'),JSON.stringify({repository:repo,completedAt:new Date().toISOString()}));return {ready:true};
+  }
   if(endpoint==='/api/project-settings'){
     if(jobs.rows.some(job=>job.status==='running'))throw Error('Wait for running jobs before changing setup.');
     if(state.original || state.changed)throw Error('Stop previews before changing project setup. Your reviews remain saved.');
@@ -228,6 +236,7 @@ actions.add('/api/agent-settings');actions.add('/api/agent-probe');
 actions.add('/api/project-settings');
 actions.add('/api/browser-qa');actions.add('/api/browser-qa-result');
 for(const endpoint of ['/api/project-delivery','/api/project-deploy','/api/project-deploy-retry','/api/pull-request'])actions.add(endpoint);
+actions.add('/api/onboarding');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
 const server=http.createServer(async(req,res)=>{
   try {
@@ -239,11 +248,8 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
     if(req.method==='GET' && url.pathname==='/api/project-settings')return json(res,200,await readRecipe(local));
     if(req.method==='GET' && url.pathname==='/api/project-delivery')return json(res,200,await readDelivery(local));
-    if(req.method==='GET' && url.pathname==='/api/diagnostics'){
-      const rows=[];for(const [name,check] of [['Git',()=>run('git',['--version'])],['Repository',()=>git('rev-parse','--show-toplevel')],['Remote',()=>git('remote','get-url','origin')],['Default branch',defaultBranch],['Commit identity',async()=>{const name=await git('config','user.name'),email=await git('config','user.email');if(!name||!email)throw Error('Set git user.name and user.email before requesting fixes.');return name;}]] )try{rows.push({name,ok:true,message:await check()});}catch(e){rows.push({name,ok:false,message:e.message});}
-      const recipe=await readRecipe(local);rows.push({name:'Preview setup',ok:!project.error && (!project.needsSetup || !!recipe),message:recipe?'Saved custom commands':project.error || (project.needsSetup?'Enter this project’s preview commands below.':project.kind+' detected')});
-      const agent=selectedAgent(),result=await probeProvider(agent.provider,agent.executable);rows.push({name:'AI connection',ok:result.status==='ready',message:result.message});return json(res,200,rows);
-    }
+    if(req.method==='GET' && url.pathname==='/api/onboarding')return json(res,200,{needed:!store.records.length && !await access(path.join(local,'onboarding.json')).then(()=>true,()=>false),repository:repo,project});
+    if(req.method==='GET' && url.pathname==='/api/diagnostics')return json(res,200,await diagnostics());
     if(req.method==='GET' && url.pathname==='/api/fix-files')return json(res,200,await jobs.fixFiles(url.searchParams.get('job')));
     if(req.method==='GET' && url.pathname==='/api/tools-settings')return json(res,200,toolsSettings);
     if(req.method==='GET' && url.pathname==='/api/checks')return json(res,200,await jobs.checks(store.get(url.searchParams.get('id')).identity.changed));
@@ -279,7 +285,7 @@ const server=http.createServer(async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/workbench.js','/change-request.js','/project-setup.js','/activity.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/workbench.js','/change-request.js','/project-setup.js','/onboarding.js','/activity.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));

@@ -6,7 +6,7 @@ A local desktop workspace for reviewing changes in Git projects: choose a branch
 
 1. Open Branch Review.exe from its packaged folder, or run `npm ci`, `node node_modules/electron/install.js`, then `npm run desktop` from source.
 2. Choose a trusted Git repository. Previewing executes project code. Git must be installed; generated checklists and fixes need an installed, signed-in Codex CLI.
-3. Open **More tools > Workspace > Check setup**. Resolve the reported repository, remote, Git identity or CLI prerequisites.
+3. The first-run **Set up your project** guide checks Git, your remote/default branch, commit identity, previews and Codex. Resolve any flagged items, choose **Check again**, then **Start reviewing**. Reopen the guide from the **Settings** toolbar icon. Existing reviews stay available without repeating setup.
 4. Choose a branch. The summary appears immediately; the combined result against the remote default branch, checklist and isolated previews prepare before QA.
 5. Compare Original and Changed. Select an item or Next to open its screen, record observations and report problems.
 6. Send findings through **Updates & fixes**. Codex edits an isolated checkout; the host validates and commits the result. **Review fix** returns to the same review group with Before fix / After fix and unresolved findings ready to retest.

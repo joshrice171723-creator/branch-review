@@ -1,3 +1,4 @@
+import {onboarding} from './onboarding.js';
 import {projectSetup} from './project-setup.js';
 import {activity} from './activity.js';
 import { workflow } from './workflow.js';
@@ -524,6 +525,8 @@ window.addEventListener("message", (event) => {
   }
 });
 await poll();
+const setupGuide=onboarding({api,settings:()=>reviewTools.open('workspace'),refresh:async()=>{await loadBranches();error('');}});
+void setupGuide.initialize();
 await loadBranches().catch((e) => error(e.message));
 setInterval(poll, 2000);
 setInterval(()=>{if(!currentState.busy)void loadBranches(false).catch(e=>error(e.message));},30000);
