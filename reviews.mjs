@@ -19,7 +19,7 @@ export function validateManifest(value) {
     if (!/^[a-z0-9-]{1,60}$/.test(item.id) || ids.has(item.id)) throw new Error('Scenario IDs must be unique lowercase names.');
     ids.add(item.id);
     if (typeof item.title !== 'string' || !item.title.trim() || item.title.length > 160) throw new Error('Each scenario needs a short title.');
-    if (item.path !== ':intake' && !isReviewDestination(item.path)) throw new Error('Scenario destinations must stay inside /clinic, /qa, /, /meta-clinic or /demo.');
+    if (item.path !== ':intake' && !isReviewDestination(item.path)) throw new Error('Scenario destinations must stay inside the preview: use a local route beginning with /, without traversal or external URLs.');
     if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 20 || item.steps.some(s => typeof s !== 'string' || !s.trim() || s.length > 500)) throw new Error('Each scenario needs 1–20 short test steps.');
     for (const field of ['description','instructions','expected']) if (item[field] !== undefined && (typeof item[field] !== 'string' || item[field].length > 2000)) throw new Error('Item descriptions must be text up to 2,000 characters.');
     if (item.focus !== undefined && (typeof item.focus !== 'string' || item.focus.length > 160)) throw new Error('Item focus must be a short row identifier or heading.');

@@ -12,7 +12,7 @@ export async function prepareTogether(previews, checklist) {
 
 export class PlanStore {
   constructor(directory){this.directory=directory;}
-  file(sha){if(!/^[a-f0-9]{40}$/.test(sha))throw new Error('An exact commit is required.');return path.join(this.directory,'plans',sha+'.json');}
+  file(sha){if(!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha))throw new Error('An exact commit or comparison key is required.');return path.join(this.directory,'plans',sha+'.json');}
   async get(sha){try{return validateManifest(JSON.parse(await readFile(this.file(sha),'utf8')));}catch(error){if(error.code==='ENOENT')return null;throw error;}}
   async save(sha,value){const plan=validateManifest(value),file=this.file(sha);await mkdir(path.dirname(file),{recursive:true});await writeFile(file+'.tmp',JSON.stringify(plan,null,2));await rename(file+'.tmp',file);return plan;}
 }
@@ -35,9 +35,9 @@ export async function branchUpdate(git,record) {
   return{latest,changed:true,files,commits,recommendations:retestAdvice(record,plan,files)};
 }
 
-export async function branchRelationships(git,inventory,ref) {
+export async function branchRelationships(git,inventory,ref,defaultBranch='main') {
   const current=inventory.find(branch=>branch.ref===ref || branch.aliases?.includes(ref));if(!current)throw new Error('Select a current branch.');
-  const main=await git('rev-parse','refs/remotes/origin/main');
+  const main=await git('rev-parse','refs/remotes/origin/'+defaultBranch);
   const changed=async sha=>new Set((await git('diff','--name-only','-z',await git('merge-base',main,sha),sha,'--')).split('\0').filter(Boolean));
   const own=await changed(current.sha),related=[];
   for(const branch of inventory.filter(branch=>!branch.merged && branch.sha!==current.sha).slice(0,40)){
@@ -49,7 +49,7 @@ export async function branchRelationships(git,inventory,ref) {
 }
 export async function loadPlan(git,sha,files) {
   if(!/^[a-f0-9]{40}$/.test(sha))throw new Error('Choose an exact commit for the review plan.');
-  return validateManifest({version:2,title:'Checklist pending',summary:'Opening this branch generates a checklist from its changes against GitHub main.',source:'Pending diff analysis',scenarios:[{id:'pending',title:'Generate branch checklist',path:'/',steps:['Wait for the generated checklist before reviewing.']}]});
+  return validateManifest({version:2,title:'Checklist pending',summary:'Opening this branch generates a checklist from its changes against the remote default branch.',source:'Pending diff analysis',scenarios:[{id:'pending',title:'Generate branch checklist',path:'/',steps:['Wait for the generated checklist before reviewing.']}]});
 }
 
 export async function candidateComparison(git,comparison,candidate) {

@@ -1,3 +1,5 @@
+import {projectSetup} from './project-setup.js';
+import {activity} from './activity.js';
 import { workflow } from './workflow.js';
 import { reviewShortcut, refreshedSelection, selectedReviewState } from './shortcuts.js';
 import {workbench} from './workbench.js';
@@ -17,6 +19,8 @@ try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') 
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,poll,error,reopen:()=>mountFrames(currentState,true)});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
+projectSetup({api,getState:()=>currentState,poll});
+const activityView=activity({api,getState:()=>currentState});
 // Move existing controls so their state and handlers stay intact.
 $('tools-plan').prepend($('capture-item'));
 for(const id of ['choose-repository','stop'])$('workspace-actions').append($(id));
@@ -316,7 +320,7 @@ function mountFrames(state, force = false) {
       const label=document.createElement('div');label.className='preview-side-label';label.textContent=`${state.record?.fixComparison?(side==='original'?'Before fix':'After fix'):(side==='original'?'Original':'Changed')} · ${state[side].sha.slice(0,7)}`;
       const frame = document.createElement("iframe");
       frame.id = `frame-${side}`;
-      frame.title = `${side === "original" ? "Original" : "Changed"} Meta Clinic review`;
+      frame.title = `${side === "original" ? "Original" : "Changed"} ${state.project?.name || "Application"} review`;
       frame.setAttribute(
         "sandbox",
         "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
@@ -335,6 +339,7 @@ async function poll() {
     currentState = selectedReviewState(await api("/api/state"),openingSelection);
     if(openingSelection && currentState.record && currentState.status==='ready' && !currentState.busy){openingSelection=null;try{sessionStorage.removeItem('branch-review:opening');}catch{}}
     token = currentState.token;
+    $('project-name').textContent=$('preview-project-name').textContent=currentState.project?.name || 'Project';
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
     const fixRecord=currentState.record;
@@ -364,6 +369,7 @@ async function poll() {
     $('review-branch-status').textContent=currentState.record ? `${published?'Published':reviewedBranch?.merged && reviewedBranch.sha===currentState.record.identity.source?'Merged into main':'Reviewing'} · ${currentState.record.identity.ref.replace(/^refs\/(heads|remotes)\//,'')} · ${currentState.record.identity.changed.slice(0,7)}${published?' — completed review; choose another branch to review new work.':''}`:'';
     if(currentState.record?.reviewTitle)$('review-branch-status').textContent=`${currentState.record.reviewTitle} · Fix review · ${currentState.record.identity.changed.slice(0,7)}`;
     reviewTools.render(currentState);
+    void activityView.render();
     renderFocusStatus();
     const ready = currentState.status === "ready";
       const publishing=currentState.busy && currentState.record?.delivery?.stage==='deploying';

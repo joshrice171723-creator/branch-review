@@ -1,148 +1,77 @@
 # Branch Review
 
-A Windows desktop app for reviewing local Git branches. Meta Clinic is the first supported preview adapter.
+A local desktop workspace for reviewing changes in Git projects: choose a branch, compare isolated versions, report findings, ask Codex for a fix, and retest within the same review.
 
-Selecting a branch immediately shows its commit summary. After checking GitHub main, checklist generation and both previews prepare concurrently. Review controls unlock only when all preparation succeeds. Two Changed preview slots retain recent branches; returning to an unchanged, healthy cached version reuses its running services and saved checklist. A new main revision, changed source, stopped services, or a changed seed recipe can still require preparation. Opening a third distinct version replaces the older slot; Stop previews stops all three runtimes, including Original.
+## Get started
 
-## Open
+1. Open Branch Review.exe from its packaged folder, or run `npm ci`, `node node_modules/electron/install.js`, then `npm run desktop` from source.
+2. Choose a trusted Git repository. Previewing executes project code. Git must be installed; generated checklists and fixes need an installed, signed-in Codex CLI.
+3. Open **More tools > Workspace > Check setup**. Resolve the reported repository, remote, Git identity or CLI prerequisites.
+4. Choose a branch. The summary appears immediately; the combined result against the remote default branch, checklist and isolated previews prepare before QA.
+5. Compare Original and Changed. Select an item or Next to open its screen, record observations and report problems.
+6. Send findings through **Updates & fixes**. Codex edits an isolated checkout; the host validates and commits the result. **Review fix** returns to the same review group with Before fix / After fix and unresolved findings ready to retest.
+7. Approve the candidate and merge/push. Protected repositories can use **Workspace > Delivery > Create pull request**, with an authenticated GitHub CLI.
 
-Run `../desktop/Branch Review-win32-x64/Branch Review.exe`. Keep the executable with the rest of that folder. The pilot restores the running preview pair and its saved review. This is a local unsigned build; Meta Clinic's development prerequisites remain required.
+## Any project's setup
 
-From source:
+Projects are not restricted to Meta Clinic. Root npm Vite and Next projects with a package lock have automatic web previews. Other stacks, monorepos and service dependencies use a local recipe in **Workspace > Preview setup**. Install the project's required runtimes first.
 
-```powershell
-npm ci
-node node_modules/electron/install.js
-npm run desktop
-```
+Commands are executable-and-argument arrays, not shell strings. Configure the working directory, setup, start command, readiness path, optional services, environment and checks. Example Python server start: `["python","-m","http.server","{port}","--bind","127.0.0.1"]`.
 
-`npm run package:desktop` builds the Windows executable. `npm start` provides the browser interface at http://127.0.0.1:4310 instead; close that server before opening the desktop app. Only one controller can own the fixed ports.
+Placeholders: `{root}`, `{port}`, `{side}`, `{commit}`, `{data}`. Use `{data}` or revision-specific database names for isolated data. Branch Review cannot isolate an external database hardcoded by a project. Stop previews before editing their recipe. Recipe changes invalidate approval.
 
-**Open repository** selects a local Git folder. Branch listing works with Git repositories; previews and publishing currently support Meta Clinic. The branch list defaults to **Unmerged into main**, based on commit ancestry against origin/main. Identical local/remote copies are combined; divergent copies remain separate. **All branches, including merged** shows historical work. The local branch list refreshes automatically every 30 seconds. Use Refresh to fetch current remote refs. The All/Unmerged filter survives reopening. This is merge status, not a claim that a revision has been published. Search a branch, choose Previous commit or Common ancestor with main, then **Open review**. First setup installs dependencies and migrates a separate database for each revision.
+Generic previews use separate ports, retain recent healthy versions, reuse dependency setup and stop owned processes on exit. Meta Clinic keeps its existing adapter, data recipes and release integration. Generic projects require no Muse account, Office server or personal filesystem path.
 
-Original and Changed stay mounted while toggling. Choose **Side by side** to see both, adjust the split, or disable **Link scrolling** for independent inspection. Linked tables align by the first visible row's first-cell identifier when unique in the matching table; otherwise comparison uses pixel position. Re-enabling the link aligns the other preview immediately. Preview forms and data remain isolated. **Reset item** returns both to the selected screen; save preview edits first. Stop previews stops the owned stacks and preserves databases. Closing the desktop app keeps previews running and is blocked during active operations. Window size and maximized state are restored.
+Native/mobile apps and headless tools need an appropriate web harness to use the embedded preview. Configurable project support does not imply automatic knowledge of every build system.
 
-## Guided QA
+## Activity and browser QA
 
-1. Choose a branch. Its description, exact comparison, changed files and review plan appear before startup. Compare against the previous commit, common ancestor, current main, or a chosen commit from history.
-2. **Open review** starts two isolated versions and opens item 1. The left queue shows progress; the right panel explains what changed, what to do, and the expected result. Hide branches to give the queue more room.
-3. Check each observed result and add notes. Notes autosave and recover after reopening. A failed save blocks navigation instead of silently losing your work.
-4. Use **Next item** / **Previous**, or select any queue item. Next skips completed items. Leaving an unfinished item requires an explicit choice and never marks it passed. Use search and Remaining / Needs attention / Completed filters for a long review.
-5. A failed or blocked item needs a reason. **Not applicable** also requires a reason and remains visible as an exclusion in the summary. Open findings override a passing checklist.
-6. The results screen shows every outcome and the next valid delivery action. **Prepare fixes for Codex** creates a scoped request with exact revisions, failed or unverified items, notes and findings. Copy or download it, or use Review tools to explicitly send it to a selected local Codex chat.
+**Activity** shows jobs and browser runs with running indicators, logs, commit identity and screenshots. **Run browser checks** opens a separate browser you can watch and stop. Its default visit checks prove checklist screens render; they do not prove every requirement passes.
 
-## More tools (0.4.1)
-
-The main screen focuses on the preview and active review item. Comparison options stay collapsed; findings open from Report a problem. Plan, checks, evidence, history and workspace controls live in More tools. Delivery controls appear with review results.
-
-**Plan** edits, reorders and adds stable review items, captures the current screen, and creates separate tablet/phone checks. Saving creates a new review version with unchecked requirements; old evidence remains in history. Export the manifest to commit it with the branch. Optional Codex generation uses the installed CLI and account, runs read-only in its own detached checkout (including indexing-tool side effects), and produces a draft requiring review and save. Automatic generation is opt-in.
-
-**Updates and fixes** detects new commits, recommends retests from affected files and unresolved findings, and reports branch ancestry and file overlap. Unknown impact remains explicit. Review fixes restricts Previous/Next to items needing fixes or blocked. Direct Codex handoff accepts an existing chat UUID or starts a dedicated fix chat when blank. The request you review is the request sent. Work runs in a new isolated fix checkout. If Codex cannot commit, Review files to commit lets you explicitly select the fix files; unrelated edits stay uncommitted. Review fixed branch preserves the original baseline, carries unresolved findings and evidence, and resets checks and approval. A response without a new commit is never reported as a completed fix.
-
-**Evidence** records up to 30 supported interactions, replays them in the other preview, and stops on mismatched routes or controls. Capture and annotate screenshots with boxes, arrows and numbered notes. Matching screenshots support ignored regions and pixel highlighting; differences are evidence, not automatic failures. Record up to 15 seconds of preview video and attach it to a finding. Reports embed saved media and tool results. Captured browser errors and request diagnostics redact common credentials; inspect evidence before sharing.
-
-**Checks** runs configured package scripts in the isolated Changed checkout, checks the current screen with axe, and compares three local page-load samples per version. None of these checks automatically passes manual review items. Restore starting data resets the selected fixture and review checks while retaining evidence. Prepare preview builds a third isolated database/server environment while reviewing; opening that exact commit can reuse it. The spare uses web 3430, API 3431 and PostgreSQL 54543; browser gateways remain 4311/4312 when it becomes Changed.
-
-**Published** provides a separate post-publish checklist pinned to the hosted build. Local passes never satisfy hosted checks. The live publish path remains unexercised. Direct Codex dispatch, selected-file commit, return to review and retest were exercised in the packaged desktop app.
-
-Items sharing a screen preserve its state and focus the relevant row or heading. The toolbar reports when the target is located, missing, or cancelled by manual navigation. Target discovery waits up to one minute for slower screens; scrolling or navigating yourself cancels the pending jump. Moving to another screen prompts before discarding unsaved preview edits. Alt+Left / Alt+Right navigate items; Alt+V toggles versions, including when the preview has focus. These shortcuts do not intercept typing in fields. **Review code** always shows the active review's pinned revisions, even when a different branch is selected in the browser.
-
-## Local configuration
-
-The pilot repository is `C:/Users/joshr/Desktop/meta_clinic`. `.local/config.json` accepts `repository`, `previewRoot`, and `toolchain` (the directory containing pinned pnpm.cmd). The desktop app stores its selected data directory in its user-data `desktop.json`. `BRANCH_REVIEW_HOME` overrides the data directory; `META_CLINIC_REPO` overrides the repository. Configuration, screenshots and review records are never committed.
-
-This workspace uses `../../work/previews` and `../../work/toolchain/node_modules/.bin`. The private package manager can be prepared with:
-
-```powershell
-npm install --prefix ../../work/toolchain pnpm@11.19.0 --no-audit --no-fund
-```
-
-Meta Clinic also needs its pinned Ruby, Node, PostgreSQL client tools, Python and Docker prerequisites. Choose a new nonexistent previewRoot for a new installation. The app writes an ownership marker and refuses unrelated directories. It never switches the primary checkout or discards worktree edits.
-
-| Resource | Original | Changed |
-| --- | --- | --- |
-| Gateway | 4311 | 4312 |
-| Web | 3410 | 3420 |
-| API | 3411 | 3421 |
-| PostgreSQL | 54541 | 54542 |
-| Container | apply-review-original | apply-review-changed |
-
-Listeners use loopback. Database names include side and revision; an older revision never migrates a newer revision's database backwards. Gateways namespace cookies by side and revision. Preview origins have separate browser storage. Control requests require the workspace origin and a per-process token. The Electron renderer is sandboxed with context isolation and no Node integration; only the main review frame can request the narrow desktop actions.
-
-Setup/start/stop use Meta Clinic's lifecycle through its shared resource queue. Worktree edits block switching. Diagnostic files are stored in the local data directory. Databases and worktrees are retained for reuse.
-
-## Saved reviews
-
-1. Open a branch, compare versions, and complete each review item.
-2. Record expected and actual behavior. Capture screenshot attaches the desktop window. Findings also include the side, revision, scenario, current route and captured browser errors. These are local records, not GitHub issues.
-3. Saved reviews can reopen the latest branch commit for retesting. Unresolved findings carry forward; new revisions reset checks and approval. Resolving a finding requires a retest note.
-4. Approval binds the source, baseline, candidate, manifest and seed recipe. Checklist or finding edits invalidate approval.
-
-Findings can be filtered by current item or unresolved status. Click a screenshot to enlarge it with its original revision and route. Retest notes survive filtering and rerenders. **View / export review report** produces a portable HTML report with checks, outcomes, notes, findings, embedded screenshots, approval and delivery history. Saved reviews remain inspectable after moving to a new commit.
-
-Records are in `reviews.json`; images are under `screenshots/` in the configured local directory.
-
-## Merge and publish
-
-Prepare integration candidate fetches current main and constructs the merge result without switching the primary checkout. Original becomes main, Changed becomes the candidate. Conflicts stop preparation. Test and approve this exact result before Merge and push to main. Source or main changes block shipping; pushes are ordinary fast-forward pushes, never force pushes. An uncertain push can be retried to reconcile the remote revision.
-
-Publish settings selects the existing SSH key and encrypted recovery directory. Publish separately confirms the exact commit and https://aimetaclinic.com. It invokes Meta Clinic's existing `ops/lightsail/release.ps1` from a dedicated clean clone on main, using its backup, migration and release checks. Publishing is restricted to the Meta Clinic origin. Failed/interrupted deployment requires an inspection note before retrying; do not blindly remove recovery artifacts.
-
-The app checks hosted build identity and health before recording Published. Test the hosted workflow yourself and record its result to mark Verified. Push, deployment and workflow acceptance are separate states.
-
-The pilot branch `codex/intake-completion-ui` compares `8968d0b8` with `a4948139`. It is already included in main and is blocked from merging again. These older revisions lack readable build metadata: comparison still works, but approval health remains blocked with an explanation.
-
-## Generated review checklists
-
-Opening a branch fetches GitHub main, prepares the combined code, then asks the installed Codex CLI to inspect the exact diff and relevant screen routes in a separate detached checkout. The checklist is validated and saved under Branch Review's local `diff-reviews/plans` directory, keyed by the exact candidate commit. Reopening the same candidate reuses it; changed code gets a new checklist and review. Generation failures stop review startup rather than showing unrelated checks.
-
-Legacy `.branch-review.json` files are ignored as guidance and removed from both merge inputs using temporary Git objects, without touching either checkout. The final candidate retains the actual main and branch parents. Application conflicts still block preparation. Fix handoffs no longer request checklist commits. You can edit or export `review-checklist.json` from the app; it does not belong in the application repository.
-
-Generated checks are proposed instructions, not test evidence. Verify their relevance before approval. The generator uses your configured Codex account and requires its CLI to be available.
-
-Versions 1 and 2 support 1–100 review items, each with 1–20 checks. The JSON file is limited to 64 KB. Paths stay under `/clinic`, on `/qa`, or on the explicit public pages `/`, `/meta-clinic` and `/demo` (including query strings and anchors). Public pages open directly without development login in both previews; the existing isolated recipes still prepare clinic and QA starting data. `:intake` uses the seeded encounter; `:patientId` and `:encounterId` interpolate its identifiers. `originalPath` optionally provides a different destination for Original. `focus` matches a table row's first-cell identifier or an exact heading label. Keep item IDs stable across fixes so unresolved findings carry forward correctly. The manifest guides navigation and testing; it does not execute scripts or create arbitrary seed data.
+Expand Browser actions for behavior checks using actual checklist item IDs. Supported actions: visit, click, fill, text, style. Selectors must match exactly one visible control.
 
 ```json
-{
-  "version": 2,
-  "title": "Intake controls",
-  "summary": "Answer controls make incomplete intake questions easier to find.",
-  "scenarios": [{
-    "id": "intake",
-    "title": "Partially completed intake",
-    "path": ":intake",
-    "description": "Review the changed answer controls on a partly completed intake.",
-    "instructions": "Compare both versions, then edit an answer in Changed and reopen it.",
-    "expected": "The answer persists in Changed while Original remains unchanged.",
-    "steps": ["Save an answer in Changed", "Confirm Original stays unchanged"]
-  }]
-}
+[
+  {"itemId":"tutorial-button","action":"visit","path":"/tutorials"},
+  {"itemId":"tutorial-button","action":"style","selector":"#try-tutorials","property":"background-color","value":"rgb(37, 99, 235)"},
+  {"itemId":"tutorial-button","action":"click","selector":"#try-tutorials"},
+  {"itemId":"tutorial-button","action":"text","selector":"#try-tutorials","value":"Sandbox opened"}
+]
 ```
 
-## Validation
+Evidence is ordered and pinned to the reviewed commit. Missing or interrupted results cannot become passes. Browser results do not approve manual items. This is an explicit browser-check runner; autonomous test discovery and generic hosted QA are not implemented. Muse hosted QA remains part of the optional Meta Clinic integration.
 
-After publishing, **Review tools → Published review → Open Office** verifies that the hosted build matches the reviewed commit and opens `https://aimetaclinic.com/qa?view=office`. It opens Office without starting a Muse run or recording a QA result.
+## Delivery
 
-```powershell
-npm test
-npm run test:live
-node test/qa-live.mjs
-```
+Git pushes never force-update the remote. A moved default branch requires reviewing a new candidate. GitHub pull requests retain repository protection rules and require `gh` authentication.
 
-Unit tests cover Git comparisons, invalid refs, session separation, gateway boundaries, persisted findings, approval invalidation, merge candidates, moving refs and simulated release results. Delivery tests push only to disposable local bare repositories. Release tests never contact the hosted application.
+Configure a deployment executable/arguments and HTTPS build-receipt URL in Workspace. It runs only after the exact approved commit is pushed. Arguments support `{commit}` and `{root}`. The receipt must return JSON with `revision` equal to that commit and `dirty` false or absent. Command success without a matching receipt is not Published. Uncertain deployments require an inspection note before retrying.
 
-The intake live check requires a ready intake preview pair. It signs into both with one cookie jar, saves and reloads a synthetic answer in Changed, verifies Original stays unchanged, then restores the answer. The QA live check requires the QA pair; it validates exact build IDs and the saved-result projection. Run the check matching the active plan.
+Credentials and deployment setup belong to the project. No provider credentials are installed automatically.
 
-Windows Computer Use verified the six-item QA journey, all 12 checks, persisted notes, Previous/Next, unfinished-item handling, blocked-item reasons, result summaries, fix-request preparation, screenshot capture, finding resolution, portable report display, source diffs, side-by-side views, linked scrolling, keyboard controls and restoring the correct route on 2026-10-15. Original ecbe9d9 shows historical untested rows; Changed 3f9a686 shows WF-011 Fail and WF-012 Pass, while WF-013 remains stale. Native Windows automation provides desktop acceptance; the browser-only connector cannot control this app. The local integration candidate `16c047d` against main `f0a0e74` also passed all 12 guided checks and exact-build live verification. Its approval was saved; the merge confirmation was inspected and cancelled. The intake journey saved a Changed answer through the desktop, preserved Original, and retained the answer after a full restart. Live publication remains untested. This implementation task has not pushed or deployed Meta Clinic changes.
+## Storage and boundaries
 
-## QA grid comparison
+Each project has local config, plans, reviews, evidence and worktrees. `BRANCH_REVIEW_HOME` overrides its data directory. Desktop project selection is stored in user-data. Config accepts `repository`, `previewRoot`, and optional `toolchain` for Meta Clinic's pinned package manager. `META_CLINIC_REPO` remains a compatibility override.
 
-`codex/qa-grid-freshness` uses the parent commit as Original and the branch tip as Changed. Both receive the same synthetic post-import snapshot: 116 historical workflow rows plus saved result records for WF-011 (Fail), WF-012 (Pass), and WF-013 (an older-build Fail). Original shows the imported historical rows; Changed projects saved results over them, keeping WF-013 stale. These fixtures test the read projection, not cryptographic receipt submission or live QA outcomes. No hosted ledger is modified.
+Checklists come from the actual diff and routes in a read-only checkout and stay outside project source. They are proposed testing instructions, not proof. Legacy checklist files cannot block candidate preparation; application conflicts still require resolution. Unrelated edits are preserved.
 
-`node test/qa-live.mjs` checks the ready pair's exact build IDs, QA route, original/changed rows, stale-build control, and repeated reads. It writes `.local/qa-verification.json`. Desktop previews automatically use the scenario selected from the changed files. Windows stop recovery removes only PID records whose processes no longer exist and whose root and role match the owned checkout; live or unrelated records remain untouched.
+Codex jobs disable unrelated connectors, plugins, apps and hooks for that process without altering global configuration. Claude disconnected-state support remains; live Claude acceptance is deferred.
 
-Windows Computer Use verified bidirectional scroll alignment on 2026-10-15: Changed to Original retained WF-010–014; scrolling Original and switching back retained WF-012–016. Regression tests cover different row heights, horizontal scrolling, missing-row fallback, message boundaries and feedback suppression.
+Loopback ports 4310-4312 are reserved. Only one controller can own them. The desktop renderer is sandboxed, and preview content cannot invoke privileged desktop controls. Running project commands is not an operating-system security sandbox.
 
-### Desktop 0.4.1 acceptance
+## More tools
 
-The final automated suite passes 59 tests. Native Windows checks cover real Codex fix dispatch, selected-file commit, fixed-branch return, evidence preservation, finding retest, annotated screenshots, attached video playback after restart, phone/tablet comparison, interaction replay, configured TypeScript checks, read-only Codex plan generation and current-screen capture/reordering. Exact-build QA verification passed Original `ecbe9d9` and Changed `efb7649`. See DELIVERY.md for the acceptance boundary. Screenshots and recordings are cropped to the visible preview pane, including horizontally scrolled tablet layouts.
+- **Plan:** edit proposed checks and routes; changes invalidate approval.
+- **Updates & fixes:** findings, jobs, fix retesting and history.
+- **Evidence:** screenshots, annotations, recordings and interaction replay.
+- **Checks:** configured commands, accessibility and performance checks.
+- **Published review:** existing Meta Clinic hosted-review integration.
+- **Workspace:** repository, CLI diagnostics, preview setup and delivery.
+
+Reports include outcomes, findings, screenshots, approval and delivery history. Old requests remain in history; save errors are visible.
+
+## Development
+
+`npm test` includes disposable Git repositories, actual custom-preview processes, provider protocol tests and browser-evidence validation. `npm run package:desktop` builds Windows x64. `npm start` provides the web UI; desktop capture and browser runs require Electron.
+
+Meta Clinic's `npm run test:live` and `node test/qa-live.mjs` need their matching prepared preview pair. Packaging is unsigned Windows x64. Installers, signing and automatic updates remain separate distribution work.

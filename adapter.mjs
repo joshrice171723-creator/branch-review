@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { scenarioRecipe } from './reviews.mjs';
 import { loadPlan } from './plans.mjs';
 import {createHash} from 'node:crypto';
+import {detectProject,WebPreviews} from './web-project.mjs';
 import {frontendOnly} from './fix-review.mjs';
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
@@ -17,13 +18,14 @@ const config = JSON.parse(
 export const repo =
   process.env.META_CLINIC_REPO ||
   config.repository ||
-  "C:/Users/joshr/Desktop/meta_clinic";
+  process.cwd();
+export const project=await detectProject(repo).catch(error=>({kind:'unsupported',name:path.basename(repo),error:error.message}));
 export const previewRoot = path.resolve(
-  config.previewRoot || path.join(root, "../../work/previews"),
+  config.previewRoot || path.join(local, 'previews'),
 );
 export const toolchain =
   config.toolchain ||
-  path.resolve(root, "../../work/toolchain/node_modules/.bin");
+  "";
 export const slots = {
   original: { web: 3410, api: 3411, postgres: 54541, proxy: 4311 },
   changed: { web: 3420, api: 3421, postgres: 54542, proxy: 4312 },
@@ -91,8 +93,16 @@ async function assertOwner() {
     await writeFile(marker, JSON.stringify({ app: "branch-review/v1", repository: repo }));
   }
 }
+const webPreviews=new WebPreviews({run,progress,local});
+export const webHealthy=preview=>webPreviews.healthy(preview.runtime || preview.side,preview.sha);
+export async function defaultBranch(){
+  const ref=await git('symbolic-ref','--quiet','refs/remotes/origin/HEAD').catch(()=> '');
+  if(ref.startsWith('refs/remotes/origin/'))return ref.slice('refs/remotes/origin/'.length);
+  for(const name of ['main','master'])if(await git('rev-parse','--verify','refs/remotes/origin/'+name).then(()=>true,()=>false))return name;
+  throw Error('Fetch origin and set its default branch before reviewing this repository.');
+}
 export async function branches() {
-  const merged = new Set((await git('for-each-ref', '--merged=refs/remotes/origin/main', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin')).split('\n'));
+  const merged = new Set((await git('for-each-ref', '--merged=refs/remotes/origin/'+await defaultBranch(), '--format=%(refname)', 'refs/heads', 'refs/remotes/origin')).split('\n'));
   const output = await git(
     "for-each-ref",
     "--sort=-committerdate",
@@ -131,7 +141,7 @@ export async function comparison(ref, baseline, baselineCommit) {
   const branch = entry && {...entry, ref};
   if (!branch)
     throw new Error("Branch no longer exists. Refresh the branch list.");
-  const main = await git("rev-parse", "refs/remotes/origin/main");
+  const main = await git("rev-parse", "refs/remotes/origin/"+await defaultBranch());
   if(baseline==='commit' && !/^[a-f0-9]{40}$/.test(baselineCommit || ''))throw new Error('Choose a full commit from history.');
   const base = baseline==='main'? main : baseline==='commit'? await git('rev-parse','--verify',`${baselineCommit}^{commit}`) :
     baseline === "parent"
@@ -147,7 +157,7 @@ function environment(side, sha) {
   const slot = slots[side];
   return {
     ...process.env,
-    PATH: `${toolchain}${path.delimiter}${process.env.PATH}`,
+    PATH: toolchain ? `${toolchain}${path.delimiter}${process.env.PATH}` : process.env.PATH,
     APP_DEVELOPMENT_LOGIN: "1",
     QA_BUILD_URL: `http://127.0.0.1:${slot.web}/build.json`,
     BRANCH_REVIEW_REVISION: sha,
@@ -161,6 +171,7 @@ function environment(side, sha) {
 }
 async function lifecycle(side, sha, action, database) {
   const cwd = path.join(previewRoot, side);
+  if(project.kind!=='meta-clinic'){if(action==='stop')return webPreviews.stop(side);throw Error('Unsupported web lifecycle operation.');}
   if (action === 'stop') await clearDeadPidRecords(cwd);
   const env = environment(side, sha);
   if(database)env.APPLY_DEVELOPMENT_DATABASE=database;
@@ -226,6 +237,10 @@ export async function prepare(side, sha, files=state.comparison.files) {
       `${side} preview has edits. Preserve them before switching.\n${dirty}`,
     );
   const current = await run("git", ["rev-parse", "HEAD"], { cwd });
+  if(project.kind!=='meta-clinic'){
+    if(project.error)throw Error(project.error);
+    return webPreviews.prepare(side,sha,cwd,()=>run('git',['checkout','--detach',sha],{cwd}));
+  }
   const recipeHash=createHash('sha256').update(await readFile(path.join(root,scenarioRecipe(files)))).digest('hex');
   const cacheFile=path.join(local,`preview-${side}-${sha}-${recipeHash}.json`);
   const cached=JSON.parse(await readFile(cacheFile,'utf8').catch(()=> 'null'));
@@ -284,6 +299,7 @@ export async function resetScenario(side){
   if(!['original','changed'].includes(side) || state.status!=='ready')throw new Error('Open a ready preview first.');
   await assertOwner();const preview=state[side],runtime=preview.runtime || side,cwd=path.join(previewRoot,runtime);
   if(await run('git',['rev-parse','HEAD'],{cwd})!==preview.sha || await run('git',['status','--porcelain'],{cwd}))throw new Error('Preview source changed. Reopen its committed version.');
+  if(project.kind!=='meta-clinic')return preview.scenario;
   const output=await run('ruby',['bin/postgres','exec','bin/rails','runner',path.join(root,scenarioRecipe(state.comparison.files))],{cwd:path.join(cwd,'apps/api'),env:{...environment(runtime,preview.sha),APPLY_DEVELOPMENT_DATABASE:preview.database,BRANCH_REVIEW_RESET:'1'}});
   const line=output.split('\n').find(line=>line.startsWith('BRANCH_REVIEW='));if(!line)throw new Error('Scenario reset did not return a destination.');
   preview.scenario=JSON.parse(line.slice('BRANCH_REVIEW='.length));return preview.scenario;
@@ -385,6 +401,7 @@ export async function restoreReview() {
         })
       )
         throw new Error("Preview checkout has edits.");
+      if(project.kind!=='meta-clinic'){if(!await webHealthy(slot))throw Error('Preview stopped.');continue;}
       const response = await fetch(`http://127.0.0.1:${slot.api}/up`, {
         signal: AbortSignal.timeout(3000),
       });

@@ -806,3 +806,12 @@ dialog::backdrop {background:#152c2b80}
 #workspace-actions button {width:auto}
 #review-fixes:disabled {display:none}
 #tools-dialog .tools-tabs button[aria-pressed="true"] {background:#244e40;color:white}
+
+.working { color: #176b50; animation: working-pulse 1.4s ease-in-out infinite; }
+@keyframes working-pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .working { animation: none; } }
+
+#activity-dialog button {border:1px solid #cbd8cc;background:#f4f7f1;color:#244f42;border-radius:5px;padding:10px 14px;}
+#activity-dialog textarea {width:100%;font:12px/1.5 monospace;min-height:160px;border:1px solid #cbd8cc;padding:12px;}
+#activity-dialog .tool-actions {display:flex;gap:10px;flex-wrap:wrap;}
+#activity-dialog pre {white-space:pre-wrap;overflow-wrap:anywhere;}

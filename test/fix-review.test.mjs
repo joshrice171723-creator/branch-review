@@ -31,7 +31,7 @@ test('frontend-only preparation reuses data and skips setup; backend changes use
  async function exercise(files,dirty=''){
   const calls=[],saved=[];
   const old={sha:'old',database:'existing_database',scenario:{path:'/demo'},runtime:'standby'};
-  const context={path:{join:(...parts)=>parts.join('/'),resolve:value=>value},previewRoot:'/previews',local:'/data',root:'/app',state:{comparison:{files}},slots:{standby:{api:1,web:2}},scenarioRecipe:()=> 'recipe',frontendOnly,createHash:()=>({update:()=>({digest:()=> 'hash'})}),exists:async()=>true,assertOwner:async()=>{},progress:()=>{},environment:()=>({APPLY_DEVELOPMENT_DATABASE:'new_database'}),
+  const context={project:{kind:'meta-clinic'},path:{join:(...parts)=>parts.join('/'),resolve:value=>value},previewRoot:'/previews',local:'/data',root:'/app',state:{comparison:{files}},slots:{standby:{api:1,web:2}},scenarioRecipe:()=> 'recipe',frontendOnly,createHash:()=>({update:()=>({digest:()=> 'hash'})}),exists:async()=>true,assertOwner:async()=>{},progress:()=>{},environment:()=>({APPLY_DEVELOPMENT_DATABASE:'new_database'}),
    readFile:async file=>{if(file==='/app/recipe')return'fixture';if(file.includes('-old-hash'))return JSON.stringify(old);throw Error('missing');},
    writeFile:async(file,data)=>saved.push(JSON.parse(data)),git:async(...args)=>args[0]==='diff'?files.join('\0'):'/repo/git',
    run:async(command,args)=>{if(command==='ruby')return 'BRANCH_REVIEW={"path":"/demo"}';if(args.includes('--git-common-dir'))return'/repo/git';if(args[0]==='status')return dirty;if(args[0]==='rev-parse')return'old';return'';},
@@ -42,4 +42,10 @@ test('frontend-only preparation reuses data and skips setup; backend changes use
  const fast=await exercise(['apps/web/src/Button.tsx']);assert.deepEqual(fast.calls.map(call=>call[2]),['stop','start']);assert.equal(fast.calls[1][3],'existing_database');assert.equal(fast.result.database,'existing_database');assert.equal(fast.result.sha,'new');
  const full=await exercise(['apps/api/model.rb']);assert.deepEqual(full.calls.map(call=>call[2]),['stop','setup','start']);assert.equal(full.result.database,'new_database');
  await assert.rejects(exercise(['apps/web/src/Button.tsx'],' M Button.tsx'),/has edits/);
+});
+test('uncommitted fix attempts stay in Jobs while independently changed branches stay visible',()=>{
+ const original={ref:prior.identity.ref,sha:'source'},attempt={ref:'refs/heads/branch-review/attempt',sha:'before'};
+ const jobs=[{kind:'fix',status:'failed',reviewId:prior.id,branch:'branch-review/attempt',commit:'before'}];
+ assert.deepEqual(groupedBranches([original,attempt],jobs,[prior]),[original]);
+ assert.equal(groupedBranches([original,{...attempt,sha:'independent'}],jobs,[prior]).length,2);
 });

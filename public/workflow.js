@@ -7,7 +7,7 @@ const node = (tag, text, className) => { const el = document.createElement(tag);
 export async function mergeAndPublish(api, state, wait = ms => new Promise(resolve=>setTimeout(resolve,ms))) {
   const id=state.record.id, sha=state.record.identity.changed;
   if(state.record.delivery?.stage!=='pushed') {
-    await api('/api/ship',{id,confirmation:`MERGE ${sha} TO origin/main`});
+    await api('/api/ship',{id,confirmation:`MERGE ${sha} TO origin/${state.defaultBranch || "main"}`});
     for(let attempt=0;attempt<120;attempt++) {
       const next=await api('/api/state');
       if(next.record?.id!==id || next.record.identity.changed!==sha)throw Error('The active review changed. Publishing stopped.');
@@ -109,6 +109,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   $('results-action').onclick=async()=>{
     const state=getState(),r=state.record;
     if(delivering || approving || state.busy)return;
+    if(state.publishTarget===null && r.approval){if(r.delivery?.stage==='pushed')return;return $('ship').click();}
     if(['published','verified'].includes(r.delivery?.stage)){try{await api('/api/published-review',{id:r.id,action:'start'});await window.desktop.openPublished(state.publishTarget+'/qa?view=office');}catch(e){error(e.message);}return;}
     if(canApprove(r) && r.approval && r.integration?.sha===r.identity.changed && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(r.delivery?.stage)){
       if(!await guide.flush())return;
@@ -123,10 +124,10 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     if(['reviewer','release-note'].includes(action)){$('results-checks').open=true;const section=target.closest('details');if(section)section.open=true;target.scrollIntoView({block:'center'});target.focus();}
     else if(!target.disabled)target.click();
   };
-  $('candidate').onclick = () => { if(confirm('Prepare the merged result against current main? Save your preview edits first. The new candidate needs its own completed checklist and approval.')) act('candidate'); };
+  $('candidate').onclick = () => { if(confirm('Prepare the merged result against the current remote default branch? Save your preview edits first. The new candidate needs its own completed checklist and approval.')) act('candidate'); };
   $('ship').onclick = () => {
     const r = getState().record;
-    if(confirm(`Merge and push reviewed commit ${r.identity.changed} to origin/main in ${r.identity.repository}?`)) act('ship', {confirmation:`MERGE ${r.identity.changed} TO origin/main`});
+    if(confirm(`Merge and push reviewed commit ${r.identity.changed} to origin/${getState().defaultBranch || "main"} in ${r.identity.repository}?`)) act('ship', {confirmation:`MERGE ${r.identity.changed} TO origin/${getState().defaultBranch || "main"}`});
   };
   $('release-settings').hidden = !window.desktop;
   $('release-settings').onclick = async () => { try { const files=await window.desktop.chooseReleaseFiles(); if(files) await act('release-settings',files); } catch(e) { error(e.message); } };
@@ -187,12 +188,13 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     if(r){
       const stage=r.delivery?.stage,done=['published','verified'].includes(stage),approved=canApprove(r) && !!r.approval && r.integration?.sha===r.identity.changed;
       $('results-title').textContent=done?'Published':stage==='deploying'?'Publishing…':delivering?'Merging…':r.manifest.title || 'Review summary';
-      if(!published){$('results-message').hidden=false;if(canApprove(r) && r.integration?.sha===r.identity.changed)$('results-message').textContent=r.approval?'Approved. Ready to merge and publish.':'Reviewed against GitHub main. Ready to approve.';}
+      if(!published){$('results-message').hidden=false;if(canApprove(r) && r.integration?.sha===r.identity.changed)$('results-message').textContent=r.approval?'Approved. Ready to merge and publish.':'Reviewed against the remote default branch. Ready to approve.';}
       $('results-action-detail').hidden=true;
       $('approval-section').hidden=published || !!r.approval || !canApprove(r) || r.integration?.sha!==r.identity.changed;
       $('review-notice').hidden=published || r.cursor?.view==='results';
       if(done){$('results-action').textContent='Watch Muse in Office';$('results-action').disabled=!enabled || !window.desktop;}
       else if(approved && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(stage)){$('results-action').textContent=stage==='deploying'?'Publishing…':delivering?'Merging…':stage==='pushed'?'Publish':'Merge and publish';$('results-action').disabled=!enabled || delivering;}
+      if(state.publishTarget===null && approved){$('results-action').textContent=stage==='pushed'?'Merged and pushed':'Merge and push';$('results-action').disabled=!enabled || stage==='pushed';$('results-message').textContent=stage==='pushed'?'Open Workspace > Delivery to publish or use your existing deployment process.':'Approved. Ready to merge and push.';}
       if(approving){$('results-action').textContent='Approving…';$('results-action').disabled=true;}
     }
     $('review-workflow').hidden=!r;
@@ -244,7 +246,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
       }));
       if(!visibleFindings.length) $('findings').append(node('p',r.issues.length?'No findings match this view.':'No findings recorded.','small muted'));
       $('approval-state').textContent=r.approval?`Approved by ${r.approval.reviewer} · ${r.approval.commit.slice(0,7)}`:canApprove(r)?'Review complete. Enter your name to approve this exact version.':'Complete every check and resolve findings before approval.';
-      $('delivery-state').textContent=r.delivery?`Delivery: ${r.delivery.stage.replaceAll('-',' ')}${r.delivery.error?' · '+r.delivery.error:''}`:r.integration?`Integration candidate ${r.integration.sha.slice(0,7)} against main ${r.integration.main.slice(0,7)}`:'Prepare the integration candidate before merging. It includes current main.';
+      $('delivery-state').textContent=r.delivery?`Delivery: ${r.delivery.stage.replaceAll('-',' ')}${r.delivery.error?' · '+r.delivery.error:''}`:r.integration?`Integration candidate ${r.integration.sha.slice(0,7)} against the default branch ${r.integration.main.slice(0,7)}`:'Prepare the integration candidate before merging. It includes the remote default branch.';
     }
     for(const id of ['scenario-select','expected','actual','capture','report','reviewer','candidate','approve']) $(id).disabled=!enabled;
     $('reviewer').disabled ||= approving;
@@ -253,6 +255,8 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('report').disabled ||= capturing;
     $('approve').disabled=published || !enabled || !canApprove(r);
     $('ship').disabled=!enabled || !r.approval || r.integration?.sha!==r.identity.changed || ['pushed','deploying','published','verified'].includes(r.delivery?.stage);
+    $('publish').hidden=state.publishTarget===null;
+    $('release-settings').hidden=state.publishTarget===null;
     $('publish').disabled=!enabled || !r.approval || r.delivery?.stage!=='pushed' || !state.releaseConfigured;
     $('release-settings').disabled=state.busy;
     $('smoke').disabled=!enabled || r.delivery?.stage!=='published';

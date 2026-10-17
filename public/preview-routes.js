@@ -3,11 +3,11 @@ export function isPublicDestination(destination) {
 }
 export function isReviewDestination(destination) {
   if (typeof destination !== 'string' || destination.length > 500 || /[\\\x00-\x20]|%5c/i.test(destination)) return false;
-  if (!(isPublicDestination(destination) || /^\/(?:clinic(?:[/?#]|$)|qa(?:[?#]|$))/.test(destination))) return false;
+  if (!destination.startsWith('/') || destination.startsWith('//') || /%2f/i.test(destination.split(/[?#]/,1)[0])) return false;
   const pathname = destination.split(/[?#]/, 1)[0];
   if (/\/(?:\.|%2e){1,2}(?:\/|$)/i.test(pathname)) return false;
   const parsed = new URL(destination, 'http://localhost');
-  return parsed.origin === 'http://localhost' && (isPublicDestination(parsed.pathname) || /^\/(?:clinic(?:\/|$)|qa$)/.test(parsed.pathname));
+  return parsed.origin === 'http://localhost';
 }
 export function scenarioPath(scenario, fixture) {
   if (scenario.path === ':intake') return fixture.path;

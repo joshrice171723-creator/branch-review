@@ -12,6 +12,11 @@ export function reviewRoot(record,records){
 
 export function groupedBranches(branches,jobs,records){
   const groups=new Map(),hidden=new Set();
+  // Uncommitted attempts remain recoverable in Jobs, not duplicate review branches.
+  for(const job of jobs.filter(job=>job.kind==='fix' && job.status!=='succeeded')){
+    const branch=branches.find(row=>row.ref==='refs/heads/'+job.branch);
+    if(branch && branch.sha===job.commit && records.some(row=>row.id===job.reviewId))hidden.add(branch.ref);
+  }
   for(const job of jobs.filter(job=>job.kind==='fix' && job.status==='succeeded')){
     const prior=records.find(row=>row.id===job.reviewId),root=reviewRoot(prior,records);
     const fix=branches.find(branch=>branch.ref==='refs/heads/'+job.branch && branch.sha===job.resultCommit);

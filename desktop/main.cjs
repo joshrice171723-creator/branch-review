@@ -15,11 +15,25 @@ else {
 }
 async function launch() {
   const root = path.dirname(__dirname);
+  const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
   const settings = JSON.parse(await readFile(settingsPath, 'utf8').catch(() => '{}'));
   home = process.env.BRANCH_REVIEW_HOME || settings.home || (app.isPackaged ? path.join(app.getPath('userData'), 'workspace') : path.join(root, '.local'));
   await mkdir(home, { recursive: true });
   process.env.BRANCH_REVIEW_HOME = home;
+  const configured=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
+  if(!configured.repository && !process.env.META_CLINIC_REPO){
+    const choice=await dialog.showOpenDialog({title:'Choose a trusted Git repository to review',properties:['openDirectory']});
+    if(choice.canceled){app.quit();return;}
+    const repository=(await exec('git',['rev-parse','--show-toplevel'],{cwd:choice.filePaths[0],windowsHide:true})).stdout.trim();
+    await detectProject(repository);
+    const trust=await dialog.showMessageBox({buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});
+    if(trust.response!==0){app.quit();return;}
+    await writeFile(path.join(home,'config.json'),JSON.stringify({repository,previewRoot:path.join(home,'previews')}));
+  }
+  const savedConfig=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
+  savedConfig.repository=process.env.META_CLINIC_REPO || savedConfig.repository;
+  settings.projects={...settings.projects,[path.resolve(savedConfig.repository).toLowerCase()]:home};
   await writeFile(settingsPath, JSON.stringify({...settings,home}));
   // Refuse to attach privileged desktop APIs to an unknown listener.
   const occupied = await fetch(origin + '/api/state', { signal: AbortSignal.timeout(1200) }).then(() => true, () => false);
@@ -44,28 +58,48 @@ async function launch() {
   }
   async function control(endpoint, data = {}) {
     const state = await fetch(origin + '/api/state').then(r => r.json());
-    if (state.busy) throw new Error('Wait for the current operation to finish.');
+    if (state.busy) { const error=new Error('Wait for the current operation to finish.');error.retryable=true;throw error; }
     const response = await fetch(origin + endpoint, { method: 'POST', headers: { Origin: origin, 'X-Review-Token': state.token, 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-    const result = await response.json(); if (!response.ok) throw new Error(result.error);
+    const result = await response.json(); if (!response.ok) { const error=new Error(result.error);error.retryable=response.status===409;throw error; }
     return result;
   }
+  async function reportQa(data){
+    for(let attempt=0;;attempt++){
+      try{return await control('/api/browser-qa-result',data);}
+      catch(error){if(!error.retryable || attempt>=40)throw error;await new Promise(resolve=>setTimeout(resolve,250));}
+    }
+  }
+  let qaWindow,qaCancelled=false,qaTask;
+  ipcMain.handle('review:browser-qa',async(event,input)=>{
+    trusted(event);if(qaTask)throw Error('A browser run is already active.');
+    const state=await fetch(origin+'/api/state').then(r=>r.json());
+    if(state.record?.id!==input.id || state.status!=='ready')throw Error('Open the review before starting browser QA.');
+    const {result:run}=await control('/api/browser-qa',input);qaCancelled=false;if(qaWindow&&!qaWindow.isDestroyed())qaWindow.close();
+    const {runBrowserQa}=require('./browser-qa.cjs');
+    qaTask=runBrowserQa({run,record:state.record,origin:`http://127.0.0.1:${state.changed.proxy}`,isCancelled:()=>qaCancelled,onWindow:browser=>{qaWindow=browser;},report:data=>reportQa({id:input.id,runId:run.id,commit:run.commit,...data})}).catch(async error=>{await control('/api/browser-qa-result',{id:input.id,runId:run.id,commit:run.commit,finish:'failed',error:error.message}).catch(()=>{});}).finally(()=>{qaTask=null;});
+    return run.id;
+  });
+  ipcMain.handle('review:stop-browser-qa',event=>{trusted(event);qaCancelled=true;if(qaWindow&&!qaWindow.isDestroyed())qaWindow.close();});
+  ipcMain.handle('review:show-browser-qa',event=>{trusted(event);if(qaWindow&&!qaWindow.isDestroyed()){qaWindow.show();qaWindow.focus();}});
   ipcMain.handle('review:choose-repository', async event => {
     trusted(event);
     const result = await dialog.showOpenDialog(window, { title: 'Choose a local Git repository', properties: ['openDirectory'] });
     if (result.canceled) return null;
     const repository = (await exec('git', ['rev-parse', '--show-toplevel'], { cwd: result.filePaths[0], windowsHide: true })).stdout.trim();
+    const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
+    const projectInfo=await detectProject(repository);
     const response = await dialog.showMessageBox(window, { type: 'question', buttons: ['Open repository', 'Cancel'], defaultId: 0, cancelId: 1,
-      message: 'Switch repositories?', detail: 'Save any preview edits first. Branch Review will stop its previews and restart with the selected folder. The first supported preview adapter is Meta Clinic.' });
+      message: 'Switch repositories?', detail: `Open ${projectInfo.name} using the ${projectInfo.kind} adapter? Previewing runs this repository’s code in isolated checkouts. Web previews install locked npm dependencies with install scripts disabled. Save preview edits first; existing reviews stay saved.` });
     if (response.response !== 0) return null;
     await control('/api/stop');
     for (let i = 0; i < 120; i++) { const state = await fetch(origin + '/api/state').then(r => r.json()); if (!state.busy) { if (state.status === 'error') throw new Error(state.error); break; } if (i === 119) throw new Error('Previews did not stop.'); await new Promise(r => setTimeout(r, 500)); }
     const project = createHash('sha256').update(repository.toLowerCase()).digest('hex').slice(0, 16);
-    const newHome = path.join(app.getPath('userData'), 'projects', project);
+    const newHome = settings.projects?.[path.resolve(repository).toLowerCase()] || path.join(app.getPath('userData'), 'projects', project);
     await mkdir(newHome, { recursive: true });
     const existing = JSON.parse(await readFile(path.join(newHome, 'config.json'), 'utf8').catch(() => '{}'));
     const previous = JSON.parse(await readFile(path.join(home, 'config.json'), 'utf8').catch(() => '{}'));
-    await writeFile(path.join(newHome, 'config.json'), JSON.stringify({ ...existing, repository, toolchain: existing.toolchain || previous.toolchain || path.resolve(root, '../../work/toolchain/node_modules/.bin'), previewRoot: existing.previewRoot || path.join(newHome, 'previews') }, null, 2));
-    await writeFile(settingsPath, JSON.stringify({...settings,home:newHome,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));
+    await writeFile(path.join(newHome, 'config.json'), JSON.stringify({ ...existing, repository, toolchain: existing.toolchain || previous.toolchain, previewRoot: existing.previewRoot || path.join(newHome, 'previews') }, null, 2));
+    await writeFile(settingsPath, JSON.stringify({...settings,projects:{...settings.projects,[path.resolve(repository).toLowerCase()]:newHome},home:newHome,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));
     delete process.env.BRANCH_REVIEW_HOME;
     closing = true; app.relaunch(); app.exit(0);
   });
@@ -89,9 +123,9 @@ async function launch() {
     if (closing) return;
     event.preventDefault();
     const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
-    if (state?.busy || state?.jobsRunning) { await dialog.showMessageBox(window, {message:'Wait for the current operation or review job to finish before closing Branch Review.'}); return; }
-    const result=await dialog.showMessageBox(window, { type: 'question', buttons: ['Keep working', 'Close app, keep previews'], defaultId: 0, cancelId: 0,
-      message: 'Close Branch Review?', detail: 'Previews and saved data remain available. Use Stop previews before closing if you want them stopped.' });
+    if (state?.busy || state?.jobsRunning || state?.qaRunning) { await dialog.showMessageBox(window, {message:'Wait for jobs to finish or stop browser QA before closing Branch Review.'}); return; }
+    const result=await dialog.showMessageBox(window, { type: 'question', buttons: ['Keep working', 'Close app'], defaultId: 0, cancelId: 0,
+      message: 'Close Branch Review?', detail: 'Reviews stay saved. Generic preview processes stop when the app closes. Meta Clinic previews remain available until you stop them.' });
     if(result.response===1){
       try {await writeFile(settingsPath,JSON.stringify({...settings,home,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));}
       catch(error){await dialog.showMessageBox(window,{message:'Could not save window settings.',detail:error.message});return;}

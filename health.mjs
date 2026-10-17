@@ -1,9 +1,11 @@
-export async function previewHealth(snapshot,fetcher=fetch) {
+export async function previewHealth(snapshot,fetcher=fetch,webHealthy) {
   const checkedAt=new Date().toISOString();
   const sides=await Promise.all(['original','changed'].map(async side=>{
     const preview=snapshot[side];
     if(!preview || snapshot.status!=='ready')return[side,{ok:false,message:'Preview is not running.'}];
     try {
+      if(preview.kind){if(!webHealthy || !await webHealthy(preview))throw Error('The owned web preview stopped. Reopen the review.');return [side,{ok:true,commit:preview.sha,message:'Owned preview is running from the reviewed checkout.'}];}
+
       const [api,web]=await Promise.all([
         fetcher(`http://127.0.0.1:${preview.api}/up`,{signal:AbortSignal.timeout(4000)}),
         fetcher(`http://127.0.0.1:${preview.web}/build.json`,{cache:'no-store',signal:AbortSignal.timeout(4000)})

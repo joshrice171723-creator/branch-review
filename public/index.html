@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Branch Review · Meta Clinic</title>
+    <title>Branch Review</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -13,7 +13,7 @@
         <span class="edition">LOCAL / 01</span></a
       >
       <div class="project">
-        <span class="dot"></span> Meta Clinic
+        <span class="dot"></span> <span id="project-name">Project</span>
         <span class="divider">/</span> Review workspace
       </div>
       <div class="header-actions">
@@ -50,7 +50,7 @@
         /></label>
         <label for="branch-filter" class="repository-path">Show branches</label>
         <select id="branch-filter">
-          <option value="unmerged">Unmerged into main</option>
+          <option value="unmerged">Unmerged into default branch</option>
           <option value="all">All branches, including merged</option>
         </select>
         <div class="list-heading">
@@ -76,7 +76,7 @@
         <p id="tool-notice" class="tool-notice" role="status" hidden></p>
         <div class="preview-toolbar">
           <div class="preview-label">
-            <span class="small-mark">▣</span><span>Meta Clinic</span
+            <span class="small-mark">▣</span><span id="preview-project-name">Project</span
             ><span id="preview-status" class="badge">Not running</span>
           </div>
           <div class="segmented" role="group" aria-label="Compare versions">
@@ -102,8 +102,7 @@
             <p class="eyebrow">SEE WHAT CHANGED</p>
             <h2>From branch<br />to a real workflow.</h2>
             <p>
-              Select a branch to open two independent<br />versions of Meta
-              Clinic, ready for review.
+              Select a branch to open two independent<br />versions of your project, ready for review.
             </p>
             <div class="steps">
               <span>01 &nbsp; Choose</span><span>02 &nbsp; Compare</span
@@ -135,7 +134,7 @@
         <p id="branch-name" class="muted">
           Your branch’s latest commit appears here.
         </p>
-        <p class="small">Opening a review fetches GitHub main and prepares the combined result before QA.</p>
+        <p class="small">Opening a review fetches the remote default branch and prepares the combined result before QA.</p>
         <label class="field-label" for="baseline">Code diff baseline</label
         ><select id="baseline">
           <option value="parent">Previous commit</option>
@@ -191,8 +190,8 @@
             <button id="resume-review" class="quiet">Continue remaining checks</button>
             <button id="export-review" class="secondary">View / export review report</button>
           </section>
-          <button id="prepare-handoff" class="secondary">Prepare fixes for Codex</button>
-          <section id="handoff-panel" hidden><h3>Fix request</h3><p class="small">Review this request, then send it to Codex or copy it into your branch chat.</p><textarea id="handoff-text" rows="12" aria-label="Codex fix request"></textarea><button id="open-codex-handoff" class="primary">Send to Codex</button><button id="copy-handoff" class="secondary">Copy fix request</button><button id="download-handoff" class="quiet">Download request</button><p id="handoff-status" role="status"></p></section>
+          <button id="prepare-handoff" class="secondary">Prepare fixes</button>
+          <section id="handoff-panel" hidden><h3>Fix request</h3><p class="small">Review this request, then send it to your selected agent or copy it into your branch chat.</p><textarea id="handoff-text" rows="12" aria-label="Agent fix request"></textarea><button id="open-codex-handoff" class="primary">Send to agent</button><button id="copy-handoff" class="secondary">Copy fix request</button><button id="download-handoff" class="quiet">Download request</button><p id="handoff-status" role="status"></p></section>
           <details class="workflow-section">
             <summary>Report a problem</summary>
             <form id="finding-form">
@@ -256,10 +255,10 @@
       <header class="dialog-heading"><h2 id="tools-title">More tools</h2><button id="close-tools" class="quiet">Close</button></header>
       <nav class="tools-tabs" aria-label="Review tools"><button id="tab-plan">Plan</button><button id="tab-updates">Updates &amp; fixes</button><button id="tab-evidence">Evidence</button><button id="tab-checks">Checks</button><button id="tab-release">Published review</button><button id="tab-workspace">Workspace</button></nav>
       <p id="tools-status" role="status" aria-live="polite"></p>
-      <section id="tools-workspace" hidden><h3>Workspace</h3><div id="workspace-actions" class="tool-actions"></div><div id="workspace-details"></div></section><section id="tools-plan">
+      <section id="tools-workspace" hidden><h3>Workspace</h3><p id="project-adapter" class="small"></p><label for="agent-provider">AI provider</label><select id="agent-provider"><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option></select><label for="agent-executable">CLI executable path (optional)</label><input id="agent-executable" placeholder="Automatic discovery"><div class="tool-actions"><button id="agent-save">Save and test connection</button><button id="agent-probe">Test saved connection</button></div><p id="agent-status" role="status"></p><p class="small">Uses your CLI account. Settings apply to this project. Claude fixes use restricted file tools; run validation scripts from Checks.</p><div id="workspace-actions" class="tool-actions"></div><div id="workspace-details"></div></section><section id="tools-plan">
         <p>Edit the checks for this exact version. Saving creates a new review and resets checks and approval; previous evidence stays in history.</p>
         <label class="field-label" for="plan-summary-edit">What changed</label><textarea id="plan-summary-edit" maxlength="2000"></textarea>
-        <div class="tool-actions"><button id="generate-plan">Generate with Codex</button><button id="copy-plan-instructions">Copy Codex branch instructions</button><button id="plan-export">Export manifest</button></div>
+        <div class="tool-actions"><button id="generate-plan">Generate with Codex</button><button id="copy-plan-instructions">Copy branch instructions</button><button id="plan-export">Export manifest</button></div>
         <p>Checklists are generated from the branch diff and saved separately from your code. Review and edit the generated checks here.</p>
         <label class="field-label" for="plan-item-list">Review item</label><select id="plan-item-list"></select><p id="plan-item-id" class="small muted"></p>
         <div class="tool-actions"><button id="plan-add">Add item</button><button id="plan-remove">Remove item</button><button id="plan-up">Move up</button><button id="plan-down">Move down</button><button id="plan-responsive">Add tablet &amp; phone checks</button></div>
@@ -271,7 +270,7 @@
           <label>Affected files (one per line)<textarea id="plan-files" rows="3"></textarea></label><label>Required viewport<select id="plan-viewport"><option value="">Any size</option><option value="desktop">Desktop</option><option value="tablet">Tablet</option><option value="phone">Phone</option></select></label>
         </div><button id="plan-save" class="primary">Save new review plan</button>
       </section>
-      <section id="tools-updates" hidden><h3>Send fixes to Codex</h3><p>Codex works in a dedicated isolated checkout. Leave the chat field blank for a new fix chat, or resume an existing one. Review the resulting branch before merging.</p><label for="codex-chat">Existing Codex chat UUID (optional)</label><input id="codex-chat" placeholder="New dedicated fix chat"><button id="send-codex" class="secondary">Review and send fix request</button><hr><h3>Branch updates</h3><p id="update-summary"></p><pre id="update-commits"></pre><div class="tool-actions"><button id="refresh-updates">Refresh analysis</button><button id="open-updated">Open updated branch</button></div><h3>Recommended retest order</h3><p class="small">Recommendations never carry a pass forward. Every new commit has its own checklist.</p><ol id="retest-advice"></ol><h3>Related branches</h3><div id="branch-relations"></div></section>
+      <section id="tools-updates" hidden><h3>Send fixes</h3><p>Your selected agent works in a dedicated isolated checkout. Leave the chat field blank for a new fix chat, or resume an existing one. Review the resulting branch before merging.</p><label for="codex-chat">Existing session UUID (optional, same provider)</label><input id="codex-chat" placeholder="New dedicated fix chat"><button id="send-codex" class="secondary">Review and send fix request</button><hr><h3>Branch updates</h3><p id="update-summary"></p><pre id="update-commits"></pre><div class="tool-actions"><button id="refresh-updates">Refresh analysis</button><button id="open-updated">Open updated branch</button></div><h3>Recommended retest order</h3><p class="small">Recommendations never carry a pass forward. Every new commit has its own checklist.</p><ol id="retest-advice"></ol><h3>Related branches</h3><div id="branch-relations"></div></section>
       <section id="tools-evidence" hidden><h3>Starting state</h3><p>Restore the active version's scenario data when you need a repeatable starting point.</p><button id="restore-data">Restore starting data</button><div id="evidence-tools"></div></section>
       <section id="tools-checks" hidden><h3>Automated checks</h3><p>Runs configured scripts in the isolated Changed checkout. These results are separate from manual QA.</p><label for="check-select">Check</label><select id="check-select"></select><pre id="check-command"></pre><button id="run-check">Run selected check</button><h3>Prepare the next branch</h3><p>Starts its isolated database and servers in a spare environment while you keep reviewing. Opening that commit reuses the prepared preview.</p><select id="warm-branch" aria-label="Branch to prepare"></select><button id="warm-preview">Prepare next preview</button><div id="screen-checks"></div></section>
       <section id="tools-release" hidden><h3>Verify the published workflow</h3><div id="published-tools"></div></section>

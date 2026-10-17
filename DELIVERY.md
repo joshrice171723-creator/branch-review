@@ -1,3 +1,15 @@
+# 0.5.0 project workflow acceptance
+
+Implemented project selection/diagnostics, generic Vite/Next previews and custom runtime recipes, diff-derived navigation, Codex fixes with host-owned commit finalization, default-branch delivery and optional GitHub PR/custom deployment, observable desktop browser checks and evidence.
+
+2026-10-17 Windows desktop pilot: separate two-page Vite Git repository. Real Codex generated two route-specific items. Original and Changed showed rust versus blue/purple. Reported purple tutorials button, dispatched real Codex, and produced clean fix commit 63c692943064fe9f8ebe0d57ebaaae29b2b6b51b changing only tutorials.js. The grouped review opened /tutorials ready to retest, with purple Before fix and blue After fix. Browser run 3ef4a530-e828-4f21-bb92-70a2d7ca7eb1 passed four real actions: visit, computed blue background, click, and resulting Sandbox opened text, saving four screenshots. No manual check was automatically passed.
+
+CLI configuration failure was reproduced and corrected; connector disabling was verified with the real CLI. No global Codex settings changed. Custom-preview tests run actual isolated HTTP processes. Deployment tests use controlled receipts and disposable local Git remotes; no live project was deployed by this acceptance run.
+
+Boundaries: custom stacks require configured runtime commands/services/data isolation. Native/mobile UI requires a harness. Generic browser actions are explicit assertions, not autonomous QA discovery; generic hosted QA is not wired to the local runner. Real hosted deployment/PR acceptance and live Claude remain unverified. Packaging is unsigned Windows x64.
+
+---
+
 # Branch Review delivery
 
 ## First 22 items — local delivery complete

@@ -1,10 +1,10 @@
 import { digest } from './reviews.mjs';
 
 export class Delivery {
-  constructor(git, store) { this.git = git; this.store = store; }
+  constructor(git, store, defaultBranch=async()=> 'main') { this.git = git; this.store = store; this.defaultBranch=defaultBranch; }
   async refs(record) {
     await this.git('fetch','origin');
-    const main = await this.git('rev-parse','refs/remotes/origin/main');
+    const main = await this.git('rev-parse','refs/remotes/origin/'+await this.defaultBranch());
     const source = await this.git('rev-parse',record.identity.ref);
     if (source !== record.identity.source) throw new Error('The branch changed. Reopen it and review the new commit.');
     return {main,source};
@@ -48,8 +48,8 @@ export class Delivery {
     record.delivery = { stage:'pushing', commit:expectedCommit, startedAt:new Date().toISOString() }; await this.store.persist();
     try {
       // A normal fast-forward push cannot overwrite concurrent main changes.
-      await this.git('push','origin',`${expectedCommit}:refs/heads/main`);
-      const actual = (await this.git('ls-remote','origin','refs/heads/main')).split(/\s/)[0];
+      await this.git('push','origin',`${expectedCommit}:refs/heads/${await this.defaultBranch()}`);
+      const actual = (await this.git('ls-remote','origin','refs/heads/'+await this.defaultBranch())).split(/\s/)[0];
       if (actual !== expectedCommit) throw new Error('Remote main differs after push. Outcome requires inspection.');
       record.delivery.stage = 'pushed'; await this.store.event(record,'pushed',{commit:expectedCommit});
     } catch (error) { record.delivery.stage = 'push-unconfirmed'; record.delivery.error = error.message; await this.store.persist(); throw error; }

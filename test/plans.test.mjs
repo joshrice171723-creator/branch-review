@@ -17,3 +17,5 @@ test('candidate analysis uses actual combined changes and excludes obsolete meta
   assert.deepEqual(result.files,['apps/api/app/services/qa/office_qa.rb']);
   assert.equal(result.base,main);assert.equal(result.branch,branch);
 });
+
+test('plan cache accepts separate comparison keys without accepting paths',async()=>{const {PlanStore}=await import('../plans.mjs');const store=new PlanStore('cache');assert.match(store.file('a'.repeat(64)),/a{64}\.json$/);assert.throws(()=>store.file('../bad'));});

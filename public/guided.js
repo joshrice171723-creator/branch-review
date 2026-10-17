@@ -78,7 +78,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
   $('item-outcome').onchange=()=>{if(!$('item-outcome').value)$('item-reason').value='';edited();};
   $('retry-item-save').onclick=()=>flush();
   $('prepare-handoff').onclick=async()=>{if(!await flush())return;$('handoff-text').value=fixRequest(getState().record);$('handoff-panel').hidden=false;};
-  $('copy-handoff').onclick=async()=>{try{await navigator.clipboard.writeText($('handoff-text').value);$('handoff-status').textContent='Copied. Paste this into the Codex chat working on the branch.';}catch{$('handoff-text').focus();$('handoff-text').select();$('handoff-status').textContent='Select and copy the request below.';}};
+  $('copy-handoff').onclick=async()=>{try{await navigator.clipboard.writeText($('handoff-text').value);$('handoff-status').textContent='Copied. Paste this into the agent chat working on the branch.';}catch{$('handoff-text').focus();$('handoff-text').select();$('handoff-status').textContent='Select and copy the request below.';}};
   $('download-handoff').onclick=()=>{
     const blob=new Blob([$('handoff-text').value],{type:'text/markdown'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='branch-review-fixes.md';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
@@ -123,7 +123,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     $('review-summary').textContent=r.manifest.summary || r.title;
     $('review-source').textContent=r.manifest.source || 'Review scenario';
     $('results-counts').textContent=[`${counts.passed===counts.total?'✓ ':''}${counts.passed} of ${counts.total} review items passed`,counts['ready-to-retest'] && `${counts['ready-to-retest']} ready to retest`,counts['needs-fixes'] && `${counts['needs-fixes']} need fixes`,counts.blocked && `${counts.blocked} blocked`,counts['not-applicable'] && `${counts['not-applicable']} excluded`,(counts['not-started']+counts['in-progress']) && `${counts['not-started']+counts['in-progress']} unfinished`,r.approval && `Approved by ${r.approval.reviewer}`].filter(Boolean).join(' · ');
-    $('results-message').textContent=canApprove(r)?'All items are accounted for. Review any exclusions and follow the next action below.':'Resolve the items below or prepare a fix request for Codex.';
+    $('results-message').textContent=canApprove(r)?'All items are accounted for. Review any exclusions and follow the next action below.':'Resolve the items below or prepare a fix request for your agent.';
     const listKey=JSON.stringify([r.id,r.checks,r.items,r.issues,r.cursor,published,!!enabled,$('item-search').value,$('item-filter').value]);
     if(queueKey!==listKey){
       queueKey=listKey;

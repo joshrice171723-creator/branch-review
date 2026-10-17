@@ -1,8 +1,8 @@
 import http from 'node:http';
-import { readFile, writeFile, access } from 'node:fs/promises';
+import { readFile, writeFile, access, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario } from './adapter.mjs';
+import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario, project, webHealthy, defaultBranch } from './adapter.mjs';
 import { previewProxy } from './proxy.mjs';
 import { ReviewStore, scenarioRecipe, digest } from './reviews.mjs';
 import { loadPlan, candidateComparison, PlanStore, branchUpdate, branchRelationships, retestAdvice, prepareTogether } from './plans.mjs';
@@ -10,6 +10,10 @@ import {ReviewJobs,configuredChecks,scrub} from './jobs.mjs';
 import {publishedAction,publishedComplete} from './published-review.mjs';
 import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
+import {providerId,probeProvider} from './providers.mjs';
+import {readRecipe,saveRecipe} from './project-settings.mjs';
+import {beginBrowserQa,browserQaResult} from './browser-qa.mjs';
+import {readDelivery,saveDelivery,deployProject,createReviewPr} from './project-delivery.mjs';
 import { MuseQa } from './muse-qa.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
 import { reviewReport } from './report.mjs';
@@ -19,15 +23,20 @@ import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false;
 const store = await new ReviewStore(local).load();
+for(const record of store.records)for(const run of record.browserQa || [])if(run.status==='running'){run.status='interrupted';run.error='The app closed before browser evidence completed.';}
+await store.persist();
+const qaRunning=()=>store.records.some(record=>record.browserQa?.some(run=>run.status==='running'));
 const muse=new MuseQa(local,store);
 const plans=new PlanStore(path.join(local,'diff-reviews'));
-const jobs=await new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,changedCwd:()=>path.join(previewRoot,state.changed?.runtime || 'changed'),prepareNext:async sha=>{
+let agentSettings=JSON.parse(await readFile(path.join(local,'agent-settings.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
+const selectedAgent=()=>({provider:providerId(agentSettings.provider),executable:agentSettings.executables?.[agentSettings.provider || 'codex']});
+const jobs=await new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,provider:selectedAgent,project,changedCwd:()=>path.join(previewRoot,state.changed?.runtime || 'changed'),prepareNext:async sha=>{
   const branch=(await branches()).find(branch=>branch.sha===sha);if(!branch)throw new Error('Choose a current branch.');
   const selected=await comparison(branch.ref,'parent'),runtime=state.changed?.runtime==='standby'?'changed':'standby';
   const prepared=await prepare(runtime,sha,selected.files);state.prepared={...prepared,recipe:scenarioRecipe(selected.files)};await writeFile(path.join(local,'prepared.json'),JSON.stringify(state.prepared));return prepared;
 }}).load();
 let toolsSettings=JSON.parse(await readFile(path.join(local,'tools-settings.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
-const delivery = new Delivery(git, store);
+const delivery = new Delivery(git, store, defaultBranch);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
 async function manifestFor(sha) {
   const plan=await plans.get(sha);
@@ -35,7 +44,9 @@ async function manifestFor(sha) {
   return plan;
 }
 async function startCandidate(ref, previousReviewId) {
-  state.status='preparing';progress('Checking changes against GitHub main');
+  if(project.error)throw Error(project.error);
+  if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
+  state.status='preparing';progress('Checking changes against the remote default branch');
   const selected=await comparison(ref,'main');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
   const integration=await delivery.prepare(ref,selected.branch.sha,previous);
@@ -44,10 +55,11 @@ async function startCandidate(ref, previousReviewId) {
   const fixFiles=prior?(await git('diff','--name-only','-z',prior.identity.changed,integration.sha,'--')).split('\0').filter(Boolean):[];
   const narrow=prior && prior.integration?.main===integration.main && frontendOnly(fixFiles) && fixFiles.every(file=>prior.manifest.scenarios.some(item=>item.files?.includes(file)));
   if(prior){combined.base=prior.identity.changed;combined.baseline='commit';combined.baselineCommit=prior.identity.changed;combined.fixReview={previousId:prior.id,files:fixFiles};}
-  if(!combined.files.length)throw Error('This branch has no application changes left to review against GitHub main. Its old checklist is no longer part of the code.');
+  if(!combined.files.length)throw Error('This branch has no application changes left to review against the remote default branch. Its old checklist is no longer part of the code.');
+  const planKey=prior?digest({before:prior.identity.changed,after:integration.sha}):integration.sha;
   combined.plan=await prepareTogether(
     async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior});if(state.status==='error')throw Error(state.error);},
-    async()=>{let plan=await plans.get(integration.sha);if(!plan){progress('Generating checklist while previews prepare');plan=await jobs.generatePlan(narrow?prior.identity.changed:integration.main,integration.sha,narrow?fixFiles:combined.files,prior?.manifest || combined.plan);}if(narrow)plan=mergeFixPlan(prior.manifest,{...plan,scenarios:plan.scenarios.filter(item=>item.files?.some(file=>fixFiles.includes(file)))},fixFiles);await plans.save(integration.sha,plan);return plan;}
+    async()=>{let plan=await plans.get(planKey);if(!plan){const agent=selectedAgent(),connection=await probeProvider(agent.provider,agent.executable);if(connection.status!=='ready')throw Error(connection.message+' Open More tools > Workspace.');progress('Generating checklist while previews prepare');plan=await jobs.generatePlan(prior?prior.identity.changed:integration.main,integration.sha,prior?fixFiles:combined.files,prior?.manifest || combined.plan);}if(prior)plan=mergeFixPlan(prior.manifest,{...plan,scenarios:plan.scenarios.filter(item=>item.files?.some(file=>fixFiles.includes(file)))},fixFiles);await plans.save(planKey,plan);await plans.save(integration.sha,plan);return plan;}
   );
   state.status='ready';progress('Checklist and previews are ready');
   await activate(previousReviewId);
@@ -68,7 +80,7 @@ async function startCandidate(ref, previousReviewId) {
 async function activate(previousReviewId) {
   if (state.status !== 'ready') return;
   const manifest = await manifestFor(state.changed.sha);
-  const record = await store.open({...state, repository:repo, previousReviewId:previousReviewId || state.comparison?.fixReview?.previousId}, manifest, digest(await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8')));
+  const record = await store.open({...state, repository:repo, previousReviewId:previousReviewId || state.comparison?.fixReview?.previousId}, manifest, digest(project.kind==='meta-clinic'?await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8'):JSON.stringify({version:'web-preview-v2',recipe:await readRecipe(local)})));
   state.recordId = record.id; state.manifest = manifest;
   if(state.comparison?.fixReview){const parent=store.get(state.comparison.fixReview.previousId),root=reviewRoot(parent,store.records);record.reviewRootId=root.id;record.reviewTitle=root.title;}
   if (state.integration?.sha === state.changed.sha) { record.integration = state.integration; await store.persist(); }
@@ -83,7 +95,7 @@ async function active(id, checkFresh = false) {
       const cwd = path.join(previewRoot,state[side].runtime || side);
       if (await run('git',['rev-parse','HEAD'],{cwd}) !== state[side].sha || await run('git',['status','--porcelain'],{cwd})) throw new Error('Preview source changed. Reopen the exact committed version before approval.');
     }
-    const health=await previewHealth(state);
+    const health=await previewHealth(state,fetch,webHealthy);
     for(const [side,result] of Object.entries(health.sides))if(!result.ok)throw new Error(`${side==='original'?'Original':'Changed'} preview: ${result.message}`);
   }
   return record;
@@ -91,7 +103,23 @@ async function active(id, checkFresh = false) {
 function json(res,status,data) { res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(data)); }
 async function body(req) { let buffer=''; for await(const chunk of req) { buffer += chunk; if(Buffer.byteLength(buffer)>16_000_000) throw new Error('Request too large'); } return JSON.parse(buffer || '{}'); }
 async function mutate(endpoint, data) {
-  if(['/api/start','/api/stop','/api/retest','/api/candidate','/api/reset-data','/api/ship','/api/publish'].includes(endpoint) && jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running review job before changing environments or delivering code.');
+  if(qaRunning() && !['/api/browser-qa-result','/api/check','/api/item','/api/cursor','/api/issue'].includes(endpoint))throw Error('Stop browser QA before changing its review, settings or runtime.');
+  if(endpoint==='/api/project-settings'){
+    if(jobs.rows.some(job=>job.status==='running'))throw Error('Wait for running jobs before changing setup.');
+    if(state.original || state.changed)throw Error('Stop previews before changing project setup. Your reviews remain saved.');
+    return saveRecipe(local,data);
+  }
+  if(['/api/start','/api/stop','/api/retest','/api/candidate','/api/reset-data','/api/ship','/api/publish','/api/project-deploy','/api/pull-request','/api/project-delivery'].includes(endpoint) && jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running review job before changing environments or delivering code.');
+  if(endpoint==='/api/project-delivery')return saveDelivery(local,data);
+  if(endpoint==='/api/agent-settings'){
+    if(jobs.rows.some(job=>job.status==='running'))throw Error('Wait for the running job before changing providers.');
+    const provider=providerId(data.provider);
+    if(typeof data.executable!=='string' || data.executable.length>1000 || data.executable && !path.isAbsolute(data.executable))throw Error('Choose an absolute executable path, or leave it blank for automatic discovery.');
+    const next={provider,executables:{...agentSettings.executables,[provider]:data.executable}};
+    await writeFile(path.join(local,'agent-settings.json.tmp'),JSON.stringify(next));await rename(path.join(local,'agent-settings.json.tmp'),path.join(local,'agent-settings.json'));agentSettings=next;return probeProvider(provider,data.executable);
+  }
+  if(endpoint==='/api/agent-probe'){const agent=selectedAgent();return probeProvider(agent.provider,agent.executable);}
+  if(project.kind!=='meta-clinic' && ['/api/publish','/api/retry-muse','/api/release-settings','/api/published-review','/api/smoke'].includes(endpoint))throw Error('Publishing is not configured for this project. Use your existing delivery process.');
   if(endpoint==='/api/tools-settings'){if(typeof data.autoPlan!=='boolean')throw new Error('Choose whether to generate plans automatically.');const next={autoPlan:data.autoPlan};await writeFile(path.join(local,'tools-settings.json'),JSON.stringify(next));toolsSettings=next;return next;}
   if (endpoint === '/api/start') {
     let prior;
@@ -110,7 +138,15 @@ async function mutate(endpoint, data) {
     if (typeof data.keyPath !== 'string' || typeof data.recoveryDirectory !== 'string' || !path.isAbsolute(data.keyPath) || !path.isAbsolute(data.recoveryDirectory)) throw new Error('Choose an existing key and recovery folder.');
     await access(data.keyPath); await access(data.recoveryDirectory); await writeFile(path.join(local,'release.json'),JSON.stringify({keyPath:data.keyPath,recoveryDirectory:data.recoveryDirectory})); return;
   }
-  const record = await active(data.id, ['/api/approve','/api/ship','/api/publish','/api/candidate'].includes(endpoint));
+  const record = await active(data.id, ['/api/approve','/api/ship','/api/publish','/api/candidate','/api/browser-qa','/api/project-deploy','/api/pull-request'].includes(endpoint));
+  if(endpoint==='/api/pull-request')return createReviewPr(record,{delivery,git,run,store,local,repo,defaultBranch});
+  if(endpoint==='/api/project-deploy')return deployProject(record,{local,cwd:state.changed.directory,run,git,store,defaultBranch,confirmation:data.confirmation});
+  if(endpoint==='/api/project-deploy-retry'){
+    if(record.projectDeployment?.status!=='needs-inspection'||typeof data.note!=='string'||data.note.trim().length<10)throw Error('Describe your inspection of the failed deployment first.');
+    await store.event(record,'project-deployment-retry',{previous:record.projectDeployment,note:data.note.slice(0,2000)});delete record.projectDeployment;await store.persist();return;
+  }
+  if(endpoint==='/api/browser-qa')return beginBrowserQa(store,record,data.steps);
+  if(endpoint==='/api/browser-qa-result')return browserQaResult(store,local,record,data);
   if(endpoint==='/api/plan'){
     if(jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running job before editing the plan.');
     await plans.save(record.identity.changed,data.manifest);await activate();return state.recordId;
@@ -150,7 +186,7 @@ async function mutate(endpoint, data) {
     await activate(); return;
   }
   if (endpoint === '/api/ship') {
-    if (data.confirmation !== `MERGE ${record.identity.changed} TO origin/main`) throw new Error('Confirm the exact commit before merge and push.');
+    if (data.confirmation !== `MERGE ${record.identity.changed} TO origin/${await defaultBranch()}`) throw new Error('Confirm the exact commit before merge and push.');
     return delivery.push(record,record.identity.changed);
   }
   if (endpoint === '/api/publish') return publish(record,{local,repo,run,git,store,toolchain,muse,confirmation:data.confirmation});
@@ -174,25 +210,37 @@ actions.add('/api/published-review');
 actions.add('/api/tools-settings');
 actions.add('/api/fix-commit');
 actions.add('/api/retry-muse');
+actions.add('/api/agent-settings');actions.add('/api/agent-probe');
+actions.add('/api/project-settings');
+actions.add('/api/browser-qa');actions.add('/api/browser-qa-result');
+for(const endpoint of ['/api/project-delivery','/api/project-deploy','/api/project-deploy-retry','/api/pull-request'])actions.add(endpoint);
+longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
 const server=http.createServer(async(req,res)=>{
   try {
     if(req.headers.host!==`127.0.0.1:${port}`) return json(res,403,{error:'Invalid host'});
     const url=new URL(req.url,origin);
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,busy,jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,record:state.recordId?store.get(state.recordId):null,publishTarget:target,releaseConfigured:await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,busy,qaRunning:qaRunning(),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:await defaultBranch().catch(()=>null),record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,groupedBranches(await branches(),jobs.rows,store.records));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
+    if(req.method==='GET' && url.pathname==='/api/project-settings')return json(res,200,await readRecipe(local));
+    if(req.method==='GET' && url.pathname==='/api/project-delivery')return json(res,200,await readDelivery(local));
+    if(req.method==='GET' && url.pathname==='/api/diagnostics'){
+      const rows=[];for(const [name,check] of [['Git',()=>run('git',['--version'])],['Repository',()=>git('rev-parse','--show-toplevel')],['Remote',()=>git('remote','get-url','origin')],['Default branch',defaultBranch],['Commit identity',async()=>{const name=await git('config','user.name'),email=await git('config','user.email');if(!name||!email)throw Error('Set git user.name and user.email before requesting fixes.');return name;}]] )try{rows.push({name,ok:true,message:await check()});}catch(e){rows.push({name,ok:false,message:e.message});}
+      const recipe=await readRecipe(local);rows.push({name:'Preview setup',ok:!project.error && (!project.needsSetup || !!recipe),message:recipe?'Saved custom commands':project.error || (project.needsSetup?'Enter this project’s preview commands below.':project.kind+' detected')});
+      const agent=selectedAgent(),result=await probeProvider(agent.provider,agent.executable);rows.push({name:'AI connection',ok:result.status==='ready',message:result.message});return json(res,200,rows);
+    }
     if(req.method==='GET' && url.pathname==='/api/fix-files')return json(res,200,await jobs.fixFiles(url.searchParams.get('job')));
     if(req.method==='GET' && url.pathname==='/api/tools-settings')return json(res,200,toolsSettings);
-    if(req.method==='GET' && url.pathname==='/api/checks')return json(res,200,await configuredChecks(git,store.get(url.searchParams.get('id')).identity.changed));
+    if(req.method==='GET' && url.pathname==='/api/checks')return json(res,200,await jobs.checks(store.get(url.searchParams.get('id')).identity.changed));
     if(req.method==='GET' && url.pathname==='/api/update')return json(res,200,await branchUpdate(git,store.get(url.searchParams.get('id'))));
-    if(req.method==='GET' && url.pathname==='/api/relationships')return json(res,200,await branchRelationships(git,await branches(),url.searchParams.get('ref')));
+    if(req.method==='GET' && url.pathname==='/api/relationships')return json(res,200,await branchRelationships(git,await branches(),url.searchParams.get('ref'),await defaultBranch()));
     if(req.method==='GET' && url.pathname==='/api/retest-advice'){
       const record=store.get(url.searchParams.get('id')),previous=record.previousId?store.get(record.previousId):null;
       const files=previous?(await git('diff','--name-only','-z',previous.identity.changed,record.identity.changed,'--')).split('\0').filter(Boolean):state.comparison.files;
       return json(res,200,retestAdvice(previous,record.manifest,files));
     }
-    if(req.method==='GET' && url.pathname==='/api/health')return json(res,200,await previewHealth({...state}));
+    if(req.method==='GET' && url.pathname==='/api/health')return json(res,200,await previewHealth({...state},fetch,webHealthy));
     if(req.method==='GET' && url.pathname==='/api/report'){
       const record=store.get(url.searchParams.get('id')),html=await reviewReport(record,local);
       res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Disposition':`${url.searchParams.get('inline')==='1'?'inline':'attachment'}; filename="branch-review-${record.identity.changed.slice(0,7)}.html"`,'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; frame-ancestors 'self'; base-uri 'none'"});return res.end(html);
@@ -217,7 +265,7 @@ const server=http.createServer(async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/workbench.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/workbench.js','/project-setup.js','/activity.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
