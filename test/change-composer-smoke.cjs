@@ -38,9 +38,14 @@ app.whenReady().then(async()=>{
   assert.equal(await js("document.getElementById('frames').hidden"),false);
   assert.equal(await js("document.getElementById('loading').hidden"),true);
   assert.equal(await js("document.getElementById('make-changes').disabled"),true);
+  assert.equal(await js("document.getElementById('revision-warning').hidden"),true);
+  assert.equal(await js("document.getElementById('review-workflow').hidden"),true);
   await js("globalThis.previewFrame=document.getElementById('frame-changed');document.getElementById('original').click()");
   assert.equal(await js("document.getElementById('original').getAttribute('aria-pressed')"),'true');
-  await js("document.getElementById('changed').click();globalThis.slowChecklist=false");
+  await js("document.getElementById('changed').click();globalThis.savedRecord=readyState.record;readyState={...readyState,record:null};globalThis.slowChecklist=false");
+  await wait("document.getElementById('preview-status').textContent==='Running'");
+  assert.equal(await js("document.getElementById('error').textContent.includes('comparisonMode')"),false);
+  await js("readyState.record=savedRecord");
   await wait("document.getElementById('preview-status').textContent==='Running'");
   assert.equal(await js("document.getElementById('frame-changed')===previewFrame"),true,'finishing checklist must not reload the same page');
   console.log('PASS: slow checklist leaves previews visible and toggle enabled, change submission blocked, final checklist does not reload the same page.');

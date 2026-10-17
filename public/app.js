@@ -352,6 +352,7 @@ async function poll() {
     $('project-name').textContent=$('preview-project-name').textContent=currentState.project?.name || 'Project';
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
+    if(!currentState.record)$('revision-warning').hidden=true;
     const fixRecord=currentState.record;
     fixNotice.hidden=versionHistory.hidden=!fixRecord?.fixComparison;
     if(fixRecord?.fixComparison){
@@ -435,7 +436,7 @@ async function poll() {
     }
     $("connection").textContent = "LOCAL PREVIEW";
     if(Date.now()-lastHealth>15000)void checkHealth();
-    const reviewChanged=ready && currentState.record?.id!==previousReview;
+    const reviewChanged=ready && !!currentState.record && currentState.record.id!==previousReview;
     if(reviewChanged){delete $('branch-brief').dataset.selecting;selected=null;$('baseline').value=currentState.record.comparisonMode?.baseline || 'parent';$('commit-choice').hidden=$('baseline').value!=='commit';commitBranchSha='';}
     if (reviewChanged || previousBusy && !currentState.busy) await loadBranches();
     if(previousBusy!==currentState.busy)branchList();
