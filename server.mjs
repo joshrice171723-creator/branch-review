@@ -48,7 +48,7 @@ async function manifestFor(sha) {
 async function startCandidate(ref, previousReviewId) {
   if(project.error)throw Error(project.error);
   if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
-  state.status='preparing';progress('Checking changes against the remote default branch');
+  state.status='preparing';state.recordId=null;state.manifest=null;progress('Checking changes against the remote default branch');
   const selected=await comparison(ref,'main');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
   const integration=await delivery.prepare(ref,selected.branch.sha,previous);
@@ -59,6 +59,7 @@ async function startCandidate(ref, previousReviewId) {
   if(prior){combined.base=prior.identity.changed;combined.baseline='commit';combined.baselineCommit=prior.identity.changed;combined.fixReview={previousId:prior.id,files:fixFiles};}
   if(!combined.files.length)throw Error('This branch has no application changes left to review against the remote default branch. Its old checklist is no longer part of the code.');
   const planKey=prior?digest({before:prior.identity.changed,after:integration.sha}):integration.sha;
+  state.manifest=prior?{...prior.manifest,scenarios:[...prior.manifest.scenarios].sort((a,b)=>Number(b.id===prior.cursor?.itemId)-Number(a.id===prior.cursor?.itemId))}:combined.plan;
   combined.plan=await prepareTogether(
     async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior});if(state.status==='error')throw Error(state.error);},
     async()=>{

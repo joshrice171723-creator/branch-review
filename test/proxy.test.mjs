@@ -101,6 +101,9 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
   state.original.web=upstream.address().port;
   slot.web=1;
   assert.equal(await fetch(origin).then(r=>r.text()),'preview','promoted preview uses its own runtime port');
+  state.status = "preview-ready";
+  assert.equal(await fetch(origin).then(r=>r.text()),'preview','checklist generation does not block the prepared preview');
+  assert.equal((await fetch(origin+'/__review/start?scenario=homepage')).status,200);
   state.status = "preparing";
   assert.equal((await fetch(origin)).status, 503);
 });

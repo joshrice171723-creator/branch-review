@@ -6,6 +6,7 @@ import { reviewShortcut, refreshedSelection, selectedReviewState } from './short
 import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
+const pendingChecks=document.createElement('p');pendingChecks.setAttribute('role','status');pendingChecks.hidden=true;pendingChecks.textContent='Your preview is ready. You can compare both versions while the checklist finishes. Review and approval will unlock when it is ready.';$('review-branch-status').before(pendingChecks);
 const openingSummary=document.createElement('p');openingSummary.id='opening-summary';$('phase').before(openingSummary);
 const fixNotice=document.createElement('p');fixNotice.style.cssText='font-size:12px;line-height:1.5;white-space:normal';fixNotice.hidden=true;$('review-branch-status').after(fixNotice);
 const versionHistory=document.createElement('details'),versionHeading=document.createElement('summary'),versionResults=document.createElement('div');versionHeading.textContent='Review history';versionHistory.append(versionHeading,versionResults);versionHistory.hidden=true;fixNotice.after(versionHistory);
@@ -334,8 +335,8 @@ function mountFrames(state, force = false) {
         "sandbox",
         "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
       );
-      frame.src = `http://127.0.0.1:${state[side].proxy}/__review/start?scenario=${encodeURIComponent(reviewWorkflow.scenario())}`;
-      frame.addEventListener('load',()=>focusItem(currentState.manifest?.scenarios.find(s=>s.id===reviewWorkflow.scenario()),[side]));
+      frame.src = `http://127.0.0.1:${state[side].proxy}/__review/start?scenario=${encodeURIComponent(item.id)}`;
+      frame.addEventListener('load',()=>focusItem(item,[side]));
       pane.append(label,frame);return pane;
     }),
   );
@@ -381,14 +382,16 @@ async function poll() {
     void activityView.render();
     renderFocusStatus();
     const ready = currentState.status === "ready";
+    const previewReady=ready || currentState.status==='preview-ready';
+    pendingChecks.hidden=currentState.status!=='preview-ready';
       const publishing=currentState.busy && currentState.record?.delivery?.stage==='deploying';
       const release=currentState.record?.delivery;
       $('publish-progress').hidden=!publishing;
       if(publishing){const elapsed=Math.max(0,Math.floor((Date.now()-Date.parse(release.deployStartedAt || release.startedAt))/60000));$('publish-progress').textContent=`Publishing ${release.commit.slice(0,7)}${Number.isFinite(elapsed)?` · ${elapsed} min elapsed`:''}. ${release.progress || 'Building and transferring the release, then verifying the live site.'} Review controls unlock when publishing finishes. Keep this app open.`;}
     const preparing = ["preparing", "stopping"].includes(currentState.status);
-    $("empty").hidden = ready || preparing;
+    $("empty").hidden = previewReady || preparing;
     $("loading").hidden = !preparing;
-    $("frames").hidden = !ready;
+    $("frames").hidden = !previewReady;
     $("phase").textContent = currentState.phase;
     $('loading-label').textContent=currentState.status==='stopping'?'STOPPING PREVIEWS':'PREPARING YOUR WORKSPACE';
     $('loading-description').textContent=currentState.status==='stopping'?'Saved reviews and preview databases will be kept.':'Checklist and previews prepare together. The two most recent branch previews stay available for reuse.';
@@ -400,7 +403,7 @@ async function poll() {
         : "");
     $("preview-status").textContent = ready
       ? healthResult?.key===healthKey() && !healthResult.healthy ? 'Needs attention' : "Running"
-      : preparing
+      : currentState.status==='preview-ready' ? "Preview ready - preparing checklist" : preparing
         ? currentState.status==='stopping'?'Stopping':"Preparing"
         : currentState.status === "error"
           ? "Needs attention"
@@ -416,10 +419,10 @@ async function poll() {
     $("refresh").disabled = currentState.busy;
     $("reopen").disabled = !ready;
     $('review-code').disabled=!ready;
-    $("original").disabled = !ready;
-    $("changed").disabled = !ready;
+    $("original").disabled = !previewReady;
+    $("changed").disabled = !previewReady;
     if (currentState.error) error(currentState.error);
-    if (ready) {
+    if (previewReady) {
       $("original-sha").textContent = currentState.original.sha.slice(0, 7);
       $("changed-sha").textContent = currentState.changed.sha.slice(0, 7);
       mountFrames(currentState);

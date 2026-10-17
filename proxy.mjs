@@ -57,7 +57,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
     }
     const current = getState();
     const preview = current[side];
-    if (current.status !== "ready" || !preview) {
+    if (!["ready","preview-ready"].includes(current.status) || !preview) {
       res.writeHead(503).end("Preview is not ready. Return to Branch Review.");
       return;
     }
@@ -136,7 +136,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
       req.headers.host !== allowedHost ||
       req.headers.origin !== origin ||
       !preview ||
-      current.status !== "ready"
+      !["ready","preview-ready"].includes(current.status)
     )
       return socket.destroy();
     const request = http.request({

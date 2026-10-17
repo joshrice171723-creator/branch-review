@@ -12,6 +12,7 @@ export function refreshedSelection(branches, selected, reviewedRef, showAll) {
 
 export function selectedReviewState(state, selection) {
   if(!selection)return state;
+  if(state.status==='preview-ready' && state.comparison?.branch.ref===selection.ref && state.comparison.branch.sha===selection.sha)return {...state,record:null};
   const matches=state.record?.identity.ref===selection.ref && state.record.identity.source===selection.sha;
   if(matches && state.status==='ready' && !state.busy)return state;
   const loading=selection.starting || state.busy;

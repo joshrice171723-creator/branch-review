@@ -347,7 +347,7 @@ export async function startReview(ref, baseline, baselineCommit, preparedReview)
     const failed=prepared.find(result=>result.status==='rejected');if(failed)throw failed.reason;
     state.original={...prepared[0].value,side:'original',proxy:slots.original.proxy};
     state.changed = {...prepared[1].value,side:'changed',proxy:slots.changed.proxy};
-    state.status = preparedReview?.deferReady?'preparing':'ready';
+    state.status = preparedReview?.deferReady?'preview-ready':'ready';
     progress(preparedReview?.deferReady?'Previews ready; finishing checklist':'Both previews are ready');
     await writeFile(
       path.join(local, "review.json"),

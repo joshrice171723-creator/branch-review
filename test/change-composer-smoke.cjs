@@ -23,7 +23,7 @@ app.whenReady().then(async()=>{
   assert.equal(await js("document.getElementById('tools-dialog').open"),false);
   assert.equal(await js("document.getElementById('change-request').closest('aside').className"),'review');
   assert.equal(await js("document.getElementById('change-composer').contains(document.getElementById('plan-save'))"),false);
-  await js(`globalThis.sent=null;const originalFetch=globalThis.fetch;globalThis.fetch=async(url,options)=>{if(url==='/api/job'){sent=JSON.parse(options.body);return new Response(JSON.stringify({result:{id:'test-job',reviewId:sent.id,kind:'fix',status:'running'}}),{headers:{'Content-Type':'application/json'}});}return originalFetch(url,options);};document.getElementById('change-request').value='Remove the brown shadow from this blue button';document.getElementById('change-request').dispatchEvent(new Event('input'));`);
+  await js(`globalThis.sent=null;globalThis.originalFetch=globalThis.fetch;globalThis.fetch=async(url,options)=>{if(url==='/api/job'){sent=JSON.parse(options.body);return new Response(JSON.stringify({result:{id:'test-job',reviewId:sent.id,kind:'fix',status:'running'}}),{headers:{'Content-Type':'application/json'}});}return originalFetch(url,options);};document.getElementById('change-request').value='Remove the brown shadow from this blue button';document.getElementById('change-request').dispatchEvent(new Event('input'));`);
   await wait("!document.getElementById('make-changes').disabled");
   window.webContents.invalidate();await new Promise(r=>setTimeout(r,400));
   await mkdir(output,{recursive:true});await writeFile(path.join(output,'composer.png'),(await window.webContents.capturePage()).toPNG());
@@ -33,6 +33,17 @@ app.whenReady().then(async()=>{
   await writeFile(path.join(output,'attached-preview.png'),image.toPNG());
   await writeFile(path.join(output,'receipt.json'),JSON.stringify({...sent,attachment:{...sent.attachment,screenshot:`PNG ${size.width}x${size.height}`}},null,2));
   assert.equal(await js("document.getElementById('change-request').value"),'');
+  await js(`(async()=>{globalThis.readyState=await originalFetch('/api/state').then(r=>r.json());globalThis.slowChecklist=true;globalThis.fetch=async(url,options)=>url==='/api/state'?new Response(JSON.stringify(slowChecklist?{...readyState,status:'preview-ready',busy:true,record:null,recordId:null}:readyState),{headers:{'Content-Type':'application/json'}}):originalFetch(url,options);})()`);
+  await wait("document.getElementById('preview-status').textContent.includes('preparing checklist')");
+  assert.equal(await js("document.getElementById('frames').hidden"),false);
+  assert.equal(await js("document.getElementById('loading').hidden"),true);
+  assert.equal(await js("document.getElementById('make-changes').disabled"),true);
+  await js("globalThis.previewFrame=document.getElementById('frame-changed');document.getElementById('original').click()");
+  assert.equal(await js("document.getElementById('original').getAttribute('aria-pressed')"),'true');
+  await js("document.getElementById('changed').click();globalThis.slowChecklist=false");
+  await wait("document.getElementById('preview-status').textContent==='Running'");
+  assert.equal(await js("document.getElementById('frame-changed')===previewFrame"),true,'finishing checklist must not reload the same page');
+  console.log('PASS: slow checklist leaves previews visible and toggle enabled, change submission blocked, final checklist does not reload the same page.');
   console.log('PASS: visible composer, separate checklist, one submit click, current page/commit and real cropped PNG; no agent job submitted.');app.exit(0);
  }catch(error){console.error(error);app.exit(1);}
 });
