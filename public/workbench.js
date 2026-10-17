@@ -31,8 +31,8 @@ export function workbench({api,getState,getSide,workflow,poll,error,reopen}){
   function open(section='plan'){
     if(!current())section='workspace';if(current() && (editorRecord!==current().id || !draft))loadEditor();$('tools-dialog').showModal();tab(section);renderRelease();void refresh();
   }
-  function tab(section){$('restore-data').hidden=getState().project?.kind!=='meta-clinic';$('restore-data').previousElementSibling.textContent=getState().project?.kind==='meta-clinic'?"Restore the active version's scenario data when you need a repeatable starting point.":'Use Reset item to return to its starting screen. Project data setup is configured in Workspace.';for(const name of ['plan','updates','evidence','checks','release','workspace']){$('tools-'+name).hidden=name!==section;$('tab-'+name).setAttribute('aria-pressed',String(name===section));}}
-  $('review-tools').onclick=()=>open(current()?'plan':'workspace');$('close-tools').onclick=()=>{saveFields();$('tools-dialog').close();};
+  function tab(section){$('tools-title').textContent={plan:'Review checklist',updates:'Agent fixes',evidence:'Evidence',checks:'Checks',release:'Published review',workspace:'Settings'}[section];$('restore-data').hidden=getState().project?.kind!=='meta-clinic';$('restore-data').previousElementSibling.textContent=getState().project?.kind==='meta-clinic'?"Restore the active version's scenario data when you need a repeatable starting point.":'Use Reset item to return to its starting screen. Project data setup is configured in Workspace.';for(const name of ['plan','updates','evidence','checks','release','workspace']){$('tools-'+name).hidden=name!==section;$('tab-'+name).setAttribute('aria-pressed',String(name===section));}}
+  $('review-tools').onclick=()=>open('workspace');$('close-tools').onclick=()=>{saveFields();$('tools-dialog').close();};
   for(const section of ['plan','updates','evidence','checks','release','workspace'])$('tab-'+section).onclick=()=>tab(section);
   $('plan-item-list').onchange=()=>{saveFields();index=Number($('plan-item-list').value);showItem();};
   $('plan-add').onclick=()=>{saveFields();draft.scenarios.push({id:`item-${crypto.randomUUID().slice(0,8)}`,title:'New review item',path:'/',steps:['Confirm the expected behavior.']});index=draft.scenarios.length-1;showItem();};
@@ -94,7 +94,7 @@ export function workbench({api,getState,getSide,workflow,poll,error,reopen}){
   setInterval(()=>{if($('tools-dialog').open && !getState().busy)void refresh();},2500);
   setInterval(()=>{const id=current()?.id;if(!getState().busy && id)void api(`/api/update?id=${id}`).then(value=>{if(current()?.id!==id)return;if(value.changed){$('updated-branch').hidden=false;$('updated-branch').textContent=`Updated branch ${value.latest.slice(0,7)} · Review changes`;}else $('updated-branch').hidden=true;}).catch(()=>{});},30000);
   $('updated-branch').onclick=()=>{update=null;open('updates');};
-  return{open,render(state){$('review-tools').disabled=!!state.busy;$('capture-item').disabled=!state.record || state.status!=='ready' || state.busy;
+  return{open,render(state){for(const id of ['toolbar-review','toolbar-agent'])$(id).disabled=!state.record || !!state.busy;$('review-tools').disabled=!!state.busy;$('capture-item').disabled=!state.record || state.status!=='ready' || state.busy;
     const key=JSON.stringify(state.agent);if(key!==settingsKey){settingsKey=key;$('agent-provider').value=state.agent?.provider || 'codex';$('agent-executable').value=state.agent?.executable || '';$('codex-chat').value='';}
     $('agent-save').disabled=!!state.jobsRunning || !!state.busy;
     $('project-adapter').textContent=state.project?.error || `${state.project?.name || 'Project'} · ${state.project?.kind || 'Meta Clinic'} preview adapter`;

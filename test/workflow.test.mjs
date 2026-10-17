@@ -229,7 +229,7 @@ test('completed review shows one clear approval action and hides branch setup',t
   assert.equal(e['results-title'].textContent,r.manifest.title);
   assert.match(e['results-counts'].textContent,/of .* review items passed/);
   assert.equal(e['results-action'].textContent,'Approve changes');
-  assert.equal(e['results-message'].textContent,'Reviewed against GitHub main. Ready to approve.');
+  assert.equal(e['results-message'].textContent,'Reviewed against the remote default branch. Ready to approve.');
   assert.equal(e['results-checks-label'].textContent,'Review details');
 });
 

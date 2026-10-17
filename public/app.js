@@ -21,9 +21,16 @@ const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,wo
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState});
+$('toolbar-review').onclick=()=>reviewTools.open('plan');
+$('toolbar-agent').onclick=()=>reviewTools.open('updates');
+const historyDialog=document.createElement('dialog');historyDialog.id='history-dialog';historyDialog.setAttribute('aria-label','Review history');
+historyDialog.innerHTML='<header class="dialog-heading"><h2>Review history</h2><button type="button">Close</button></header>';
+document.body.append(historyDialog);historyDialog.querySelector('button').onclick=()=>historyDialog.close();
+$('toolbar-history').onclick=()=>{const details=$('history').closest('details');details.open=true;historyDialog.append(details);historyDialog.showModal();};
+
 // Move existing controls so their state and handlers stay intact.
 $('tools-plan').prepend($('capture-item'));
-for(const id of ['choose-repository','stop'])$('workspace-actions').append($(id));
+$('workspace-actions').append($('stop'));
 for(const id of ['history','health-status','files'])$('workspace-details').append($(id).closest('details'));
 $('results-options').append($('export-review'),$('delivery-heading').closest('details'));
 $('results-action').before($('approval-section'));

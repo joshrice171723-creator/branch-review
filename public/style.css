@@ -815,3 +815,17 @@ dialog::backdrop {background:#152c2b80}
 #activity-dialog textarea {width:100%;font:12px/1.5 monospace;min-height:160px;border:1px solid #cbd8cc;padding:12px;}
 #activity-dialog .tool-actions {display:flex;gap:10px;flex-wrap:wrap;}
 #activity-dialog pre {white-space:pre-wrap;overflow-wrap:anywhere;}
+
+/* Main actions stay visible; labels appear on hover or keyboard focus. */
+.main-tools{display:flex;align-items:center;gap:6px;overflow:visible}
+.main-tools .toolbar-icon{position:relative;display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;min-width:42px;padding:10px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--ink,#193e34);transition:background .15s,border-color .15s,transform .15s}
+.toolbar-icon svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.main-tools .toolbar-icon:hover{background:#e8efe8;border-color:#d2dfd3;transform:translateY(-1px)}
+.main-tools .toolbar-icon:focus-visible{outline:2px solid #247862;outline-offset:3px;background:#e8efe8}
+.toolbar-icon[data-tooltip]::after{content:attr(data-tooltip);position:absolute;top:calc(100% + 9px);left:50%;transform:translateX(-50%);padding:7px 10px;border-radius:6px;background:#173c32;color:#fff;font:12px/1.4 system-ui,sans-serif;white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;z-index:100;box-shadow:0 4px 12px #173c3226;transition:opacity .12s .15s}
+.toolbar-icon:hover::after,.toolbar-icon:focus-visible::after{opacity:1;visibility:visible}
+.main-tools .toolbar-icon:last-child::after{left:auto;right:0;transform:none}
+.main-tools .toolbar-icon:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.main-tools .toolbar-icon[hidden]{display:none}
+#history-dialog{width:min(780px,90vw);max-height:85vh;overflow:auto}
+@media(prefers-reduced-motion:reduce){.main-tools .toolbar-icon,.toolbar-icon[data-tooltip]::after{transition:none}.main-tools .toolbar-icon:hover{transform:none}}

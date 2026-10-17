@@ -1,6 +1,6 @@
 const node=(tag,text)=>{const element=document.createElement(tag);element.textContent=text;return element;};
 export function activity({api,getState}){
-  const button=node('button','Activity');button.className='quiet';document.getElementById('review-tools').before(button);
+  const button=document.getElementById('toolbar-qa');
   const dialog=document.createElement('dialog');dialog.id='activity-dialog';dialog.setAttribute('aria-label','Review activity');
   dialog.innerHTML=`<header class="dialog-heading"><h2>Activity</h2><button data-close>Close</button></header><p data-status role="status"></p><div class="tool-actions"><button data-start>Run browser checks</button><button data-watch>Watch browser</button><button data-stop>Stop browser checks</button></div><p>Page checks open each review screen and save screenshots. Add assertions below to test behavior. They never approve or merge your changes.</p><details><summary>Browser actions</summary><p>Leave empty for page checks. Use itemId, action (visit, click, fill, text, style), path or selector, and value. Style assertions also need property.</p><textarea data-actions rows="8" aria-label="Browser actions JSON"></textarea><button data-example>Show actions for this review</button></details><section data-runs></section><h3>Agent jobs</h3><section data-jobs></section>`;
   document.body.append(dialog);const find=selector=>dialog.querySelector(selector);
@@ -10,7 +10,7 @@ export function activity({api,getState}){
   find('[data-watch]').onclick=()=>window.desktop?.showBrowserQa();find('[data-stop]').onclick=()=>window.desktop?.stopBrowserQa();
   let lastRecord,lastRuns,lastJobs;
   async function render(){
-    const state=getState();button.classList.toggle('working',!!state.qaRunning || !!state.jobsRunning);button.textContent=state.qaRunning?'● Browser QA working':state.jobsRunning?'● Agent working':'Activity';
+    const state=getState();button.classList.toggle('working',!!state.qaRunning || !!state.jobsRunning);const label=state.qaRunning?'Browser QA working':state.jobsRunning?'Agent working — view activity':'Browser QA and activity';button.dataset.tooltip=label;button.setAttribute('aria-label',label);
     if(!dialog.open)return;
     if(lastRecord!==state.record?.id){lastRecord=state.record?.id;find('[data-actions]').value='';}
     find('[data-start]').disabled=state.status!=='ready'||state.busy||state.qaRunning||state.jobsRunning;
