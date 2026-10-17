@@ -18,7 +18,7 @@ import { MuseQa } from './muse-qa.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
 import { reviewReport } from './report.mjs';
 import { previewHealth } from './health.mjs';
-import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly} from './fix-review.mjs';
+import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan} from './fix-review.mjs';
 
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false;
@@ -59,7 +59,21 @@ async function startCandidate(ref, previousReviewId) {
   const planKey=prior?digest({before:prior.identity.changed,after:integration.sha}):integration.sha;
   combined.plan=await prepareTogether(
     async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior});if(state.status==='error')throw Error(state.error);},
-    async()=>{let plan=await plans.get(planKey);if(!plan){const agent=selectedAgent(),connection=await probeProvider(agent.provider,agent.executable);if(connection.status!=='ready')throw Error(connection.message+' Open More tools > Workspace.');progress('Generating checklist while previews prepare');plan=await jobs.generatePlan(prior?prior.identity.changed:integration.main,integration.sha,prior?fixFiles:combined.files,prior?.manifest || combined.plan);}if(prior)plan=mergeFixPlan(prior.manifest,{...plan,scenarios:plan.scenarios.filter(item=>item.files?.some(file=>fixFiles.includes(file)))},fixFiles);await plans.save(planKey,plan);await plans.save(integration.sha,plan);return plan;}
+    async()=>{
+      let plan=await plans.get(planKey);
+      if(!plan && prior){
+        plan=await colorFixPlan(git,prior,integration.sha,fixFiles,integration.main);
+        if(plan)progress('Reusing affected screens for the color checks');
+      }
+      if(!plan){
+        const agent=selectedAgent(),connection=await probeProvider(agent.provider,agent.executable);
+        if(connection.status!=='ready')throw Error(connection.message+' Open More tools > Workspace.');
+        progress('Generating checklist while previews prepare');
+        plan=await jobs.generatePlan(prior?prior.identity.changed:integration.main,integration.sha,prior?fixFiles:combined.files,prior?.manifest || combined.plan);
+      }
+      if(prior)plan=mergeFixPlan(prior.manifest,{...plan,scenarios:plan.scenarios.filter(item=>item.files?.some(file=>fixFiles.includes(file)))},fixFiles);
+      await plans.save(planKey,plan);await plans.save(integration.sha,plan);return plan;
+    }
   );
   state.status='ready';progress('Checklist and previews are ready');
   await activate(previousReviewId);

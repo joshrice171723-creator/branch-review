@@ -7,6 +7,7 @@ import { loadPlan } from './plans.mjs';
 import {createHash} from 'node:crypto';
 import {detectProject,WebPreviews} from './web-project.mjs';
 import {frontendOnly} from './fix-review.mjs';
+import {previewHealth} from './health.mjs';
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
 export const local = process.env.BRANCH_REVIEW_HOME || path.join(root, ".local");
@@ -251,6 +252,15 @@ export async function prepare(side, sha, files=state.comparison.files) {
   const oldCache=JSON.parse(await readFile(path.join(local,`preview-${side}-${current}-${recipeHash}.json`),'utf8').catch(()=> 'null'));
   const delta=current!==sha?(await git('diff','--name-only','-z',current,sha,'--')).split('\0').filter(Boolean):[];
   if(oldCache && frontendOnly(delta)){
+    const healthy=async preview=>Object.values((await previewHealth({status:'ready',original:preview,changed:preview})).sides).every(result=>result.ok);
+    if(await healthy(oldCache)){
+      await run('git',['checkout','--detach',sha],{cwd});
+      const result={...oldCache,sha};
+      if(await healthy(result)){
+        progress(`${side} - updated running preview; kept services and prepared data`);
+        await writeFile(cacheFile,JSON.stringify(result));return result;
+      }
+    }
     await lifecycle(side,current,'stop');
     await run('git',['checkout','--detach',sha],{cwd});
     progress(`${side} · reusing prepared data for frontend changes`);

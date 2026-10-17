@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {frontendOnly,groupedBranches,focusRetest,mergeFixPlan,carryUnchangedChecks} from '../fix-review.mjs';
+import {frontendOnly,groupedBranches,focusRetest,mergeFixPlan,carryUnchangedChecks,colorFixPlan} from '../fix-review.mjs';
 const item=(id,path,file)=>({id,title:id,path,files:[file],steps:['Check color']});
 const home=item('home','/meta-clinic','apps/web/src/Home.tsx'),tutorial=item('tutorial','/meta-clinic/resources','apps/web/src/Tutorial.tsx');
 const prior={id:'review',title:'Two buttons',identity:{ref:'refs/heads/demo',source:'source',changed:'before'},manifest:{scenarios:[home,tutorial]},checks:{'home:0':true,'tutorial:0':true},items:{},issues:[]};
@@ -28,10 +28,10 @@ test('frontend-only preparation reuses data and skips setup; backend changes use
  const {readFile}=await import('node:fs/promises'),vm=await import('node:vm');
  const source=await readFile(new URL('../adapter.mjs',import.meta.url),'utf8');
  const prepareSource=source.slice(source.indexOf('export async function prepare('),source.indexOf('export async function resetScenario')).replace('export async function','async function');
- async function exercise(files,dirty=''){
+ async function exercise(files,dirty='',warm=false){
   const calls=[],saved=[];
   const old={sha:'old',database:'existing_database',scenario:{path:'/demo'},runtime:'standby'};
-  const context={project:{kind:'meta-clinic'},path:{join:(...parts)=>parts.join('/'),resolve:value=>value},previewRoot:'/previews',local:'/data',root:'/app',state:{comparison:{files}},slots:{standby:{api:1,web:2}},scenarioRecipe:()=> 'recipe',frontendOnly,createHash:()=>({update:()=>({digest:()=> 'hash'})}),exists:async()=>true,assertOwner:async()=>{},progress:()=>{},environment:()=>({APPLY_DEVELOPMENT_DATABASE:'new_database'}),
+  const context={previewHealth:async snapshot=>({sides:{original:{ok:typeof warm==='function'?warm(snapshot.original):warm}}}),project:{kind:'meta-clinic'},path:{join:(...parts)=>parts.join('/'),resolve:value=>value},previewRoot:'/previews',local:'/data',root:'/app',state:{comparison:{files}},slots:{standby:{api:1,web:2}},scenarioRecipe:()=> 'recipe',frontendOnly,createHash:()=>({update:()=>({digest:()=> 'hash'})}),exists:async()=>true,assertOwner:async()=>{},progress:()=>{},environment:()=>({APPLY_DEVELOPMENT_DATABASE:'new_database'}),
    readFile:async file=>{if(file==='/app/recipe')return'fixture';if(file.includes('-old-hash'))return JSON.stringify(old);throw Error('missing');},
    writeFile:async(file,data)=>saved.push(JSON.parse(data)),git:async(...args)=>args[0]==='diff'?files.join('\0'):'/repo/git',
    run:async(command,args)=>{if(command==='ruby')return 'BRANCH_REVIEW={"path":"/demo"}';if(args.includes('--git-common-dir'))return'/repo/git';if(args[0]==='status')return dirty;if(args[0]==='rev-parse')return'old';return'';},
@@ -40,6 +40,8 @@ test('frontend-only preparation reuses data and skips setup; backend changes use
   const result=await context.prepare('standby','new',files);return{calls,saved,result};
  }
  const fast=await exercise(['apps/web/src/Button.tsx']);assert.deepEqual(fast.calls.map(call=>call[2]),['stop','start']);assert.equal(fast.calls[1][3],'existing_database');assert.equal(fast.result.database,'existing_database');assert.equal(fast.result.sha,'new');
+ const warm=await exercise(['apps/web/src/Button.tsx'],'',true);assert.deepEqual(warm.calls,[]);assert.equal(warm.result.sha,'new');assert.equal(warm.result.database,'existing_database');
+ const stale=await exercise(['apps/web/src/Button.tsx'],'',preview=>preview.sha==='old');assert.deepEqual(stale.calls.map(call=>call[2]),['stop','start']);
  const full=await exercise(['apps/api/model.rb']);assert.deepEqual(full.calls.map(call=>call[2]),['stop','setup','start']);assert.equal(full.result.database,'new_database');
  await assert.rejects(exercise(['apps/web/src/Button.tsx'],' M Button.tsx'),/has edits/);
 });
@@ -48,4 +50,21 @@ test('uncommitted fix attempts stay in Jobs while independently changed branches
  const jobs=[{kind:'fix',status:'failed',reviewId:prior.id,branch:'branch-review/attempt',commit:'before'}];
  assert.deepEqual(groupedBranches([original,attempt],jobs,[prior]),[original]);
  assert.equal(groupedBranches([original,{...attempt,sha:'independent'}],jobs,[prior]).length,2);
+});
+
+test('color-only fixes reuse mapped screens without stale expectations; broader changes regenerate',async()=>{
+ const file='apps/web/src/button.css',record={...prior,integration:{main:'main'},manifest:{version:2,scenarios:[{...tutorial,files:[file],focus:'Sandbox',steps:['Must be purple']}]}};
+ const git=async(_,ref)=>ref.startsWith('before:')?'.button{color:#abc;background:#123456}':'.button{color:#fff;background:#654321}';
+ const plan=await colorFixPlan(git,record,'after',[file],'main');
+ assert.equal(plan.scenarios[0].path,tutorial.path);assert.equal(plan.scenarios[0].focus,'Sandbox');assert.match(plan.scenarios[0].description,/#123456 to #654321/);assert.ok(!JSON.stringify(plan).includes('purple'));
+ assert.equal(await colorFixPlan(git,record,'after',[file],'new-main'),null);
+ for(const css of ['#abc{color:red}', '/* #abc */ .button{color:red}', '.button{background:url("#abc")}'])assert.equal(await colorFixPlan(async(_,ref)=>ref.startsWith('before:')?css:css.replace('#abc','#def'),record,'after',[file],'main'),null);
+ assert.equal(await colorFixPlan(git,record,'after',['unknown.css'],'main'),null);
+ assert.equal(await colorFixPlan(async(_,ref)=>await git(_,ref)+(ref.startsWith('after:')?' .new{}':''),record,'after',[file],'main'),null);
+});
+
+test('a fix opens on the previously selected affected screen',()=>{
+ const record={identity:{changed:'after'},manifest:prior.manifest,issues:[],items:{}};
+ focusRetest(record,{...prior,cursor:{itemId:tutorial.id}},[...home.files,...tutorial.files]);
+ assert.equal(record.cursor.itemId,tutorial.id);
 });

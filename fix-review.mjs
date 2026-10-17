@@ -41,7 +41,8 @@ export function focusRetest(record,previous,files){
   record.previousResults=previous.manifest.scenarios.map(item=>({id:item.id,title:item.title,status:itemStatus(previous,item),commit:previous.identity.changed}));
   prepareRetest(record);
   const finding=record.issues.find(issue=>issue.status!=='resolved' && record.manifest.scenarios.some(item=>item.id===issue.scenario));
-  const affected=record.manifest.scenarios.find(item=>item.files?.some(file=>files.includes(file)));
+  const affectedItems=record.manifest.scenarios.filter(item=>item.files?.some(file=>files.includes(file)));
+  const affected=affectedItems.find(item=>item.id===previous.cursor?.itemId) || affectedItems[0];
   record.cursor={itemId:finding?.scenario || affected?.id || record.manifest.scenarios[0].id,view:'item'};
 }
 
@@ -89,4 +90,27 @@ export function carryUnchangedChecks(record,previous,files){
     for(let index=0;index<item.steps.length;index++)record.checks[`${item.id}:${index}`]=true;
     record.items[item.id]={...previous.items?.[item.id],carriedFrom:previous.id,verifiedAtCommit:previous.identity.changed};
   }
+}
+
+// Reuse routes only when the diff proves that CSS hex values are the entire change.
+export async function colorFixPlan(git,previous,after,files,main){
+  if(previous.integration?.main!==main || !files.length || !files.every(file=>file.endsWith('.css') && previous.manifest.scenarios.some(item=>item.files?.includes(file))))return null;
+  const changes=new Map();
+  for(const file of files){
+    const before=await git('show',`${previous.identity.changed}:${file}`),next=await git('show',`${after}:${file}`);
+    const pattern=/#(?:[a-f0-9]{8}|[a-f0-9]{6}|[a-f0-9]{4}|[a-f0-9]{3})\b/gi;
+    if(before===next || before.replace(pattern,'#COLOR')!==next.replace(pattern,'#COLOR'))return null;
+    const oldMatches=[...before.matchAll(pattern)],newMatches=[...next.matchAll(pattern)];
+    const inDeclaration=(text,match)=>{
+      const prefix=text.slice(0,match.index),boundary=Math.max(prefix.lastIndexOf('{'),prefix.lastIndexOf(';'),prefix.lastIndexOf('}'));
+      return /^\s*[\w-]+\s*:\s*[^{};'"/]*$/.test(prefix.slice(boundary+1));
+    };
+    if(newMatches.some((match,index)=>match[0]!==oldMatches[index][0] && (!inDeclaration(before,oldMatches[index]) || !inDeclaration(next,match))))return null;
+    const old=oldMatches.map(match=>match[0]),colors=newMatches.map(match=>match[0]);
+    changes.set(file,[...new Set(colors.flatMap((color,index)=>color!==old[index]?[`${old[index]} to ${color}`]:[]))]);
+  }
+  return {...previous.manifest,source:'Color-only diff; existing screen mappings',summary:'Compare the updated colors on the affected screens.',scenarios:previous.manifest.scenarios.filter(item=>item.files?.some(file=>changes.has(file))).map(item=>{
+    const colors=[...new Set(item.files.flatMap(file=>changes.get(file)||[]))].join(', ');
+    return {...item,title:'Check updated colors on '+item.path,description:`Color changes: ${colors}`.slice(0,2000),instructions:'Toggle Before fix and After fix. Compare the changed control on this screen, including hover and keyboard focus.',expected:'The updated colors match your request. Text stays readable and the control still works.',steps:['The changed colors match my request.','Text, hover, keyboard focus, and the control action still work.']};
+  })};
 }
