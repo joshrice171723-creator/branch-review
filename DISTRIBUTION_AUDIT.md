@@ -2,6 +2,8 @@
 
 Date: 2026-10-17. Version: 0.6.0. This is a Windows beta, not clean-machine certification or a claim that every project runs automatically.
 
+Update 0.6.1: the change composer is directly beside the preview; checklist editing is separate. Requests attach a cropped screenshot pinned to the observed page and commit; Codex receives it through its image input. All 126 automated tests passed. `test/change-composer-smoke.cjs` exercised a single submit click through the Electron renderer and captured the actual preview PNG while intercepting job submission, so that check did not change Meta Clinic code or run an agent. Provider image arguments and stored evidence were tested separately.
+
 ## Delivered
 
 - Per-user Windows x64 installer, Start menu/desktop shortcuts, app icon and retained project data on uninstall.

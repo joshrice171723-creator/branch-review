@@ -193,3 +193,21 @@ test('host finalizes sandbox edits in a linked worktree without committing tooli
   await assert.rejects(jobs.finalizeFix(job,source),/changed the commit history/);
   await run('git',['checkout','-b','unexpected'],{cwd:worktree});await assert.rejects(jobs.finalizeFix(job,job.resultCommit),/checkout changed/);
 });
+
+test('change screenshots are pinned to the observed version and passed as Codex images',async()=>{
+ const {directory,record}=await fixture();
+ const jobs=new ReviewJobs(directory,{run:async(_file,args)=>args[0]==='rev-parse'?sha:'',changedCwd:()=>directory,git:async()=>'',codex:'fixture.exe'});
+ const png=Buffer.from('89504e470d0a1a0a','hex'),attachment={side:'changed',commit:sha,location:'/tutorials',screenshot:'data:image/png;base64,'+png.toString('base64')};
+ await assert.rejects(jobs.start(record,'fix',{attachment:{...attachment,commit:base}}),/reviewed version/);
+ await assert.rejects(jobs.start(record,'fix',{attachment:{...attachment,screenshot:'data:image/png;base64,YmFk'}}),/invalid/);
+ assert.equal(jobs.rows.length,0);
+ let invoked;
+ jobs.command=async(job,_command,args,_cwd,prompt)=>{invoked={args,prompt};await writeFile(args[args.indexOf('--output-last-message')+1],'Done');};
+ jobs.finalizeFix=async job=>{job.resultCommit='c'.repeat(40);};
+ const job=await jobs.start(record,'fix',{requestText:'Remove brown shadow',attachment});
+ while(job.status==='running')await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(job.status,'succeeded',job.error);
+ const file=path.join(directory,'screenshots',job.attachment.screenshot);
+ assert.deepEqual(await readFile(file),png);assert.equal(invoked.args[invoked.args.indexOf('--image')+1],file);
+ assert.match(invoked.prompt,/Attached current page: \/tutorials/);assert.match(invoked.prompt,/Remove brown shadow/);
+});

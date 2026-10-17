@@ -861,3 +861,11 @@ dialog::backdrop {background:#152c2b80}
 #onboarding details{margin-top:12px}
 #onboarding details button{margin:4px}
 @media(max-width:600px){#onboarding-checks li{grid-template-columns:1fr;gap:4px}}
+
+#change-composer{padding-bottom:18px;margin-bottom:22px;border-bottom:1px solid #dce3d9}
+#change-composer .change-prompt{font-size:19px;margin:0 0 10px}
+#change-composer textarea{width:100%;box-sizing:border-box;min-height:80px;padding:10px;border:1px solid #ccd7cc;border-radius:6px;font:inherit;resize:vertical}
+#change-composer .small{font-size:12px;line-height:1.5;overflow-wrap:anywhere;margin:8px 0}
+#change-composer .primary{margin:8px 0 0}
+#change-status{font-size:13px;line-height:1.5}
+#tools-dialog:has(#tools-plan:not([hidden])) > #tools-status{display:block}

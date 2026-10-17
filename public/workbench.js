@@ -1,11 +1,11 @@
 import {changeRequest} from './change-request.js';
 const $=id=>document.getElementById(id);
 const node=(tag,text)=>{const element=document.createElement(tag);element.textContent=text;return element;};
-export function workbench({api,getState,getSide,workflow,poll,error,reopen}){
+export function workbench({api,getState,getSide,workflow,capture,poll,error,reopen}){
   let draft=null,index=0,editorRecord='',lastJobs='',checks=[],update=null,loading=false;
   const fields=['title','description','instructions','expected','path','originalPath','focus','steps','files','viewport'];
   const current=()=>getState().record;
-  const changes=changeRequest({api,getState,getSide,workflow,poll,close:()=>$('tools-dialog').close()});
+  const changes=changeRequest({api,getState,getSide,workflow,capture,poll,close:()=>{}});
   const providerName=()=>getState().agent?.provider==='claude'?'Claude Code':'Codex';
   let settingsKey='';
   $('agent-save').onclick=async()=>{try{const value=await api('/api/agent-settings',{provider:$('agent-provider').value,executable:$('agent-executable').value.trim()});$('agent-status').textContent=value.result.message;await poll();}catch(e){$('agent-status').textContent=e.message;}};
@@ -37,7 +37,7 @@ export function workbench({api,getState,getSide,workflow,poll,error,reopen}){
   function open(section='plan'){
     if(!current() && section!=='plan')section='workspace';if(current() && (editorRecord!==current().id || !draft))loadEditor();changes.render();$('tools-dialog').showModal();tab(section);renderRelease();void refresh();
   }
-  function tab(section){$('tools-title').textContent={plan:'Make changes',updates:'Agent fixes',evidence:'Evidence',checks:'Checks',release:'Published review',workspace:'Settings'}[section];$('restore-data').hidden=getState().project?.kind!=='meta-clinic';$('restore-data').previousElementSibling.textContent=getState().project?.kind==='meta-clinic'?"Restore the active version's scenario data when you need a repeatable starting point.":'Use Reset item to return to its starting screen. Project data setup is configured in Workspace.';for(const name of ['plan','updates','evidence','checks','release','workspace']){$('tools-'+name).hidden=name!==section;$('tab-'+name).setAttribute('aria-pressed',String(name===section));}}
+  function tab(section){$('tools-title').textContent={plan:'Review checklist',updates:'Agent fixes',evidence:'Evidence',checks:'Checks',release:'Published review',workspace:'Settings'}[section];$('restore-data').hidden=getState().project?.kind!=='meta-clinic';$('restore-data').previousElementSibling.textContent=getState().project?.kind==='meta-clinic'?"Restore the active version's scenario data when you need a repeatable starting point.":'Use Reset item to return to its starting screen. Project data setup is configured in Workspace.';for(const name of ['plan','updates','evidence','checks','release','workspace']){$('tools-'+name).hidden=name!==section;$('tab-'+name).setAttribute('aria-pressed',String(name===section));}}
   $('review-tools').onclick=()=>open('workspace');$('close-tools').onclick=()=>{saveFields();$('tools-dialog').close();};
   for(const section of ['plan','updates','evidence','checks','release','workspace'])$('tab-'+section).onclick=()=>tab(section);
   $('plan-done').onclick=()=>{saveFields();showItem();$('plan-editor').hidden=true;};
@@ -76,6 +76,7 @@ export function workbench({api,getState,getSide,workflow,poll,error,reopen}){
       checks=available;const selection=$('check-select').value;$('check-select').replaceChildren(...checks.map(check=>{const option=node('option',`${check.directory || 'Root'} · ${check.name}`);option.value=check.id;return option;}));if(checks.some(check=>check.id===selection))$('check-select').value=selection;$('check-select').onchange();$('run-check').disabled=!checks.length || rows.some(row=>row.status==='running');
       const key=id+JSON.stringify(rows);if(key!==lastJobs){lastJobs=key;const latest=rows.findLast(row=>row.reviewId===id);if(latest?.status==='failed')$('tools-status').textContent=`${latest.kind==='fix'?'Agent handoff':'Job'} failed: ${latest.error}`;else if(latest?.status==='succeeded')$('tools-status').textContent=latest.kind==='fix'?'Agent finished. Inspect the resulting branch in Jobs below.':'Last job completed.';$('job-list').replaceChildren(...rows.filter(row=>row.reviewId===id).reverse().map(row=>{
         const article=node('article','');article.className='finding';article.append(node('strong',`${{warm:'Prepare preview',plan:'Generate plan',fix:(row.provider==='claude'?'Claude':'Codex')+' fixes',check:'Automated check'}[row.kind] || row.kind} · ${row.status}`),node('small',`${row.commit.slice(0,7)} · ${new Date(row.startedAt).toLocaleString()}`));
+        if(row.attachment){const attachment=node('button','View attached screenshot');attachment.onclick=()=>{$('evidence-image').src='/screenshots/'+row.attachment.screenshot;$('evidence-context').textContent=`${row.attachment.side} · ${row.attachment.location} · ${row.attachment.commit.slice(0,7)}`;$('tools-dialog').close();$('evidence-dialog').showModal();};article.append(attachment);}
         if(row.chatId)article.append(node('small',`${row.provider==='claude'?'Claude':'Codex'} session: ${row.chatId}`));if(row.error)article.append(node('p',row.error));if(row.plan){const button=node('button','Review generated plan');button.onclick=()=>{draft=structuredClone(row.plan);editorRecord=id;index=0;$('plan-summary-edit').value=draft.summary;showItem();$('checklist-advanced').open=true;tab('plan');};article.append(button);}
         if(row.status==='running' && row.cancellable){const stop=node('button',row.cancelRequested?'Stopping…':'Stop job');stop.disabled=!!row.cancelRequested;stop.onclick=async()=>{stop.disabled=true;try{await api('/api/job-cancel',{jobId:row.id});await refresh();}catch(e){$('tools-status').textContent=e.message;stop.disabled=false;}};article.append(stop);}
         if(row.result){const response=node('details','');response.append(node('summary','Agent response'+(row.committedFiles?' · before selected files were committed':'')),node('p',row.result));article.append(response);}
@@ -99,7 +100,7 @@ export function workbench({api,getState,getSide,workflow,poll,error,reopen}){
       }
     }catch(e){$('tools-status').textContent=e.message;}finally{loading=false;}
   }
-  setInterval(()=>{if($('tools-dialog').open && !getState().busy)void refresh();},2500);
+  setInterval(()=>{if(!getState().busy){if($('tools-dialog').open)void refresh();else void api('/api/jobs').then(rows=>changes.render(rows)).catch(()=>{});}},2500);
   setInterval(()=>{const id=current()?.id;if(!getState().busy && id)void api(`/api/update?id=${id}`).then(value=>{if(current()?.id!==id)return;if(value.changed){$('updated-branch').hidden=false;$('updated-branch').textContent=`Updated branch ${value.latest.slice(0,7)} · Review changes`;}else $('updated-branch').hidden=true;}).catch(()=>{});},30000);
   $('updated-branch').onclick=()=>{update=null;open('updates');};
   return{open,render(state){changes.render();$('toolbar-review').disabled=!!state.busy;$('toolbar-agent').disabled=!state.record || !!state.busy;$('review-tools').disabled=!!state.busy;$('capture-item').disabled=!state.record || state.status!=='ready' || state.busy;

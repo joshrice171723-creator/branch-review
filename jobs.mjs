@@ -74,6 +74,16 @@ export class ReviewJobs {
     if(kind==='fix' && input.chatId && !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(input.chatId))throw new Error('Enter the exact provider session UUID, or leave it blank to start a dedicated fix chat.');
     if(kind==='fix' && input.requestText!==undefined && (typeof input.requestText!=='string' || !input.requestText.trim() || input.requestText.length>60000))throw new Error('The fix request must contain 1–60000 characters.');
     const job={id:randomUUID(),kind,provider,executable:selection.executable,reviewId:record.id,commit:record.identity.changed,status:'running',startedAt:new Date().toISOString(),log:'',...(check?{check}:{}),...(kind==='fix'?{chatId:input.chatId}:{})};
+    if(input.attachment){
+      const {side,commit,location,screenshot}=input.attachment;
+      if(kind!=='fix' || newChange || !['original','changed'].includes(side) || commit!==record.identity[side==='original'?'base':'changed'] || typeof location!=='string' || !location.startsWith('/') || location.startsWith('//') || location.length>700)throw Error('The attached page must belong to this reviewed version.');
+      if(typeof screenshot!=='string' || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(screenshot))throw Error('Screenshot must be PNG.');
+      const bytes=Buffer.from(screenshot.split(',')[1],'base64');
+      if(bytes.length>5000000 || bytes.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Screenshot is invalid or larger than 5 MB.');
+      await mkdir(path.join(this.directory,'screenshots'),{recursive:true});
+      await writeFile(path.join(this.directory,'screenshots',job.id+'.png'),bytes);
+      job.attachment={side,commit,location,screenshot:job.id+'.png'};
+    }
     if(kind==='fix')job.requestText=input.requestText || fixRequest(record);
     job.cancellable=kind!=='warm';this.rows.push(job);await this.save();
     void this.execute(job,record,input,cwd).then(()=>{job.status=job.cancelRequested?'cancelled':'succeeded';},error=>{job.status=job.cancelRequested?'cancelled':'failed';job.error=redact(error.message);}).finally(async()=>{job.cancellable=false;job.finishedAt=new Date().toISOString();await this.save();}).catch(error=>{job.status='failed';job.error=`Could not persist job result: ${error.message}`;});
@@ -119,7 +129,7 @@ export class ReviewJobs {
     const output=path.join(this.directory,job.id+'.txt');
     job.provider ||= providerId(this.provider().provider);
     const agent=this.codex && job.provider==='codex'?this.codex:await executable(job.provider,job.executable);
-    const invoke=async(cwd,prompt,chatId)=>{const connections=job.provider==='codex'&&!this.codex?await codexConnections(agent,cwd):[];await this.command(job,agent,agentArgs(job.provider,{kind:job.kind,cwd,output,chatId,connections}),cwd,prompt);if(job.cancelRequested)throw Error('Job stopped. Any saved files remain in its isolated checkout.');if(job.provider==='claude'){if(typeof job.agentResult!=='string' || !job.agentResult.trim())throw Error('Claude returned no completed result. Inspect the job output.');await writeFile(output,job.agentResult);}};
+    const invoke=async(cwd,prompt,chatId)=>{const connections=job.provider==='codex'&&!this.codex?await codexConnections(agent,cwd):[];const images=job.attachment?[path.join(this.directory,'screenshots',job.attachment.screenshot)]:[];await this.command(job,agent,agentArgs(job.provider,{kind:job.kind,cwd,output,chatId,connections,images}),cwd,prompt);if(job.cancelRequested)throw Error('Job stopped. Any saved files remain in its isolated checkout.');if(job.provider==='claude'){if(typeof job.agentResult!=='string' || !job.agentResult.trim())throw Error('Claude returned no completed result. Inspect the job output.');await writeFile(output,job.agentResult);}};
     if(job.kind==='plan'){
       const worktree=path.join(this.directory,'plan-checkouts',job.id);
       await mkdir(path.dirname(worktree),{recursive:true});
@@ -137,6 +147,7 @@ export class ReviewJobs {
     await mkdir(path.dirname(worktree),{recursive:true});await this.git('worktree','add','-b',branch,worktree,record.identity.source);
     job.worktree=worktree;job.branch=branch;await this.save();
     const attachments=record.issues.filter(issue=>issue.status!=='resolved').flatMap(issue=>[issue.screenshot&&/^[a-f0-9-]{36}\.png$/.test(issue.screenshot)?path.join(this.directory,'screenshots',issue.screenshot):null,issue.video&&/^[a-f0-9-]{36}\.webm$/.test(issue.video)?path.join(this.directory,'recordings',issue.video):null].filter(Boolean));
+    if(job.attachment){attachments.push(path.join(this.directory,'screenshots',job.attachment.screenshot));job.requestText+=`\nAttached current page: ${job.attachment.location}\nObserved ${job.attachment.side} commit: ${job.attachment.commit}\nInspect the attached screenshot for the requested visual change.`;}
     const prompt=`Work only in ${worktree} on ${branch}. This is an isolated fix checkout for Branch Review. Preserve unrelated work. Edit and validate the requested fix, but do not stage, commit, merge, publish, push, or message other chats. Branch Review owns Git finalization outside your sandbox. Do not edit AGENTS.md or .branch-review.json; Branch Review generates and stores checklists separately. The human requested this fix run from Branch Review. The reported finding's expected behavior supersedes the old checklist when they disagree.\n\n${job.requestText}\n\nPrevious review manifest (historical context, not the new acceptance criteria):\n${JSON.stringify(record.manifest)}\n\nEvidence files (read-only):\n${attachments.join('\n')}`;
     await invoke(worktree,prompt,input.chatId);
     job.result=redact(await readFile(output,'utf8')).slice(-12000);

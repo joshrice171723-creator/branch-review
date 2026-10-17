@@ -90,5 +90,5 @@ export function evidenceTools({api,getState,getSide,workflow,toggle,reopen,poll}
     const median=values=>values.slice().sort((a,b)=>a-b)[Math.floor(values.length/2)],summary=Object.fromEntries(Object.entries(samples).map(([side,rows])=>[side,{medianLoadMs:median(rows.map(r=>r.loadMs)),minLoadMs:Math.min(...rows.map(r=>r.loadMs)),maxLoadMs:Math.max(...rows.map(r=>r.loadMs)),samples:rows}]));summary.deltaMs=summary.changed.medianLoadMs-summary.original.medianLoadMs;summary.note='Local warm-cache page loads; backend startup, live hosting and user-perceived SPA readiness are not measured.';await persist('performance','changed',summary,key);showResult(summary,'performance');
   }catch(e){$('screen-check-output').textContent=e.message;}finally{busy=false;}};
   let viewportItem='';
-  return{render(){const key=identity(),item=getState().record?.manifest.scenarios.find(item=>item.id===workflow.scenario());if(key!==viewportItem){viewportItem=key;if(item?.viewport){viewport=item.viewport;$('viewport-preset').value=viewport;}}viewportUI();}};
+  return{snapshot,render(){const key=identity(),item=getState().record?.manifest.scenarios.find(item=>item.id===workflow.scenario());if(key!==viewportItem){viewportItem=key;if(item?.viewport){viewport=item.viewport;$('viewport-preset').value=viewport;}}viewportUI();}};
 }

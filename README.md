@@ -11,6 +11,7 @@ Windows users: download the installer and follow [Install Branch Review](INSTALL
 3. The first-run **Set up your project** guide checks Git, your remote/default branch, commit identity, previews and your chosen agent. Resolve any flagged items, choose **Check again**, then **Start reviewing**. Reopen the guide from the **Settings** toolbar icon. Existing reviews stay available without repeating setup.
 4. Choose a branch, or **Make changes** to start a new change from the remote default branch. The summary appears immediately; the combined result against the remote default branch, checklist and isolated previews prepare before QA.
 5. Compare Original and Changed. Select an item or Next to open its screen, record observations and report problems.
+   To request a change, type in **What would you like to change?** beside the preview and click **Make changes**. The current page, version and cropped preview screenshot accompany the request. Drafts stay with their review. The separate **Review checklist** toolbar control edits testing instructions.
 6. Send findings through **Updates & fixes**. Codex edits an isolated checkout; the host validates and commits the result. **Review fix** returns to the same review group with Before fix / After fix and unresolved findings ready to retest.
 7. Approve the candidate and merge/push. Protected repositories can use **Workspace > Delivery > Create pull request**, with an authenticated GitHub CLI.
 
@@ -65,7 +66,7 @@ Loopback ports 4310-4312 are reserved. Only one controller can own them. The des
 
 ## More tools
 
-- **Plan:** edit proposed checks and routes; changes invalidate approval.
+- **Review checklist:** edit proposed checks and routes; changes invalidate approval.
 - **Updates & fixes:** findings, jobs, fix retesting and history.
 - **Evidence:** screenshots, annotations, recordings and interaction replay.
 - **Checks:** configured commands, accessibility and performance checks.

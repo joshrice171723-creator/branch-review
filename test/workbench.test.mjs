@@ -11,7 +11,7 @@ test('Office opens only after exact published-build verification succeeds',async
   t.after(()=>{delete globalThis.document;delete globalThis.window;});
   const state={status:'ready',busy:false,publishTarget:'https://aimetaclinic.com',record:{id:'review',delivery:{stage:'pushed'},manifest:{scenarios:[]}}};
   let failure=false;
-  const tools=workbench({getState:()=>state,getSide:()=> 'changed',workflow:{},poll:async()=>{},error:()=>{},reopen:()=>{},api:async(path,data)=>{calls.push({path,data});if(failure)throw Error('The published revision differs from this review.');}});
+  const tools=workbench({getState:()=>state,getSide:()=> 'changed',workflow:{getContext:()=>({})},poll:async()=>{},error:()=>{},reopen:()=>{},api:async(path,data)=>{calls.push({path,data});if(failure)throw Error('The published revision differs from this review.');}});
   elements['tools-dialog'].open=true;
   tools.render(state);assert.equal(elements['published-office'].hidden,true);
   state.record.delivery.stage='published';tools.render(state);assert.equal(elements['published-office'].hidden,false);

@@ -18,12 +18,12 @@ let allBranches = [],
   selectionGeneration = 0, selectedComparison = null, commitBranchSha = '', diffGeneration = 0;
 try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') || 'null');if(openingSelection){openingSelection.starting=false;selected=openingSelection;}}catch{}
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
-const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,poll,error,reopen:()=>mountFrames(currentState,true)});
+const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error,reopen:()=>mountFrames(currentState,true)});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
-$('new-change').onclick=()=>reviewTools.open('plan');
+$('new-change').onclick=()=>{$('change-request').focus();$('change-composer').scrollIntoView({block:'nearest'});};
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
 const historyDialog=document.createElement('dialog');historyDialog.id='history-dialog';historyDialog.setAttribute('aria-label','Review history');
 historyDialog.innerHTML='<header class="dialog-heading"><h2>Review history</h2><button type="button">Close</button></header>';

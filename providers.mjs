@@ -55,10 +55,10 @@ export async function codexConnections(file,cwd){
   const rows=JSON.parse(result.stdout);if(!Array.isArray(rows))throw Error('Could not inspect Codex connector configuration.');
   return rows.map(row=>row.name).filter(name=>typeof name==='string');
 }
-export function agentArgs(provider,{kind,cwd,output,chatId,connections=[]}){
+export function agentArgs(provider,{kind,cwd,output,chatId,connections=[],images=[]}){
   providerId(provider);
   if(provider==='codex' && connections.some(name=>! /^[A-Za-z0-9_-]+$/.test(name)))throw Error('Rename Codex connectors containing punctuation before running isolated jobs.');
-  if(provider==='codex')return ['-a','never','-C',cwd,'--disable','plugins','--disable','apps','--disable','hooks',...connections.flatMap(name=>['-c',`mcp_servers.${name}.enabled=false`]),'exec','--sandbox',kind==='plan'?'read-only':'workspace-write',...(chatId?['resume',chatId]:[]),...(kind==='plan'?['--ephemeral']:[]),'--json','--color','never','--output-last-message',output,'-'];
+  if(provider==='codex')return ['-a','never','-C',cwd,'--disable','plugins','--disable','apps','--disable','hooks',...connections.flatMap(name=>['-c',`mcp_servers.${name}.enabled=false`]),'exec','--sandbox',kind==='plan'?'read-only':'workspace-write',...(chatId?['resume',chatId]:[]),...(kind==='plan'?['--ephemeral']:[]),...images.flatMap(file=>['--image',file]),'--json','--color','never','--output-last-message',output,'-'];
   // Restricted file tools keep Claude inside the owned checkout. Host checks run separately.
   return ['-p','--restricted','--safe-mode','--permission-prompts','none','--permission-mode',kind==='plan'?'dontAsk':'acceptEdits','--tools',kind==='plan'?'Read,Glob,Grep':'Read,Glob,Grep,Edit,Write','--allowedTools','Read,Glob,Grep','--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--output-format','stream-json','--verbose',...(chatId?['--resume',chatId]:[]),...(kind==='plan'?['--no-session-persistence']:[])];
 }
