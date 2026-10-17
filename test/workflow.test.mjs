@@ -277,3 +277,11 @@ test('a requested change without defect findings opens the full visible checklis
  assert.equal(e['item-filter'].value,'all');assert.equal(e['fix-mode-note'].hidden,true);
  assert.equal(e['item-queue'].children.length,h.state.record.manifest.scenarios.length);
 });
+
+test('an unrelated old finding does not filter the latest changed item out of the queue',t=>{
+ const h=harness(t),e=h.elements,first=h.state.record.manifest.scenarios[0];
+ const latest={...first,id:'latest-appearance',title:'Check the button'};
+ h.state.record={...h.state.record,id:'latest',manifest:{...h.state.record.manifest,scenarios:[first,latest]},cursor:{itemId:latest.id,view:'item'},fixComparison:{before:'aaaaaaa',after:'bbbbbbb'},issues:[{id:'old',scenario:first.id,status:'needs-retest',expected:'Old heading check',commit:'aaaaaaa',side:'changed',consoleErrors:[]}]};
+ h.view.render(h.state);
+ assert.equal(e['item-filter'].value,'all');assert.equal(e['item-title'].textContent,'Check the button');assert.equal(e['item-queue'].children.length,2);
+});

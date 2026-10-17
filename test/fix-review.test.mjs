@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {frontendOnly,groupedBranches,focusRetest,mergeFixPlan,carryUnchangedChecks,colorFixPlan} from '../fix-review.mjs';
+import {frontendOnly,groupedBranches,focusRetest,mergeFixPlan,carryUnchangedChecks,colorFixPlan,appearanceFixPlan} from '../fix-review.mjs';
 const item=(id,path,file)=>({id,title:id,path,files:[file],steps:['Check color']});
 const home=item('home','/meta-clinic','apps/web/src/Home.tsx'),tutorial=item('tutorial','/meta-clinic/resources','apps/web/src/Tutorial.tsx');
 const prior={id:'review',title:'Two buttons',identity:{ref:'refs/heads/demo',source:'source',changed:'before'},manifest:{scenarios:[home,tutorial]},checks:{'home:0':true,'tutorial:0':true},items:{},issues:[]};
@@ -68,5 +68,26 @@ test('color-only fixes reuse mapped screens without stale expectations; broader 
 test('a fix opens on the previously selected affected screen',()=>{
  const record={identity:{changed:'after'},manifest:prior.manifest,issues:[],items:{}};
  focusRetest(record,{...prior,cursor:{itemId:tutorial.id}},[...home.files,...tutorial.files]);
+ assert.equal(record.cursor.itemId,tutorial.id);
+});
+
+test('appearance-only changes build exact checks locally; structural and behavioral CSS falls back',async()=>{
+ const file='button.css',record={...prior,integration:{main:'main'},manifest:{version:2,scenarios:[{...tutorial,files:[file]}]}};
+ const before='.button { border-radius: 16px; color: blue; }';
+ const make=after=>appearanceFixPlan(async(_,ref)=>ref.startsWith('before:')?before:after,record,'after',[file],'main');
+ const plan=await make(before.replace('16px','24px'));
+ assert.equal(plan.scenarios[0].path,tutorial.path);assert.match(plan.scenarios[0].description,/16px/);assert.match(plan.scenarios[0].description,/24px/);
+ for(const after of [before.replace('.button','.other'),before+' .new {color:red;}',before.replace('border-radius','display'),before.replace('16px','url(secret)'),before])assert.equal(await make(after),null);
+ assert.equal(await appearanceFixPlan(async()=>before,record,'after',[file],'moved-main'),null);
+});
+test('latest affected item wins over an unrelated old finding',()=>{
+ const record={identity:{changed:'after'},manifest:prior.manifest,issues:[{scenario:home.id,status:'needs-retest'}],items:{}};
+ focusRetest(record,{...prior,cursor:{itemId:home.id}},tutorial.files);
+ assert.equal(record.cursor.itemId,tutorial.id);assert.equal(record.issues[0].scenario,home.id);
+});
+
+test('latest request page wins when a shared stylesheet affects several screens',()=>{
+ const record={identity:{changed:'after'},manifest:prior.manifest,issues:[],items:{}};
+ focusRetest(record,{...prior,cursor:{itemId:home.id}},[...home.files,...tutorial.files],tutorial.path+'?test=1');
  assert.equal(record.cursor.itemId,tutorial.id);
 });

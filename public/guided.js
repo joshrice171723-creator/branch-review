@@ -91,7 +91,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const currentKey=`${r.id}:${current.id}`;
     const moved=key!==currentKey;
     if(moved){
-      if(recordId!==r.id){fixMode=!!r.fixComparison && items.some(item=>matchesItem(r,item,'','attention'));$('item-search').value='';$('item-filter').value=fixMode?'attention':'all';}
+      if(recordId!==r.id){fixMode=!!r.fixComparison && matchesItem(r,current,'','attention');$('item-search').value='';$('item-filter').value=fixMode?'attention':'all';}
       key=currentKey;recordId=r.id;itemId=current.id;dirty=false;version++;
       let saved=r.items?.[itemId]||{};
       try{const local=JSON.parse(localStorage.getItem(draftKey())||'null');if(local){saved=local;dirty=true;}}catch{}

@@ -34,7 +34,7 @@ export function groupedBranches(branches,jobs,records){
   return [...replacements,...branches.filter(branch=>!hidden.has(branch.ref))];
 }
 
-export function focusRetest(record,previous,files){
+export function focusRetest(record,previous,files,requestedPath){
   record.reviewRootId=previous.reviewRootId || previous.id;
   record.reviewTitle=previous.reviewTitle || previous.title;
   record.fixComparison={before:previous.identity.changed,after:record.identity.changed};
@@ -42,8 +42,8 @@ export function focusRetest(record,previous,files){
   prepareRetest(record);
   const finding=record.issues.find(issue=>issue.status!=='resolved' && record.manifest.scenarios.some(item=>item.id===issue.scenario));
   const affectedItems=record.manifest.scenarios.filter(item=>item.files?.some(file=>files.includes(file)));
-  const affected=affectedItems.find(item=>item.id===previous.cursor?.itemId) || affectedItems[0];
-  record.cursor={itemId:finding?.scenario || affected?.id || record.manifest.scenarios[0].id,view:'item'};
+  const affected=affectedItems.find(item=>requestedPath && item.path===requestedPath.split(/[?#]/)[0]) || affectedItems.find(item=>item.id===previous.cursor?.itemId) || affectedItems[0];
+  record.cursor={itemId:affected?.id || finding?.scenario || record.manifest.scenarios[0].id,view:'item'};
 }
 
 export function prepareRetest(record){
@@ -113,4 +113,28 @@ export async function colorFixPlan(git,previous,after,files,main){
     const colors=[...new Set(item.files.flatMap(file=>changes.get(file)||[]))].join(', ');
     return {...item,title:'Check updated colors on '+item.path,description:`Color changes: ${colors}`.slice(0,2000),instructions:'Toggle Before fix and After fix. Compare the changed control on this screen, including hover and keyboard focus.',expected:'The updated colors match your request. Text stays readable and the control still works.',steps:['The changed colors match my request.','Text, hover, keyboard focus, and the control action still work.']};
   })};
+}
+
+// Only reuse mapped screens when every source change is an appearance declaration.
+export async function appearanceFixPlan(git,previous,after,files,main){
+  if(previous.integration?.main!==main || !files.length || !files.every(file=>file.endsWith('.css') && previous.manifest.scenarios.some(item=>item.files?.includes(file))))return null;
+  const changes=new Map();
+  const declaration=/(?<=[{;])\s*(color|background-color|border-color|border-radius|box-shadow|text-shadow|outline-color)\s*:\s*([^;{}]+);?/gi;
+  const parse=text=>{
+    const values=[];
+    const structure=text.replace(declaration,(whole,property,value)=>{
+      if(/url\(|expression|@|\/\*/i.test(value))return whole;
+      values.push(`${property}: ${value.trim()}`);return '';
+    });
+    return {structure,values};
+  };
+  for(const file of files){
+    const before=await git('show',`${previous.identity.changed}:${file}`),next=await git('show',`${after}:${file}`);
+    const old=parse(before),updated=parse(next);
+    if(before===next || old.structure!==updated.structure || JSON.stringify(old.values)===JSON.stringify(updated.values))return null;
+    const removed=old.values.filter((value,index)=>value!==updated.values[index]);
+    const added=updated.values.filter((value,index)=>value!==old.values[index]);
+    changes.set(file,`Before: ${removed.join('; ') || 'unset'}. After: ${added.join('; ') || 'unset'}.`);
+  }
+  return {...previous.manifest,source:'Verified appearance-only CSS diff; existing screen mappings',summary:'Check the latest appearance change on its affected screens.',scenarios:previous.manifest.scenarios.filter(item=>item.files?.some(file=>changes.has(file))).map(item=>({...item,title:'Check updated appearance on '+item.path,description:item.files.map(file=>changes.get(file)).filter(Boolean).join(' ').slice(0,2000),instructions:'Compare Before fix and After fix on this screen. Inspect the changed control at rest, on hover, with keyboard focus, and at a narrow width.',expected:'The changed appearance matches the request and the listed CSS values. Text remains readable and the control still works.',steps:['The changed appearance matches the request and the listed before/after values.','Hover, keyboard focus, and the control action still work.','At a narrow width, the control remains readable without clipping.']}))};
 }

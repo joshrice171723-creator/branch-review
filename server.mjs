@@ -20,7 +20,7 @@ import { MuseQa } from './muse-qa.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
 import { reviewReport } from './report.mjs';
 import { previewHealth } from './health.mjs';
-import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan} from './fix-review.mjs';
+import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan,appearanceFixPlan} from './fix-review.mjs';
 
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false;
@@ -65,8 +65,8 @@ async function startCandidate(ref, previousReviewId) {
     async()=>{
       let plan=await plans.get(planKey);
       if(!plan && prior){
-        plan=await colorFixPlan(git,prior,integration.sha,fixFiles,integration.main);
-        if(plan)progress('Reusing affected screens for the color checks');
+        plan=await appearanceFixPlan(git,prior,integration.sha,fixFiles,integration.main) || await colorFixPlan(git,prior,integration.sha,fixFiles,integration.main);
+        if(plan)progress('Checklist ready from the appearance diff');
       }
       if(!plan){
         const agent=selectedAgent(),connection=await probeProvider(agent.provider,agent.executable);
@@ -82,7 +82,8 @@ async function startCandidate(ref, previousReviewId) {
   await activate(previousReviewId);
   if(prior){
     const record=store.get(state.recordId);
-    focusRetest(record,prior,fixFiles);
+    const request=jobs.rows.findLast(row=>row.kind==='fix' && row.status==='succeeded' && row.reviewId===prior.id && row.resultCommit===selected.branch.sha);
+    focusRetest(record,prior,fixFiles,request?.attachment?.location);
     const root=reviewRoot(prior,store.records);record.reviewRootId=root.id;record.reviewTitle=root.title;
     if(narrow){
       const colorOnly=await Promise.all(fixFiles.map(async file=>{
