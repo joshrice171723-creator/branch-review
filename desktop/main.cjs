@@ -1,4 +1,5 @@
 const {chooseRepository}=require('./repository.cjs');
+const {setupUrl,requireGit}=require('./setup-help.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
 const { execFile } = require('node:child_process');
@@ -15,6 +16,7 @@ else {
   app.whenReady().then(launch).catch(error => { dialog.showErrorBox('Branch Review could not start', error.message); app.exit(1); });
 }
 async function launch() {
+  if(!await requireGit({exec,dialog,openExternal:url=>shell.openExternal(url)})){app.quit();return;}
   const root = path.dirname(__dirname);
   const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
@@ -56,6 +58,7 @@ async function launch() {
   function trusted(event) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || new URL(event.senderFrame.url).origin !== origin) throw new Error('Only the review workspace can request desktop actions.');
   }
+  ipcMain.handle('review:setup-help',async(event,key)=>{trusted(event);await shell.openExternal(setupUrl(key));});
   async function control(endpoint, data = {}) {
     const state = await fetch(origin + '/api/state').then(r => r.json());
     if (state.busy) { const error=new Error('Wait for the current operation to finish.');error.retryable=true;throw error; }

@@ -1,0 +1,37 @@
+name: Windows installer
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - run: npm test
+      - run: npm run installer
+      - name: Install and verify packaged runtime
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem ../installers/*Setup.exe | Select-Object -First 1
+          $destination = Join-Path $env:RUNNER_TEMP 'branch-review-installed'
+          $process = Start-Process $installer.FullName -ArgumentList @('/S', "/D=$destination") -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          & "$destination/Branch Review.exe" test/installed-smoke.mjs "$destination/resources/app"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed runtime smoke failed' }
+          Remove-Item Env:ELECTRON_RUN_AS_NODE
+          Get-FileHash $installer.FullName -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($installer.Name)" } | Set-Content ../installers/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Branch-Review-Windows-x64
+          path: |
+            ../installers/*Setup.exe
+            ../installers/SHA256SUMS.txt

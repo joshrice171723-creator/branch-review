@@ -1,6 +1,6 @@
 {
   "name": "branch-review",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,17 +8,21 @@
     "test": "node --test test/*.test.mjs",
     "test:live": "node test/live.mjs",
     "desktop": "electron .",
-    "package:desktop": "node desktop/package.mjs"
+    "package:desktop": "node desktop/package.mjs",
+    "installer": "electron-builder --config desktop/installer.json --win nsis --x64 --publish never"
   },
   "engines": {
     "node": ">=24"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",
-    "electron": "44.7.2"
+    "electron": "44.7.2",
+    "electron-builder": "26.15.3"
   },
   "main": "desktop/main.cjs",
   "dependencies": {
     "axe-core": "^4.14.0"
-  }
+  },
+  "description": "Review and test Git branch changes in isolated local previews",
+  "author": "Joshua Rice"
 }

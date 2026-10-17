@@ -1,0 +1,11 @@
+{
+  "appId": "com.branchreview.desktop",
+  "productName": "Branch Review",
+  "asar": false,
+  "npmRebuild": false,
+  "directories": {"output": "../installers"},
+  "files": ["*.mjs", "*.rb", "public/**/*", "desktop/**/*.cjs", "package.json"],
+  "win": {"target": "nsis", "signExecutable": false, "artifactName": "Branch-Review-${version}-Windows-x64-Setup.${ext}"},
+  "nsis": {"oneClick": false, "perMachine": false, "allowElevation": false, "allowToChangeInstallationDirectory": true, "deleteAppDataOnUninstall": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": false},
+  "publish": null
+}

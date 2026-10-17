@@ -14,7 +14,7 @@ export async function executable(provider,override,env=process.env){
   const directories=(env.PATH || '').split(path.delimiter).filter(Boolean);
   if(provider==='claude' && (env.USERPROFILE || env.HOME))directories.push(path.join(env.USERPROFILE || env.HOME,'.local','bin'));
   for(const directory of directories){
-    for(const candidate of [path.join(directory,process.platform==='win32'?provider+'.exe':provider),path.join(directory,'node_modules',provider==='claude'?'@anthropic-ai/claude-code/bin/claude.exe':'@openai/codex/bin/codex.js')]){
+    for(const candidate of [path.join(directory,process.platform==='win32'?provider+'.exe':provider),path.join(directory,'node_modules',provider==='claude'?'@anthropic-ai/claude-code/bin/claude.exe':'@openai/codex/bin/codex.js'),...(provider==='claude'?[path.join(directory,'node_modules/@anthropic-ai/claude-code/cli.js')]:[])]){
       if(await access(candidate).then(()=>true,()=>false))return candidate;
     }
   }
@@ -46,7 +46,7 @@ export async function probeProvider(provider,override){
       const result=await invoke(provider==='claude'?['auth','status']:['login','status']);
       if(provider==='claude' && !JSON.parse(result.stdout).loggedIn)throw Error('Sign in required');
       return {provider,status:'ready',version,message:`${providerNames[provider]} is installed and signed in. A job may still encounter account or usage limits.`};
-    }catch{return {provider,status:'sign-in',version,message:`Sign in to ${providerNames[provider]} in your terminal, then test the connection again.`};}
+    }catch{return {provider,status:'sign-in',version,message:`Run ${provider==='claude'?'claude auth login':'codex login'} in your terminal, complete sign-in, then test the connection again.`};}
   }catch{return {provider,status:'unavailable',message:`Could not run ${providerNames[provider]}. Check its executable path and installation.`};}
 }
 export async function codexConnections(file,cwd){

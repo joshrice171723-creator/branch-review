@@ -4,6 +4,8 @@ A local desktop workspace for reviewing changes in Git projects: choose a branch
 
 ## Get started
 
+Windows users: download the installer and follow [Install Branch Review](INSTALL.md). The beta is unsigned; releases in this private repository require access or direct file sharing by the owner.
+
 1. Open Branch Review.exe from its packaged folder, or run `npm ci`, `node node_modules/electron/install.js`, then `npm run desktop` from source.
 2. Choose a trusted Git repository. Previewing executes project code. Git must be installed; generated checklists and fixes need an installed, signed-in Codex CLI.
 3. The first-run **Set up your project** guide checks Git, your remote/default branch, commit identity, previews and Codex. Resolve any flagged items, choose **Check again**, then **Start reviewing**. Reopen the guide from the **Settings** toolbar icon. Existing reviews stay available without repeating setup.
@@ -74,4 +76,4 @@ Reports include outcomes, findings, screenshots, approval and delivery history. 
 
 `npm test` includes disposable Git repositories, actual custom-preview processes, provider protocol tests and browser-evidence validation. `npm run package:desktop` builds Windows x64. `npm start` provides the web UI; desktop capture and browser runs require Electron.
 
-Meta Clinic's `npm run test:live` and `node test/qa-live.mjs` need their matching prepared preview pair. Packaging is unsigned Windows x64. Installers, signing and automatic updates remain separate distribution work.
+Meta Clinic's `npm run test:live` and `node test/qa-live.mjs` need their matching prepared preview pair. `npm run installer` creates the unsigned Windows x64 installer. The Windows installer workflow verifies installation and the installed runtime on a fresh hosted runner. Signing and automatic updates remain separate distribution work.
