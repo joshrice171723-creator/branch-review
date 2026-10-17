@@ -19,6 +19,7 @@ Date: 2026-10-17. Version: 0.6.0. This is a Windows beta, not clean-machine cert
 | Automated regression | 124 tests passed, including disposable Git integration, exact-version approval, job cancellation, provider protocols, preview isolation and deployment receipts |
 | Real Codex first change | A fresh Field Notes project with only local main accepted a pink-button request, produced a separate committed branch, generated a matching checklist, and left main clean and unchanged |
 | Rendered first-run journey | Electron renderer acceptance switched providers, blocked disconnected Claude, completed setup, submitted Make changes, opened Review changes, and checked blue Original / pink Changed computed colors |
+| Packaged browser QA runner | The installed runner loaded in Electron visited the real Changed preview, verified pink, clicked Add a note, confirmed its response, and persisted four screenshots; review approval stayed null |
 | Real Vite reuse | CSS update reused the same PID and port in 233 ms; Original stayed blue; configuration change restarted the preview process |
 | Package-manager launch | Real pnpm 11.19.0 launched through its JS entry; literal argument preservation and Yarn/Corepack discovery have fixture coverage |
 | Installed app | Silent install and installed Electron smoke test passed; source/test/local account state excluded, only production dependency included, missing Node/Codex/Claude remained actionable |
@@ -42,4 +43,4 @@ The first silent reinstall test used a forward-slash `/D` destination and return
 
 Run `npm test`, then `npm run installer`. The hosted workflow installs and runs `test/installed-smoke.mjs` using the installed Electron executable with `ELECTRON_RUN_AS_NODE=1`.
 
-Optional `test/vite-live.mjs` takes a disposable Vite fixture with `main` (blue button) and `feature/green-button`. `test/renderer-smoke.cjs` runs in Electron against an owned server on port 4310 and a disposable Field Notes project; it may create a real Codex job and consume that account's usage. Do not run it against an unrelated active project.
+Optional `test/vite-live.mjs` takes a disposable Vite fixture with `main` (blue button) and `feature/green-button`. `test/renderer-smoke.cjs` runs in development Electron against an owned server on port 4310 and a disposable Field Notes project; it may create a real Codex job and consume that account's usage. `test/browser-runner-smoke.cjs` uses development Electron with the installed resources/app path to exercise the packaged browser runner. Do not run these against an unrelated active project.
