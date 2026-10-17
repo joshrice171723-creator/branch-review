@@ -829,3 +829,14 @@ dialog::backdrop {background:#152c2b80}
 .main-tools .toolbar-icon[hidden]{display:none}
 #history-dialog{width:min(780px,90vw);max-height:85vh;overflow:auto}
 @media(prefers-reduced-motion:reduce){.main-tools .toolbar-icon,.toolbar-icon[data-tooltip]::after{transition:none}.main-tools .toolbar-icon:hover{transform:none}}
+
+.checklist-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:16px 0 8px}
+.checklist-heading h3{margin:0}
+#plan-item-list{display:grid;gap:8px}
+#tools-dialog .checklist-row{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:5px;padding:12px;background:white}
+.checklist-row small{font-size:12px;color:#65756d;overflow-wrap:anywhere}
+#plan-editor{margin:16px 0;padding:16px;border:1px solid #ccd7cc;border-radius:8px}
+#plan-editor[hidden]{display:none}
+#tools-plan details{margin:16px 0}
+#tools-plan textarea{min-height:0;box-sizing:border-box;padding:10px;border:1px solid #ccd7cc;border-radius:6px;font:inherit}
+#tools-dialog:has(#tools-plan:not([hidden])){width:min(720px,94vw)}

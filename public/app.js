@@ -29,7 +29,7 @@ document.body.append(historyDialog);historyDialog.querySelector('button').onclic
 $('toolbar-history').onclick=()=>{const details=$('history').closest('details');details.open=true;historyDialog.append(details);historyDialog.showModal();};
 
 // Move existing controls so their state and handlers stay intact.
-$('tools-plan').prepend($('capture-item'));
+$('plan-advanced-actions').append($('capture-item'));
 $('workspace-actions').append($('stop'));
 for(const id of ['history','health-status','files'])$('workspace-details').append($(id).closest('details'));
 $('results-options').append($('export-review'),$('delivery-heading').closest('details'));
