@@ -251,7 +251,8 @@ export async function prepare(side, sha, files=state.comparison.files) {
   }
   const oldCache=JSON.parse(await readFile(path.join(local,`preview-${side}-${current}-${recipeHash}.json`),'utf8').catch(()=> 'null'));
   const delta=current!==sha?(await git('diff','--name-only','-z',current,sha,'--')).split('\0').filter(Boolean):[];
-  if(oldCache && frontendOnly(delta)){
+  // A new commit can contain exactly the code already running (for example blue -> pink -> blue).
+  if(oldCache && (!delta.length || frontendOnly(delta))){
     const healthy=async preview=>Object.values((await previewHealth({status:'ready',original:preview,changed:preview})).sides).every(result=>result.ok);
     if(await healthy(oldCache)){
       await run('git',['checkout','--detach',sha],{cwd});

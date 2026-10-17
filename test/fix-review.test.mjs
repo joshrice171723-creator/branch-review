@@ -41,6 +41,8 @@ test('frontend-only preparation reuses data and skips setup; backend changes use
  }
  const fast=await exercise(['apps/web/src/Button.tsx']);assert.deepEqual(fast.calls.map(call=>call[2]),['stop','start']);assert.equal(fast.calls[1][3],'existing_database');assert.equal(fast.result.database,'existing_database');assert.equal(fast.result.sha,'new');
  const warm=await exercise(['apps/web/src/Button.tsx'],'',true);assert.deepEqual(warm.calls,[]);assert.equal(warm.result.sha,'new');assert.equal(warm.result.database,'existing_database');
+ const identical=await exercise([],'',true);assert.deepEqual(identical.calls,[]);assert.equal(identical.result.sha,'new');assert.equal(identical.result.database,'existing_database');
+ const identicalStopped=await exercise([]);assert.deepEqual(identicalStopped.calls.map(call=>call[2]),['stop','start']);assert.equal(identicalStopped.result.database,'existing_database');
  const stale=await exercise(['apps/web/src/Button.tsx'],'',preview=>preview.sha==='old');assert.deepEqual(stale.calls.map(call=>call[2]),['stop','start']);
  const full=await exercise(['apps/api/model.rb']);assert.deepEqual(full.calls.map(call=>call[2]),['stop','setup','start']);assert.equal(full.result.database,'new_database');
  await assert.rejects(exercise(['apps/web/src/Button.tsx'],' M Button.tsx'),/has edits/);
