@@ -840,3 +840,10 @@ dialog::backdrop {background:#152c2b80}
 #tools-plan details{margin:16px 0}
 #tools-plan textarea{min-height:0;box-sizing:border-box;padding:10px;border:1px solid #ccd7cc;border-radius:6px;font:inherit}
 #tools-dialog:has(#tools-plan:not([hidden])){width:min(720px,94vw)}
+
+.change-prompt{display:block;font-size:24px;line-height:1.3;margin:8px 0 16px}
+#change-request{margin-bottom:8px}
+#change-status:empty{display:none}
+#change-status{white-space:pre-wrap}
+#tools-dialog:has(#tools-plan:not([hidden])) .tools-tabs,#tools-dialog:has(#tools-plan:not([hidden])) > #tools-status,#tools-dialog:has(#tools-plan:not([hidden])) > .workflow-section{display:none}
+#tools-dialog:has(#tools-plan:not([hidden]) #checklist-advanced[open]) > .workflow-section,#tools-dialog:has(#tools-plan:not([hidden]) #checklist-advanced[open]) > #tools-status{display:block}

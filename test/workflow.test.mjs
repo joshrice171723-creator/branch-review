@@ -268,3 +268,12 @@ test('latest fix opens a retest panel and requires completed checks before expli
  await e['verify-fix'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,1);assert.equal(h.calls.find(c=>c.path==='/api/resolve').data.issueId,'latest');
  assert.equal(e['prepare-handoff'].hidden,true);
 });
+
+
+test('a requested change without defect findings opens the full visible checklist',t=>{
+ const h=harness(t),e=h.elements;
+ h.state.record={...h.state.record,id:'new-change',fixComparison:{before:'aaaaaaa',after:'bbbbbbb'},issues:[]};
+ h.view.render(h.state);
+ assert.equal(e['item-filter'].value,'all');assert.equal(e['fix-mode-note'].hidden,true);
+ assert.equal(e['item-queue'].children.length,h.state.record.manifest.scenarios.length);
+});
