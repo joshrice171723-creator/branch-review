@@ -23,7 +23,7 @@ import { previewHealth } from './health.mjs';
 import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan,appearanceFixPlan} from './fix-review.mjs';
 
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
-let busy = false;
+let busy = false, preparedFix=null;
 const store = await new ReviewStore(local).load();
 for(const record of store.records)for(const run of record.browserQa || [])if(run.status==='running'){run.status='interrupted';run.error='The app closed before browser evidence completed.';}
 await store.persist();
@@ -32,7 +32,7 @@ const muse=new MuseQa(local,store);
 const plans=new PlanStore(path.join(local,'diff-reviews'));
 let agentSettings=JSON.parse(await readFile(path.join(local,'agent-settings.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
 const selectedAgent=()=>({provider:providerId(agentSettings.provider),executable:agentSettings.executables?.[agentSettings.provider || 'codex']});
-const jobs=await new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,provider:selectedAgent,project,changedCwd:()=>path.join(previewRoot,state.changed?.runtime || 'changed'),prepareNext:async sha=>{
+const jobs=await new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,provider:selectedAgent,project,prepareFix:warmFix,changedCwd:()=>path.join(previewRoot,state.changed?.runtime || 'changed'),prepareNext:async sha=>{
   const branch=(await branches()).find(branch=>branch.sha===sha);if(!branch)throw new Error('Choose a current branch.');
   const selected=await comparison(branch.ref,'parent'),runtime=state.changed?.runtime==='standby'?'changed':'standby';
   const prepared=await prepare(runtime,sha,selected.files);state.prepared={...prepared,recipe:scenarioRecipe(selected.files)};await writeFile(path.join(local,'prepared.json'),JSON.stringify(state.prepared));return prepared;
@@ -45,14 +45,50 @@ async function manifestFor(sha) {
   if(!plan)throw Error('Reopen this branch to generate its checklist from the current changes.');
   return plan;
 }
+async function warmFix(job,prior){
+  preparedFix=null;
+  if(state.status!=='ready' || state.recordId!==prior.id || !state.changed || job.dirty)return;
+  const ref='refs/heads/'+job.branch;
+  const selected=await comparison(ref,'main');
+  const integration=await delivery.prepare(ref,job.resultCommit);
+  const files=(await git('diff','--name-only','-z',prior.identity.changed,integration.sha,'--')).split('\0').filter(Boolean);
+  const plan=await appearanceFixPlan(git,prior,integration.sha,files,integration.main) || await colorFixPlan(git,prior,integration.sha,files,integration.main);
+  if(!plan)return;
+  const runtime=Object.keys(slots).find(side=>side!==state.original?.runtime && side!==state.changed.runtime);
+  if(!runtime)return;
+  const combined=await candidateComparison(git,selected,integration);
+  combined.base=prior.identity.changed;combined.baseline='commit';combined.baselineCommit=prior.identity.changed;combined.fixReview={previousId:prior.id,files};
+  combined.plan=mergeFixPlan(prior.manifest,plan,files);
+  const changed=await prepare(runtime,integration.sha,combined.files);
+  await plans.save(integration.sha,combined.plan);await plans.save(digest({before:prior.identity.changed,after:integration.sha}),combined.plan);
+  if(state.recordId!==prior.id)return;
+  preparedFix={ref,priorId:prior.id,selected,integration,combined,original:{...state.changed,side:'original',proxy:slots.original.proxy},changed:{...changed,side:'changed',proxy:slots.changed.proxy}};
+  job.previewReady=true;
+}
+async function readyFix(ref,priorId){
+  const cached=preparedFix;
+  if(!cached || cached.ref!==ref || cached.priorId!==priorId || state.recordId!==priorId)return null;
+  preparedFix=null;
+  const [source,remote,health,clean]=await Promise.all([
+    git('rev-parse',ref),git('ls-remote','origin','refs/heads/'+await defaultBranch()),
+    previewHealth({...cached,status:'ready'},fetch,webHealthy),
+    Promise.all([cached.original,cached.changed].map(async preview=>{
+      const cwd=path.join(previewRoot,preview.runtime);
+      const [head,dirty]=await Promise.all([run('git',['rev-parse','HEAD'],{cwd}),run('git',['status','--porcelain'],{cwd})]);
+      return head===preview.sha && !dirty;
+    }))
+  ]);
+  return source===cached.selected.branch.sha && remote.split(/\s/)[0]===cached.integration.main && clean.every(Boolean) && Object.values(health.sides).every(side=>side.ok)?cached:null;
+}
 async function startCandidate(ref, previousReviewId) {
   if(project.error)throw Error(project.error);
   if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
-  state.status='preparing';state.recordId=null;state.manifest=null;progress('Checking changes against the remote default branch');
-  const selected=await comparison(ref,'main');
+  const warmed=await readyFix(ref,previousReviewId).catch(()=>null);
+  state.status='preparing';state.recordId=null;state.manifest=null;progress(warmed?'Opening your prepared review':'Checking changes against the remote default branch');
+  const selected=warmed?.selected || await comparison(ref,'main');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
-  const integration=await delivery.prepare(ref,selected.branch.sha,previous);
-  const combined=await candidateComparison(git,selected,integration);
+  const integration=warmed?.integration || await delivery.prepare(ref,selected.branch.sha,previous);
+  const combined=warmed?.combined || await candidateComparison(git,selected,integration);
   const prior=previousReviewId?store.get(previousReviewId):null;
   const fixFiles=prior?(await git('diff','--name-only','-z',prior.identity.changed,integration.sha,'--')).split('\0').filter(Boolean):[];
   const narrow=prior && prior.integration?.main===integration.main && frontendOnly(fixFiles) && fixFiles.every(file=>prior.manifest.scenarios.some(item=>item.files?.includes(file)));
@@ -60,7 +96,8 @@ async function startCandidate(ref, previousReviewId) {
   if(!combined.files.length)throw Error('This branch has no application changes left to review against the remote default branch. Its old checklist is no longer part of the code.');
   const planKey=prior?digest({before:prior.identity.changed,after:integration.sha}):integration.sha;
   state.manifest=prior?{...prior.manifest,scenarios:[...prior.manifest.scenarios].sort((a,b)=>Number(b.id===prior.cursor?.itemId)-Number(a.id===prior.cursor?.itemId))}:combined.plan;
-  combined.plan=await prepareTogether(
+  if(warmed){Object.assign(state,{comparison:combined,integration,original:warmed.original,changed:warmed.changed});}
+  else combined.plan=await prepareTogether(
     async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior});if(state.status==='error')throw Error(state.error);},
     async()=>{
       let plan=await plans.get(planKey);

@@ -23,7 +23,7 @@ export async function configuredChecks(git,sha){
   return checks;
 }
 export class ReviewJobs {
-  constructor(directory,{git,run,previewRoot,toolchain,repo,prepareNext,changedCwd,codex,provider=()=>({provider:'codex'}),project}){Object.assign(this,{directory,git,run,previewRoot,toolchain,repo,codex,provider,project,prepareNext,changedCwd});this.rows=[];this.processes=new Map();}
+  constructor(directory,{git,run,previewRoot,toolchain,repo,prepareNext,prepareFix,changedCwd,codex,provider=()=>({provider:'codex'}),project}){Object.assign(this,{directory,git,run,previewRoot,toolchain,repo,codex,provider,project,prepareNext,prepareFix,changedCwd});this.rows=[];this.processes=new Map();}
   async load(){this.rows=JSON.parse(await readFile(path.join(this.directory,'jobs.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return'[]';throw e;}));for(const row of this.rows){if(row.status==='running'){row.status='interrupted';row.error='App closed before this job reported completion. Inspect its worktree before retrying.';}if(row.kind==='fix' && row.status==='succeeded' && row.resultCommit===row.commit){row.status='failed';row.error='The agent returned without a committed fix. Review its files before committing.';}}await this.save();return this;}
   async save(){this.saving=(this.saving || Promise.resolve()).catch(()=>{}).then(async()=>{await mkdir(this.directory,{recursive:true});const file=path.join(this.directory,'jobs.json');await writeFile(file+'.tmp',JSON.stringify(this.rows,null,2));await rename(file+'.tmp',file);});return this.saving;}
   async stopProcess(child){
@@ -152,6 +152,7 @@ export class ReviewJobs {
     await invoke(worktree,prompt,input.chatId);
     job.result=redact(await readFile(output,'utf8')).slice(-12000);
     await this.finalizeFix(job,record.identity.source);
+    if(this.prepareFix && !job.dirty){job.phase='Preparing your review';await this.save();try{await this.prepareFix(job,record);}catch(error){job.previewError=redact(error.message);}job.phase=null;}
   }
   async finalizeFix(job,source){
     const cwd=job.worktree;
