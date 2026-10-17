@@ -1,11 +1,11 @@
 import {changeRequest} from './change-request.js';
 const $=id=>document.getElementById(id);
 const node=(tag,text)=>{const element=document.createElement(tag);element.textContent=text;return element;};
-export function workbench({api,getState,getSide,workflow,capture,poll,error,reopen}){
+export function workbench({api,getState,getSide,workflow,capture,previewReady,poll,error,reopen}){
   let draft=null,index=0,editorRecord='',lastJobs='',checks=[],update=null,loading=false;
   const fields=['title','description','instructions','expected','path','originalPath','focus','steps','files','viewport'];
   const current=()=>getState().record;
-  const changes=changeRequest({api,getState,getSide,workflow,capture,poll,close:()=>{}});
+  const changes=changeRequest({api,getState,getSide,workflow,capture,previewReady,poll,close:()=>{}});
   const providerName=()=>getState().agent?.provider==='claude'?'Claude Code':'Codex';
   let settingsKey='';
   $('agent-save').onclick=async()=>{try{const value=await api('/api/agent-settings',{provider:$('agent-provider').value,executable:$('agent-executable').value.trim()});$('agent-status').textContent=value.result.message;await poll();}catch(e){$('agent-status').textContent=e.message;}};

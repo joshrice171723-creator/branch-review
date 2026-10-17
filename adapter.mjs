@@ -345,8 +345,8 @@ export async function startReview(ref, baseline, baselineCommit, preparedReview)
     if(runtime===originalRuntime)runtime=['changed','standby','original'].find(candidate=>candidate!==originalRuntime);
     const prepared=await Promise.allSettled([prepare(originalRuntime,selected.base,selected.files),prepare(runtime,changedSha,selected.files)]);
     const failed=prepared.find(result=>result.status==='rejected');if(failed)throw failed.reason;
-    state.original={...prepared[0].value,side:'original',proxy:slots.original.proxy};
-    state.changed = {...prepared[1].value,side:'changed',proxy:slots.changed.proxy};
+    state.original={...prepared[0].value,side:'original',proxy:slots[originalRuntime].proxy};
+    state.changed = {...prepared[1].value,side:'changed',proxy:slots[runtime].proxy};
     state.status = preparedReview?.deferReady?'preview-ready':'ready';
     progress(preparedReview?.deferReady?'Previews ready; finishing checklist':'Both previews are ready');
     await writeFile(
@@ -401,6 +401,7 @@ export async function restoreReview() {
     await assertOwner();
     for (const side of ["original", "changed"]) {
       const slot = previous[side];
+      slot.proxy=slots[slot.runtime || side].proxy;
       const head = await run("git", ["rev-parse", "HEAD"], {
         cwd: path.join(previewRoot, slot.runtime || side),
       });

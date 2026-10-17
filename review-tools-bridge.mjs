@@ -5,7 +5,7 @@ export function reviewToolsBridge(appOrigin){
   const route=()=>location.pathname+location.search+location.hash;
   const errors=[],requests=[];let recording=false,run=0,axeLoading;
   const visible=element=>element.getBoundingClientRect().width>0 && element.getBoundingClientRect().height>0;
-  function context(){const row=[...document.querySelectorAll('tbody tr')].find(row=>{const r=row.getBoundingClientRect();return r.top>=0&&r.top<innerHeight&&r.height>0;});send({type:'review:context',location:route(),heading:document.querySelector('h1,h2,[role="heading"]')?.textContent.trim().slice(0,160)||'',anchor:row?.cells[0]?.textContent.trim().slice(0,160)||'',errors:[...errors,...requests].slice(-10)});}
+  function context(){const row=[...document.querySelectorAll('tbody tr')].find(row=>{const r=row.getBoundingClientRect();return r.top>=0&&r.top<innerHeight&&r.height>0;});send({type:'review:context',painted:document.readyState==='complete' && !!document.body?.innerText.trim(),location:route(),heading:document.querySelector('h1,h2,[role="heading"]')?.textContent.trim().slice(0,160)||'',anchor:row?.cells[0]?.textContent.trim().slice(0,160)||'',errors:[...errors,...requests].slice(-10)});}
   function fail(value){errors.push(clean(value).slice(0,500));if(errors.length>10)errors.shift();context();}
   addEventListener('error',event=>fail(event.message));addEventListener('unhandledrejection',event=>fail(event.reason));
   function requestError(url,status){let pathname;try{pathname=new URL(url,location.href).pathname;}catch{pathname='request';}requests.push(`${status}: ${pathname}`);if(requests.length>10)requests.shift();context();}
@@ -66,5 +66,6 @@ export function reviewToolsBridge(appOrigin){
       throw Error('Unknown preview tool.');
     }catch(error){reply(null,clean(error.message));}
   });
+  addEventListener('load',()=>requestAnimationFrame(()=>requestAnimationFrame(context)));
   setInterval(context,1500);context();
 }

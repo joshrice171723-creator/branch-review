@@ -1,3 +1,4 @@
+import {framePool} from './frame-pool.js';
 import {onboarding} from './onboarding.js';
 import {projectSetup} from './project-setup.js';
 import {activity} from './activity.js';
@@ -19,7 +20,7 @@ let allBranches = [],
   selectionGeneration = 0, selectedComparison = null, commitBranchSha = '', diffGeneration = 0;
 try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') || 'null');if(openingSelection){openingSelection.starting=false;selected=openingSelection;}}catch{}
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
-const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error,reopen:()=>mountFrames(currentState,true)});
+const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState});
@@ -60,12 +61,14 @@ function branchVisibilityUI() {
   $('rail-review').title=$('rail-review').textContent;
 }
 $('toggle-branches').onclick=()=>{branchVisibility=!($('toggle-branches').getAttribute('aria-expanded')==='true');try{localStorage.setItem('branch-review:branches-visible',JSON.stringify(branchVisibility));}catch{}branchVisibilityUI();};
+const previews=framePool($('frames'));
 let mutationQueue=Promise.resolve();
 async function api(path, data) {
   if(data!==undefined){const request=mutationQueue.catch(()=>{}).then(()=>requestApi(path,data));mutationQueue=request;return request;}
   return requestApi(path,data);
 }
 async function requestApi(path, data) {
+  if(path==='/api/start' && data?.fixJob)await previews.waitPrepared(currentState.preparedReview);
   const response = await fetch(
     path,
     data === undefined
@@ -79,7 +82,8 @@ async function requestApi(path, data) {
           body: JSON.stringify(data),
         },
   );
-  const result = await response.json();
+  const text=await response.text();
+  let result;try{result=JSON.parse(text);}catch{throw Error(`Could not read ${path.split('?')[0]} (HTTP ${response.status}). Retry the operation.`);}
   if (!response.ok) throw new Error(result.error);
   return result;
 }
@@ -324,22 +328,7 @@ function mountFrames(state, force = false) {
   focusedItem=item.id;
   frameKey = key;
   reviewWorkflow.resetContexts();
-  $("frames").replaceChildren(
-    ...["original", "changed"].map((side) => {
-      const pane=document.createElement('section');pane.className='preview-pane';pane.setAttribute('aria-label',`${side} preview`);
-      const label=document.createElement('div');label.className='preview-side-label';label.textContent=`${state.record?.fixComparison?(side==='original'?'Before fix':'After fix'):(side==='original'?'Original':'Changed')} · ${state[side].sha.slice(0,7)}`;
-      const frame = document.createElement("iframe");
-      frame.id = `frame-${side}`;
-      frame.title = `${side === "original" ? "Original" : "Changed"} ${state.project?.name || "Application"} review`;
-      frame.setAttribute(
-        "sandbox",
-        "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
-      );
-      frame.src = `http://127.0.0.1:${state[side].proxy}/__review/start?scenario=${encodeURIComponent(item.id)}`;
-      frame.addEventListener('load',()=>focusItem(item,[side]));
-      pane.append(label,frame);return pane;
-    }),
-  );
+  previews.mount(state,item,force,side=>focusItem(item,[side]));
   applyLayout();
 }
 async function poll() {
@@ -349,6 +338,7 @@ async function poll() {
     currentState = selectedReviewState(await api("/api/state"),openingSelection);
     if(openingSelection && currentState.record && currentState.status==='ready' && !currentState.busy){openingSelection=null;try{sessionStorage.removeItem('branch-review:opening');}catch{}}
     token = currentState.token;
+    previews.preload(currentState.preparedReview);
     $('project-name').textContent=$('preview-project-name').textContent=currentState.project?.name || 'Project';
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
@@ -508,12 +498,7 @@ $("refresh").onclick = async () => {
   }
 };
 window.addEventListener("message", (event) => {
-  const side =
-    event.origin === "http://127.0.0.1:4311"
-      ? "original"
-      : event.origin === "http://127.0.0.1:4312"
-        ? "changed"
-        : null;
+  const side = ['original','changed'].find(side=>event.origin===`http://127.0.0.1:${currentState[side]?.proxy}`);
   if (
     side &&
     event.source === $(`frame-${side}`)?.contentWindow &&

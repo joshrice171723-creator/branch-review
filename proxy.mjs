@@ -20,6 +20,12 @@ export function upstreamCookies(header = "", prefix) {
 export function browserCookie(cookie, prefix) {
   return prefix + cookie.replace(/;\s*Domain=[^;]+/gi, "");
 }
+export function expiredPreviewCookies(header='',previews=[]){
+  const keep=previews.filter(Boolean).map(preview=>cookieNamespace(preview.runtime || preview.side,preview.sha));
+  return [...new Set(header.split(';').map(cookie=>cookie.trim().split('=',1)[0]))]
+    .filter(name=>/^br_(original|changed|standby)_[a-f0-9]{12}_[\w-]+$/.test(name) && !keep.some(prefix=>name.startsWith(prefix)))
+    .map(name=>`${name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
+}
 const escapeJSON = (data) => JSON.stringify(data).replace(/</g, "\\u003c");
 
 export function previewProxy(side, slot, getState, appOrigin) {
@@ -33,7 +39,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
       'accept-encoding': 'identity',
       cookie: upstreamCookies(
         req.headers.cookie,
-        cookieNamespace(side, preview.sha),
+        cookieNamespace(preview.runtime || side, preview.sha),
       ),
     };
     delete result["forwarded"];
@@ -43,7 +49,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
       result.referer = result.referer.replace(origin, `http://127.0.0.1:${preview.web || slot.web}`);
     return result;
   }
-  const server = http.createServer((req, res) => {
+  const server = http.createServer({maxHeaderSize:128*1024},(req, res) => {
     if (req.headers.host !== allowedHost) {
       res.writeHead(403).end("Invalid host");
       return;
@@ -69,7 +75,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
       const manifest = current.manifest || defaultManifest;
       const scenario = manifest.scenarios.find(s => s.id === (url.searchParams.get('scenario') || manifest.scenarios[0].id));
       if (!scenario) return res.writeHead(400).end('Unknown test scenario');
-      const destination = previewDestination(scenario, side, current);
+      const destination = previewDestination(scenario, preview.side || side, {...current,[preview.side || side]:preview});
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
@@ -99,7 +105,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
         const result = { ...response.headers };
         if (result["set-cookie"])
           result["set-cookie"] = result["set-cookie"].map((c) =>
-            browserCookie(c, cookieNamespace(side, preview.sha)),
+            browserCookie(c, cookieNamespace(preview.runtime || side, preview.sha)),
           );
         // This loopback-only preview may be embedded only by its review shell.
         delete result["x-frame-options"];

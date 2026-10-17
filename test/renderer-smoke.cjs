@@ -37,7 +37,7 @@ app.whenReady().then(async()=>{
   assert.equal(state.status,'ready');assert.ok(state.record.manifest.scenarios.some(item=>item.files?.includes('style.css')));
   await js("document.getElementById('original').click()");await wait("document.getElementById('original').getAttribute('aria-pressed')==='true'");
   await js("document.getElementById('changed').click()");await wait("document.getElementById('changed').getAttribute('aria-pressed')==='true'");
-  for(const [port,color] of [[4311,'rgb(37, 99, 235)'],[4312,'rgb(219, 39, 119)']]){
+  for(const [port,color] of [[state.original.proxy,'rgb(37, 99, 235)'],[state.changed.proxy,'rgb(219, 39, 119)']]){
    const deadline=Date.now()+10000;let actual;
    while(actual!==color){const frame=window.webContents.mainFrame.frames.find(frame=>frame.url.startsWith('http://127.0.0.1:'+port));if(frame)actual=await frame.executeJavaScript("document.querySelector('button') && getComputedStyle(document.querySelector('button')).backgroundColor");assert.ok(Date.now()<deadline,`Preview ${port}: expected ${color}, got ${actual}`);await new Promise(resolve=>setTimeout(resolve,100));}
   }

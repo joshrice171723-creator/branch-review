@@ -5,7 +5,7 @@ import { readFile, writeFile, access, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario, project, webHealthy, defaultBranch } from './adapter.mjs';
-import { previewProxy } from './proxy.mjs';
+import { previewProxy, expiredPreviewCookies } from './proxy.mjs';
 import { ReviewStore, scenarioRecipe, digest } from './reviews.mjs';
 import { loadPlan, candidateComparison, PlanStore, branchUpdate, branchRelationships, retestAdvice, prepareTogether } from './plans.mjs';
 import {ReviewJobs,configuredChecks,scrub} from './jobs.mjs';
@@ -62,13 +62,13 @@ async function warmFix(job,prior){
   const changed=await prepare(runtime,integration.sha,combined.files);
   await plans.save(integration.sha,combined.plan);await plans.save(digest({before:prior.identity.changed,after:integration.sha}),combined.plan);
   if(state.recordId!==prior.id)return;
-  preparedFix={ref,priorId:prior.id,selected,integration,combined,original:{...state.changed,side:'original',proxy:slots.original.proxy},changed:{...changed,side:'changed',proxy:slots.changed.proxy}};
+  const item=combined.plan.scenarios.find(item=>item.path===job.attachment?.location) || combined.plan.scenarios.find(item=>item.id===prior.cursor?.itemId) || combined.plan.scenarios[0];
+  preparedFix={ref,priorId:prior.id,item,selected,integration,combined,original:{...state.changed,side:'original'},changed:{...changed,side:'changed',proxy:slots[runtime].proxy}};
   job.previewReady=true;
 }
 async function readyFix(ref,priorId){
   const cached=preparedFix;
   if(!cached || cached.ref!==ref || cached.priorId!==priorId || state.recordId!==priorId)return null;
-  preparedFix=null;
   const [source,remote,health,clean]=await Promise.all([
     git('rev-parse',ref),git('ls-remote','origin','refs/heads/'+await defaultBranch()),
     previewHealth({...cached,status:'ready'},fetch,webHealthy),
@@ -78,12 +78,14 @@ async function readyFix(ref,priorId){
       return head===preview.sha && !dirty;
     }))
   ]);
-  return source===cached.selected.branch.sha && remote.split(/\s/)[0]===cached.integration.main && clean.every(Boolean) && Object.values(health.sides).every(side=>side.ok)?cached:null;
+  if(source===cached.selected.branch.sha && remote.split(/\s/)[0]===cached.integration.main && clean.every(Boolean) && Object.values(health.sides).every(side=>side.ok))return cached;
+  preparedFix=null;return null;
 }
 async function startCandidate(ref, previousReviewId) {
   if(project.error)throw Error(project.error);
   if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
   const warmed=await readyFix(ref,previousReviewId).catch(()=>null);
+  if(!warmed)preparedFix=null;
   state.status='preparing';state.recordId=null;state.manifest=null;progress(warmed?'Opening your prepared review':'Checking changes against the remote default branch');
   const selected=warmed?.selected || await comparison(ref,'main');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
@@ -131,6 +133,7 @@ async function startCandidate(ref, previousReviewId) {
     }
     await store.persist();
   }
+  preparedFix=null;
 }
 async function activate(previousReviewId) {
   if (state.status !== 'ready') return;
@@ -251,7 +254,7 @@ async function mutate(endpoint, data) {
     if (state.changed.sha === candidate.sha && state.original.sha === candidate.main) { state.integration=candidate; await activate(); return; }
     state.status='preparing'; state.integration=candidate;
     state.original = await prepare('original',candidate.main);
-    state.changed = {...await prepare(state.changed?.runtime || 'changed',candidate.sha),side:'changed',proxy:slots.changed.proxy};
+    state.changed = {...await prepare(state.changed?.runtime || 'changed',candidate.sha),side:'changed',proxy:slots[state.changed?.runtime || 'changed'].proxy};
     state.status='ready';
     await activate(); return;
   }
@@ -288,11 +291,14 @@ actions.add('/api/onboarding');
 actions.add('/api/job-cancel');
 actions.add('/api/new-change');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
-const server=http.createServer(async(req,res)=>{
+const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
   try {
     if(req.headers.host!==`127.0.0.1:${port}`) return json(res,403,{error:'Invalid host'});
+    // Loopback cookies cross ports; retire old revisions before their headers grow too large.
+    const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
+    if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,busy,qaRunning:qaRunning(),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:await defaultBranch().catch(()=>null),record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaRunning:qaRunning(),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:await defaultBranch().catch(()=>null),record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,groupedBranches(await branches(),jobs.rows,store.records));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
@@ -336,14 +342,19 @@ const server=http.createServer(async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/workbench.js','/change-request.js','/project-setup.js','/onboarding.js','/activity.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/project-setup.js','/onboarding.js','/activity.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
-    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
+    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312 http://127.0.0.1:4313; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
   }catch(error){if(!res.headersSent)json(res,400,{error:error.message});else res.end();}
 });
 await restoreReview();state.prepared=JSON.parse(await readFile(path.join(local,'prepared.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return 'null';throw e;})); await activate().catch(error=>{state.status='error';state.error=error.message;});
-for(const [side,slot] of Object.entries(slots).filter(([side])=>side!=='standby')) { const proxy=previewProxy(side,slot,()=>state,origin);proxy.on('error',error=>{console.error(error.message);process.exit(1);});proxy.listen(slot.proxy,'127.0.0.1'); }
+for(const [runtime,slot] of Object.entries(slots)) { const proxy=previewProxy('changed',slot,()=>{
+  const preview=[state.original,state.changed].find(preview=>preview?.runtime===runtime);
+  if(preview)return {...state,changed:preview};
+  if(preparedFix?.changed.runtime===runtime)return {status:'ready',changed:preparedFix.changed,manifest:preparedFix.combined.plan};
+  return {status:'idle'};
+},origin);proxy.on('error',error=>{console.error(error.message);process.exit(1);});proxy.listen(slot.proxy,'127.0.0.1'); }
 server.on('error',error=>{console.error(error.message);process.exit(1);});
 server.listen(port,'127.0.0.1',()=>console.log(`Branch Review: ${origin}`));
 let checkingMuse=false;

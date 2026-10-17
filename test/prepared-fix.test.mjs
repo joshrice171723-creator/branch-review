@@ -12,7 +12,7 @@ test('prepared fix checks remote main, source, clean checkouts and live identiti
    run:async(_,args,{cwd})=>args[0]==='status'?(overrides.dirty || ''):cwd.endsWith('/changed')?'old':(overrides.head || 'new'),
    previewHealth:async()=>({sides:{original:{ok:true},changed:{ok:!overrides.unhealthy}}})};
   vm.createContext(context);vm.runInContext(readySource+';globalThis.readyFix=readyFix;',context);
-  const result=await context.readyFix(cached.ref,'prior');assert.equal(context.preparedFix,null);return result;
+  const result=await context.readyFix(cached.ref,'prior');assert.equal(context.preparedFix,result?cached:null);return result;
  }
  assert.ok(await check());
  for(const bad of [{source:'moved'},{main:'moved'},{dirty:' M button.css'},{head:'moved'},{unhealthy:true}])assert.equal(await check(bad),null);

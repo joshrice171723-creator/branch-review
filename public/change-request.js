@@ -1,4 +1,4 @@
-export function changeRequest({api,getState,getSide,workflow,capture,poll,close}){
+export function changeRequest({api,getState,getSide,workflow,capture,previewReady=()=>true,poll,close}){
   const $=id=>document.getElementById(id),drafts=new Map();
   let reviewId=null,submitting=false,opening=false,latest=null,notice='';
   const draftKey=()=>`branch-review:change:${getState().repository}:${getState().record?.id || 'new'}`;
@@ -15,9 +15,9 @@ export function changeRequest({api,getState,getSide,workflow,capture,poll,close}
     $('checklist-advanced').hidden=!id;
     $('change-context').textContent=id?`${getSide()==='original'?'Original':'Changed'} · ${workflow.getContext(getSide()).location || 'Waiting for page…'} · screenshot included when sent`:'No preview open yet.';
     $('change-explanation').textContent=`${provider()} makes a separate branch${id?'':' from the remote default branch'}. You review before publishing.`;
-    $('change-status').textContent=notice || latest?.phase || (running?`${provider()} is making your changes…`:latest?.status==='succeeded'?'Your changes are ready to review.':latest && ['failed','interrupted','cancelled'].includes(latest.status)?`Changes need attention: ${latest.error || 'The run did not finish. Open Agent fixes for details.'}`:'');
+    $('change-status').textContent=notice || (latest?.previewReady && !previewReady()?'Loading the changed page�':'') || latest?.phase || (running?`${provider()} is making your changes…`:latest?.status==='succeeded'?'Your changes are ready to review.':latest && ['failed','interrupted','cancelled'].includes(latest.status)?`Changes need attention: ${latest.error || 'The run did not finish. Open Agent fixes for details.'}`:'');
     $('review-changes').hidden=latest?.status!=='succeeded' || !latest.resultCommit || latest.resultCommit===latest.commit || !!latest.dirty;
-    $('review-changes').disabled=opening || state.busy || running;
+    $('review-changes').disabled=opening || state.busy || running || !previewReady();
   }
   $('change-request').oninput=()=>{drafts.set(reviewId,$('change-request').value);storeDraft($('change-request').value);notice='';render();};
   $('make-changes').onclick=async()=>{
