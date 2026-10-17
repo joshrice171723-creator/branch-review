@@ -22,10 +22,11 @@ Date: 2026-10-17. Version: 0.6.0. This is a Windows beta, not clean-machine cert
 | Packaged browser QA runner | The installed runner loaded in Electron visited the real Changed preview, verified pink, clicked Add a note, confirmed its response, and persisted four screenshots; review approval stayed null |
 | Real Vite reuse | CSS update reused the same PID and port in 233 ms; Original stayed blue; configuration change restarted the preview process |
 | Package-manager launch | Real pnpm 11.19.0 launched through its JS entry; literal argument preservation and Yarn/Corepack discovery have fixture coverage |
+| Non-npm preview | Installed Electron ran real Python HTTP previews with Node/agent PATH entries absent; Original and Changed had separate ports/content, healthy reuse worked, and stopping Changed left Original healthy |
 | Installed app | Silent install and installed Electron smoke test passed; source/test/local account state excluded, only production dependency included, missing Node/Codex/Claude remained actionable |
 | Uninstall/reinstall | Uninstall removed the executable; checked desktop settings and Meta Clinic config/review files retained identical SHA-256 values; reinstall restored the executable and passed installed-runtime smoke |
 | Native desktop | Missing Git and invalid-folder retry were exercised; a fresh project opened its correct generated green-button review. The unavailable-project recovery dialog was observed |
-| Meta Clinic preservation | Its configuration and saved review stayed unchanged throughout generic-project and installer testing; the existing adapter and release paths remain covered by regression tests |
+| Meta Clinic preservation | Its configuration and saved review stayed unchanged throughout generic-project and installer testing. The final installed app reopened the saved platform review at Changed eac50e2, with the blue header button visible behind the Windows permission dialog; the existing adapter and release paths remain covered by regression tests |
 
 The first silent reinstall test used a forward-slash `/D` destination and returned exit 0 without an executable. Repeating with a native Windows path installed correctly. Installation acceptance requires the actual installed executable and smoke result, never exit code alone.
 
@@ -44,3 +45,5 @@ The first silent reinstall test used a forward-slash `/D` destination and return
 Run `npm test`, then `npm run installer`. The hosted workflow installs and runs `test/installed-smoke.mjs` using the installed Electron executable with `ELECTRON_RUN_AS_NODE=1`.
 
 Optional `test/vite-live.mjs` takes a disposable Vite fixture with `main` (blue button) and `feature/green-button`. `test/renderer-smoke.cjs` runs in development Electron against an owned server on port 4310 and a disposable Field Notes project; it may create a real Codex job and consume that account's usage. `test/browser-runner-smoke.cjs` uses development Electron with the installed resources/app path to exercise the packaged browser runner. Do not run these against an unrelated active project.
+
+`test/python-live.mjs` runs under installed Electron with `ELECTRON_RUN_AS_NODE=1`, taking the installed `resources/app` directory and an absolute Python executable. It creates disposable static previews on fresh ports and stops them afterward; it does not use the active review controller.

@@ -24,10 +24,19 @@ jobs:
           $destination = Join-Path $env:RUNNER_TEMP 'branch-review-installed'
           $process = Start-Process $installer.FullName -ArgumentList @('/S', "/D=$destination") -Wait -PassThru -WindowStyle Hidden
           if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
-          $env:ELECTRON_RUN_AS_NODE = '1'
-          & "$destination/Branch Review.exe" test/installed-smoke.mjs "$destination/resources/app"
-          if ($LASTEXITCODE -ne 0) { throw 'Installed runtime smoke failed' }
-          Remove-Item Env:ELECTRON_RUN_AS_NODE
+          $executable = Join-Path $destination 'Branch Review.exe'
+          if (-not (Test-Path -LiteralPath $executable)) { throw 'Installer did not create the executable' }
+          $stdout = Join-Path $env:RUNNER_TEMP 'installed-smoke.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'installed-smoke-errors.log'
+          try {
+            $env:ELECTRON_RUN_AS_NODE = '1'
+            $smoke = Start-Process $executable -ArgumentList @('test/installed-smoke.mjs', "`"$destination/resources/app`"") -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $stdout -RedirectStandardError $stderr -WindowStyle Hidden -Wait -PassThru
+            Get-Content $stdout
+            Get-Content $stderr
+            if ($smoke.ExitCode -ne 0) { throw "Installed runtime smoke failed: $($smoke.ExitCode)" }
+          } finally {
+            Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+          }
           Get-FileHash $installer.FullName -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($installer.Name)" } | Set-Content ../installers/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
