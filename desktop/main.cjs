@@ -1,4 +1,4 @@
-const {chooseRepository}=require('./repository.cjs');
+const {chooseRepository,availableRepository}=require('./repository.cjs');
 const {setupUrl,requireGit}=require('./setup-help.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
@@ -25,13 +25,25 @@ async function launch() {
   await mkdir(home, { recursive: true });
   process.env.BRANCH_REVIEW_HOME = home;
   const configured=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
-  if(!configured.repository && !process.env.META_CLINIC_REPO){
+  const previousRepository=process.env.META_CLINIC_REPO || configured.repository;
+  const unavailable=previousRepository && !await availableRepository(previousRepository,exec);
+  if(unavailable){
+    const choice=await dialog.showMessageBox({type:'warning',buttons:['Choose a project','Close'],cancelId:1,message:'Your last project is unavailable.',detail:`${previousRepository}\n\nIt may have moved or its drive may be disconnected. Choose a project to continue. Existing reviews stay saved.`});
+    if(choice.response!==0){app.quit();return;}
+  }
+  if(!previousRepository || unavailable){
     const chosen=await chooseRepository({dialog,exec,detectProject});
     if(!chosen){app.quit();return;}
     const {repository}=chosen;
     const trust=await dialog.showMessageBox({buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});
     if(trust.response!==0){app.quit();return;}
-    await writeFile(path.join(home,'config.json'),JSON.stringify({repository,previewRoot:path.join(home,'previews')}));
+    if(unavailable){
+      const key=path.resolve(repository).toLowerCase();
+      home=settings.projects?.[key] || path.join(app.getPath('userData'),'projects',createHash('sha256').update(key).digest('hex').slice(0,16));
+      process.env.BRANCH_REVIEW_HOME=home;delete process.env.META_CLINIC_REPO;await mkdir(home,{recursive:true});
+    }
+    const existing=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
+    await writeFile(path.join(home,'config.json'),JSON.stringify({...existing,repository,previewRoot:existing.previewRoot || path.join(home,'previews')}));
   }
   const savedConfig=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
   savedConfig.repository=process.env.META_CLINIC_REPO || savedConfig.repository;
@@ -46,7 +58,7 @@ async function launch() {
   Menu.setApplicationMenu(null);
   const area=screen.getPrimaryDisplay().workAreaSize;
   const width=Math.min(area.width,Math.max(1000,Number(settings.window?.width)||1600)),height=Math.min(area.height,Math.max(700,Number(settings.window?.height)||1000));
-  window = new BrowserWindow({ title: 'Branch Review', width, height, minWidth: 1000, minHeight: 700,
+  window = new BrowserWindow({ title: 'Branch Review', icon:path.join(__dirname,'icon.ico'), width, height, minWidth: 1000, minHeight: 700,
     backgroundColor: '#f6f7f5', show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

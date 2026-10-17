@@ -9,17 +9,19 @@ The installer includes the desktop runtime. It does not include your project, ac
 1. Install [Git for Windows](https://git-scm.com/downloads/win). Clone your project with your usual Git client and ensure it has an `origin` remote and a commit.
 2. Install the runtime your project requires. Automatic npm Vite/Next previews need [Node.js with npm](https://nodejs.org/en/download), a root package-lock.json and the project's supported Node version. Other stacks use custom commands in Settings.
 3. Install either [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/setup), then sign in with `codex login` or `claude auth login`. You use your own provider account and usage allowance. Claude requires version 2.1.259 or later for the restricted job flags used here.
-4. Reopen Branch Review after installing tools so it receives your updated PATH. Choose your Git folder, then follow Set up your project. In Settings select your agent; automatic discovery is preferred, with an optional executable path if necessary.
-5. Fix flagged setup items and select Check again. Choose Start reviewing, then a branch. Compare Original and Changed, record findings and use Make changes to request a fix.
+4. Reopen Branch Review after installing tools so it receives your updated PATH. Choose your Git folder, then follow Set up your project. Select your coding agent in the guide; Settings also provides an optional executable path when automatic discovery cannot find it.
+5. Fix flagged setup items and select Check again. The guide can fetch remote branches. Choose Start reviewing, then a branch. If you have no branch yet, choose Make changes and describe what you want; the agent creates an isolated branch from the latest remote default branch. Compare Original and Changed before approving anything.
 
 If Git identity is missing, set your own `git config user.name` and `git config user.email` inside your project. If origin/default branch is missing, configure your real remote, fetch it and run `git remote set-head origin -a`. Branch Review does not create or guess an account identity or remote.
 
 For custom services, configure preview commands and isolated databases in Settings. Publishing requires your own deployment configuration. Native/mobile projects require a web harness for the embedded preview.
 
+If a project folder moves or a drive is disconnected, startup offers another project without deleting previous reviews. Activity → Stop job ends an active agent/check process and retains its files for inspection; it cannot interrupt Git finalization. Simple Vite source/CSS edits and Next CSS/assets reuse a healthy preview. Dependency and configuration changes restart it.
+
 ## Sharing and validation boundary
 
 This repository is currently private. Its release download requires repository access; alternatively the owner can share the installer and checksum directly. No repository visibility change is made by packaging.
 
-Fresh-profile testing is distinct from a clean Windows machine. The Windows installer workflow builds and tests on a hosted Windows runner, installs silently and checks the installed runtime with Node/agent discovery unavailable. It does not supply provider credentials or prove live agent work on every machine. Live Claude work still requires a signed-in test account.
+Fresh-profile testing is distinct from a clean Windows machine. The Windows installer workflow is configured to build and test on a hosted Windows runner, install silently and check the installed runtime with Node/agent discovery unavailable. Its first run was blocked before execution by GitHub account billing; it is not clean-machine proof. It does not supply provider credentials or prove live agent work on every machine. Live Claude work still requires a signed-in test account. See DISTRIBUTION_AUDIT.md for the tested boundaries.
 
 Installer implementation uses the standard [electron-builder NSIS target](https://www.electron.build/nsis.html). Build with `npm ci`, `node node_modules/electron/install.js`, and `npm run installer`. Outputs are outside source in `../installers`. Only application source and production dependencies are included.

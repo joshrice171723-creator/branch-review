@@ -7,9 +7,9 @@ A local desktop workspace for reviewing changes in Git projects: choose a branch
 Windows users: download the installer and follow [Install Branch Review](INSTALL.md). The beta is unsigned; releases in this private repository require access or direct file sharing by the owner.
 
 1. Open Branch Review.exe from its packaged folder, or run `npm ci`, `node node_modules/electron/install.js`, then `npm run desktop` from source.
-2. Choose a trusted Git repository. Previewing executes project code. Git must be installed; generated checklists and fixes need an installed, signed-in Codex CLI.
-3. The first-run **Set up your project** guide checks Git, your remote/default branch, commit identity, previews and Codex. Resolve any flagged items, choose **Check again**, then **Start reviewing**. Reopen the guide from the **Settings** toolbar icon. Existing reviews stay available without repeating setup.
-4. Choose a branch. The summary appears immediately; the combined result against the remote default branch, checklist and isolated previews prepare before QA.
+2. Choose a trusted Git repository. Previewing executes project code. Git must be installed; generated checklists and fixes need an installed, signed-in Codex CLI or Claude Code.
+3. The first-run **Set up your project** guide checks Git, your remote/default branch, commit identity, previews and your chosen agent. Resolve any flagged items, choose **Check again**, then **Start reviewing**. Reopen the guide from the **Settings** toolbar icon. Existing reviews stay available without repeating setup.
+4. Choose a branch, or **Make changes** to start a new change from the remote default branch. The summary appears immediately; the combined result against the remote default branch, checklist and isolated previews prepare before QA.
 5. Compare Original and Changed. Select an item or Next to open its screen, record observations and report problems.
 6. Send findings through **Updates & fixes**. Codex edits an isolated checkout; the host validates and commits the result. **Review fix** returns to the same review group with Before fix / After fix and unresolved findings ready to retest.
 7. Approve the candidate and merge/push. Protected repositories can use **Workspace > Delivery > Create pull request**, with an authenticated GitHub CLI.
@@ -20,6 +20,8 @@ Projects are not restricted to Meta Clinic. Root npm Vite and Next projects with
 
 Commands are executable-and-argument arrays, not shell strings. Configure the working directory, setup, start command, readiness path, optional services, environment and checks. Example Python server start: `["python","-m","http.server","{port}","--bind","127.0.0.1"]`.
 
+Windows npm, pnpm and Yarn commands resolve their installed JavaScript entry points instead of trying to execute `.cmd` wrappers. Explicit JavaScript entry paths also work. Install the required manager first; custom preview recipes remain necessary for non-npm projects.
+
 Placeholders: `{root}`, `{port}`, `{side}`, `{commit}`, `{data}`. Use `{data}` or revision-specific database names for isolated data. Branch Review cannot isolate an external database hardcoded by a project. Stop previews before editing their recipe. Recipe changes invalidate approval.
 
 Generic previews use separate ports, retain recent healthy versions, reuse dependency setup and stop owned processes on exit. Meta Clinic keeps its existing adapter, data recipes and release integration. Generic projects require no Muse account, Office server or personal filesystem path.
@@ -28,7 +30,7 @@ Native/mobile apps and headless tools need an appropriate web harness to use the
 
 ## Activity and browser QA
 
-**Activity** shows jobs and browser runs with running indicators, logs, commit identity and screenshots. **Run browser checks** opens a separate browser you can watch and stop. Its default visit checks prove checklist screens render; they do not prove every requirement passes.
+**Activity** shows jobs and browser runs with running indicators, logs, commit identity and screenshots. **Stop job** stops an active agent/check process and preserves saved work; Git finalization cannot be interrupted there. **Run browser checks** opens a separate browser you can watch and stop. Its default visit checks prove checklist screens render; they do not prove every requirement passes.
 
 Expand Browser actions for behavior checks using actual checklist item IDs. Supported actions: visit, click, fill, text, style. Selectors must match exactly one visible control.
 
@@ -76,4 +78,4 @@ Reports include outcomes, findings, screenshots, approval and delivery history. 
 
 `npm test` includes disposable Git repositories, actual custom-preview processes, provider protocol tests and browser-evidence validation. `npm run package:desktop` builds Windows x64. `npm start` provides the web UI; desktop capture and browser runs require Electron.
 
-Meta Clinic's `npm run test:live` and `node test/qa-live.mjs` need their matching prepared preview pair. `npm run installer` creates the unsigned Windows x64 installer. The Windows installer workflow verifies installation and the installed runtime on a fresh hosted runner. Signing and automatic updates remain separate distribution work.
+Meta Clinic's `npm run test:live` and `node test/qa-live.mjs` need their matching prepared preview pair. `npm run installer` creates the unsigned Windows x64 installer. The Windows installer workflow is configured for a fresh hosted runner, but account billing currently blocks it from starting. Signing and automatic updates remain separate distribution work. See [distribution evidence](DISTRIBUTION_AUDIT.md).

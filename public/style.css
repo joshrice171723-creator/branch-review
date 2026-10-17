@@ -857,4 +857,7 @@ dialog::backdrop {background:#152c2b80}
 #onboarding .tool-actions{display:flex;gap:8px;flex-wrap:wrap}
 #onboarding button.primary{width:auto;margin:0 0 0 auto;background:#244e40;color:white}
 #onboarding button:hover:not(:disabled){filter:brightness(.95)}
+#onboarding select{display:block;width:100%;margin:6px 0 12px;padding:9px;border:1px solid #ccd7cc;border-radius:6px;background:white;color:#244e40}
+#onboarding details{margin-top:12px}
+#onboarding details button{margin:4px}
 @media(max-width:600px){#onboarding-checks li{grid-template-columns:1fr;gap:4px}}

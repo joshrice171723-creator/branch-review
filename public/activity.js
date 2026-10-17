@@ -22,7 +22,14 @@ export function activity({api,getState}){
       if(run.error)section.append(node('p',run.error));
       for(const result of run.results){const row=node('p',`${result.passed?'✓':'!'} ${result.index+1}. ${result.message}`);if(result.screenshot){const link=node('a',' View screenshot');link.href='/screenshots/'+result.screenshot;link.target='_blank';link.onclick=e=>{e.preventDefault();const img=node('img','');img.src=link.href;img.style.maxWidth='100%';row.append(img);};row.append(link);}section.append(row);}return section;
     }));}
-    try{const jobs=await api('/api/jobs');const jobKey=JSON.stringify(jobs);if(jobKey===lastJobs)return;lastJobs=jobKey;find('[data-jobs]').replaceChildren(...jobs.filter(job=>job.reviewId===state.record?.id || job.commit===state.record?.identity.changed).toReversed().map(job=>{const row=node('details','');row.append(node('summary',`${job.provider || ''} ${job.kind} · ${job.status}`),node('p',job.error || job.result || ''),node('pre',job.log || 'Waiting for output…'));return row;}));}catch(e){find('[data-status]').textContent=e.message;}
+    try{
+      const jobs=await api('/api/jobs'),jobKey=(state.record?.id || '')+JSON.stringify(jobs);if(jobKey===lastJobs)return;lastJobs=jobKey;
+      find('[data-jobs]').replaceChildren(...jobs.filter(job=>job.status==='running' || job.reviewId===state.record?.id || job.commit===state.record?.identity.changed).toReversed().map(job=>{
+        const row=node('details','');row.open=job.status==='running';row.append(node('summary',`${job.provider || ''} ${job.kind} · ${job.cancelRequested&&job.status==='running'?'stopping':job.status}`),node('p',job.error || job.result || ''));
+        if(job.status==='running' && job.cancellable){const stop=node('button','Stop job');stop.disabled=!!job.cancelRequested;stop.onclick=async()=>{stop.disabled=true;try{await api('/api/job-cancel',{jobId:job.id});find('[data-status]').textContent='Stopping this job. Saved files stay in its isolated checkout.';await render();}catch(error){find('[data-status]').textContent=error.message;stop.disabled=false;}};row.append(stop);}
+        row.append(node('pre',job.log || 'Waiting for output…'));return row;
+      }));
+    }catch(e){find('[data-status]').textContent=e.message;}
   }
   return {render};
 }

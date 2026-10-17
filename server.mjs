@@ -121,6 +121,14 @@ async function body(req) { let buffer=''; for await(const chunk of req) { buffer
 const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>readRecipe(local),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
 async function mutate(endpoint, data) {
   if(qaRunning() && !['/api/browser-qa-result','/api/check','/api/item','/api/cursor','/api/issue'].includes(endpoint))throw Error('Stop browser QA before changing its review, settings or runtime.');
+  if(endpoint==='/api/new-change'){
+    if(state.recordId)throw Error('Use Make changes in the open review to keep its history together.');
+    if(jobs.rows.some(job=>job.status==='running'))throw Error('Wait for the running job to finish.');
+    if(typeof data.requestText!=='string' || !data.requestText.trim() || data.requestText.length>60000)throw Error('Describe the change you want to make.');
+    const agent=selectedAgent(),connection=await probeProvider(agent.provider,agent.executable);if(connection.status!=='ready')throw Error(connection.message);
+    await git('fetch','origin');
+    return jobs.startNew(await git('rev-parse',`refs/remotes/origin/${await defaultBranch()}`),data.requestText);
+  }
   if(endpoint==='/api/onboarding'){
     const rows=await diagnostics();
     if(rows.some(row=>!row.ok))throw Error('Finish setup before continuing: '+rows.filter(row=>!row.ok).map(row=>row.name).join(', '));
@@ -136,9 +144,10 @@ async function mutate(endpoint, data) {
   if(endpoint==='/api/agent-settings'){
     if(jobs.rows.some(job=>job.status==='running'))throw Error('Wait for the running job before changing providers.');
     const provider=providerId(data.provider);
-    if(typeof data.executable!=='string' || data.executable.length>1000 || data.executable && !path.isAbsolute(data.executable))throw Error('Choose an absolute executable path, or leave it blank for automatic discovery.');
-    const next={provider,executables:{...agentSettings.executables,[provider]:data.executable}};
-    await writeFile(path.join(local,'agent-settings.json.tmp'),JSON.stringify(next));await rename(path.join(local,'agent-settings.json.tmp'),path.join(local,'agent-settings.json'));agentSettings=next;return probeProvider(provider,data.executable);
+    const executable=data.executable===undefined?(agentSettings.executables?.[provider] || ''):data.executable;
+    if(typeof executable!=='string' || executable.length>1000 || executable && !path.isAbsolute(executable))throw Error('Choose an absolute executable path, or leave it blank for automatic discovery.');
+    const next={provider,executables:{...agentSettings.executables,[provider]:executable}};
+    await writeFile(path.join(local,'agent-settings.json.tmp'),JSON.stringify(next));await rename(path.join(local,'agent-settings.json.tmp'),path.join(local,'agent-settings.json'));agentSettings=next;return probeProvider(provider,executable);
   }
   if(endpoint==='/api/agent-probe'){const agent=selectedAgent();return probeProvider(agent.provider,agent.executable);}
   if(project.kind!=='meta-clinic' && ['/api/publish','/api/retry-muse','/api/release-settings','/api/published-review','/api/smoke'].includes(endpoint))throw Error('Publishing is not configured for this project. Use your existing delivery process.');
@@ -149,7 +158,7 @@ async function mutate(endpoint, data) {
     if(fixJob){
       const job=jobs.rows.find(row=>row.id===fixJob && row.kind==='fix' && row.status==='succeeded');
       if(!job || data.ref!=='refs/heads/'+job.branch || await git('rev-parse',data.ref)!==job.resultCommit)throw new Error('Choose an unchanged, committed fix job before retesting.');
-      prior=store.get(job.reviewId);
+      if(job.reviewId)prior=store.get(job.reviewId);
     }
     await startCandidate(data.ref,prior?.id);return;
   }
@@ -237,6 +246,8 @@ actions.add('/api/project-settings');
 actions.add('/api/browser-qa');actions.add('/api/browser-qa-result');
 for(const endpoint of ['/api/project-delivery','/api/project-deploy','/api/project-deploy-retry','/api/pull-request'])actions.add(endpoint);
 actions.add('/api/onboarding');
+actions.add('/api/job-cancel');
+actions.add('/api/new-change');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
 const server=http.createServer(async(req,res)=>{
   try {
@@ -248,7 +259,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
     if(req.method==='GET' && url.pathname==='/api/project-settings')return json(res,200,await readRecipe(local));
     if(req.method==='GET' && url.pathname==='/api/project-delivery')return json(res,200,await readDelivery(local));
-    if(req.method==='GET' && url.pathname==='/api/onboarding')return json(res,200,{needed:!store.records.length && !await access(path.join(local,'onboarding.json')).then(()=>true,()=>false),repository:repo,project});
+    if(req.method==='GET' && url.pathname==='/api/onboarding')return json(res,200,{needed:!store.records.length && !await access(path.join(local,'onboarding.json')).then(()=>true,()=>false),repository:repo,project,agent:selectedAgent()});
     if(req.method==='GET' && url.pathname==='/api/diagnostics')return json(res,200,await diagnostics());
     if(req.method==='GET' && url.pathname==='/api/fix-files')return json(res,200,await jobs.fixFiles(url.searchParams.get('job')));
     if(req.method==='GET' && url.pathname==='/api/tools-settings')return json(res,200,toolsSettings);
@@ -277,6 +288,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET' && /^\/recordings\/[a-f0-9-]{36}\.webm$/.test(url.pathname)){const clip=await readFile(path.join(local,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':'video/webm','Content-Length':clip.length,'Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'"});return res.end(clip);}
     if(req.method==='POST' && actions.has(url.pathname)) {
       if(req.headers.origin!==origin || req.headers['x-review-token']!==token) return json(res,403,{error:'Reload Branch Review before continuing.'});
+      if(url.pathname==='/api/job-cancel')return json(res,200,{result:await jobs.cancel((await body(req)).jobId)});
       if(busy) return json(res,409,{error:'Another operation is still running.'});
       busy=true;
       let data; try { data=await body(req); } catch(error) { busy=false; throw error; }

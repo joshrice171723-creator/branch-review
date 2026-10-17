@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 const root=path.resolve(process.argv[2]);
 assert.ok(process.versions.electron,'Run using the installed Electron executable');
+for(const file of ['desktop/main.cjs','desktop/preload.cjs','desktop/repository.cjs','desktop/setup-help.cjs','desktop/browser-qa.cjs','desktop/icon.ico'])await access(path.join(root,file));
 for(const forbidden of ['.local','.git','test','.env'])assert.equal(await access(path.join(root,forbidden)).then(()=>true,()=>false),false,forbidden+' leaked into installer');
 assert.deepEqual((await readdir(path.join(root,'node_modules'))).filter(name=>!name.startsWith('.')),['axe-core']);
 const {detectProject,npmEntry}=await import(pathToFileURL(path.join(root,'web-project.mjs')));

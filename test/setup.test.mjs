@@ -16,3 +16,9 @@ test('invalid folder can be corrected or cancelled without replacing the current
  assert.deepEqual(await repository.chooseRepository({dialog,exec,detectProject:async()=>({kind:'vite'})}),{repository:'/valid',projectInfo:{kind:'vite'}});assert.equal(notices,1);
  dialog.showOpenDialog=async()=>({canceled:true});assert.equal(await repository.chooseRepository({dialog,exec}),null);
 });
+
+test('startup detects a missing or non-Git previous project before opening its server',async()=>{
+ const exec=async(file,args,{cwd})=>{assert.equal(file,'git');assert.deepEqual(args,['rev-parse','--show-toplevel']);if(cwd==='/moved')throw Error('directory missing');return {stdout:cwd};};
+ assert.equal(await repository.availableRepository('/present',exec),true);
+ assert.equal(await repository.availableRepository('/moved',exec),false);
+});

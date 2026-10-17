@@ -102,8 +102,9 @@
             <p class="eyebrow">SEE WHAT CHANGED</p>
             <h2>From branch<br />to a real workflow.</h2>
             <p>
-              Select a branch to open two independent<br />versions of your project, ready for review.
+              Choose a branch to compare its changes,<br />or describe something you want to change.
             </p>
+            <button id="new-change" class="primary">Make changes</button>
             <div class="steps">
               <span>01 &nbsp; Choose</span><span>02 &nbsp; Compare</span
               ><span>03 &nbsp; Test</span>
@@ -257,7 +258,7 @@
       <p id="tools-status" role="status" aria-live="polite"></p>
       <section id="tools-workspace" hidden><h3>Workspace</h3><p id="project-adapter" class="small"></p><label for="agent-provider">AI provider</label><select id="agent-provider"><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option></select><label for="agent-executable">CLI executable path (optional)</label><input id="agent-executable" placeholder="Automatic discovery"><div class="tool-actions"><button id="agent-save">Save and test connection</button><button id="agent-probe">Test saved connection</button></div><p id="agent-status" role="status"></p><p class="small">Uses your CLI account. Settings apply to this project. Claude fixes use restricted file tools; run validation scripts from Checks.</p><div id="workspace-actions" class="tool-actions"></div><div id="workspace-details"></div></section><section id="tools-plan">
         <label class="change-prompt" for="change-request">What would you like to change?</label>
-        <textarea id="change-request" rows="4" maxlength="10000" placeholder="Change the Try Our Sandbox button on this page to red."></textarea>
+        <textarea id="change-request" rows="4" maxlength="10000" placeholder="Change the main button on the home page to blue."></textarea>
         <p id="change-explanation" class="small"></p>
         <button id="make-changes" class="primary" disabled>Make changes</button>
         <p id="change-status" role="status" aria-live="polite"></p>

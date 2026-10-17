@@ -1,7 +1,7 @@
 import {digest} from './reviews.mjs';
 import {readFile,writeFile,rename} from 'node:fs/promises';
 import path from 'node:path';
-import {npmEntry} from './web-project.mjs';
+import {projectCommand} from './web-project.mjs';
 
 export function validateDelivery(value){
   if(!value || !Array.isArray(value.command)||!value.command.length||value.command.some(arg=>typeof arg!=='string'||arg.includes('\0')||arg.length>4000))throw Error('Enter a deployment executable and arguments.');
@@ -22,8 +22,8 @@ export async function deployProject(record,{local,cwd,run,git,store,defaultBranc
   if(remote!==sha || await run('git',['rev-parse','HEAD'],{cwd})!==sha || await run('git',['status','--porcelain'],{cwd}))throw Error('The remote or preview changed. Reopen and review before deploying.');
   record.projectDeployment={status:'running',commit:sha,startedAt:new Date().toISOString()};await store.persist();
   try{
-    const [file,...args]=config.command.map(arg=>arg.replaceAll('{commit}',sha).replaceAll('{root}',cwd));
-    await run(file==='node'||file==='npm'?process.execPath:file,file==='npm'?[await npmEntry(),...args]:args,{cwd,env:{...process.env,ELECTRON_RUN_AS_NODE:'1',BRANCH_REVIEW_REVISION:sha}});
+    const command=await projectCommand(config.command.map(arg=>arg.replaceAll('{commit}',sha).replaceAll('{root}',cwd)));
+    await run(command.file,command.args,{cwd,env:{...process.env,ELECTRON_RUN_AS_NODE:'1',BRANCH_REVIEW_REVISION:sha}});
     const response=await fetcher(config.buildUrl,{cache:'no-store',signal:AbortSignal.timeout(15000)});
     if(!response.ok)throw Error('Deployment command finished, but its build receipt could not be read.');
     const receipt=await response.json();if(receipt.revision!==sha || receipt.dirty)throw Error('Deployment receipt does not identify the exact clean reviewed commit.');

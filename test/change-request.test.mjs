@@ -33,3 +33,13 @@ test('failed note save or review switch during flush never starts a job',async t
   h.flow.flush=async()=>false;await e['make-changes'].onclick();assert.equal(h.calls.length,0);
   h.flow.flush=async()=>{h.state.record={id:'two'};return true;};await e['make-changes'].onclick();assert.equal(h.calls.length,0);
 });
+
+test('first change needs no existing review and opens the returned isolated branch',async t=>{
+ const h=harness(t,async()=>({result:{id:'first',kind:'fix',status:'running'}})),e=h.elements;
+ delete h.state.record;h.state.status='idle';h.view.render();assert.equal(e['checklist-advanced'].hidden,true);
+ h.flow.flush=async()=>{throw Error('no review to save');};e['change-request'].value='Make the home page button green';e['change-request'].oninput();
+ assert.equal(e['make-changes'].disabled,false);await e['make-changes'].onclick();
+ assert.equal(h.calls[0].path,'/api/new-change');assert.match(h.calls[0].data.requestText,/remote default branch/);
+ h.view.render([{id:'first',kind:'fix',status:'succeeded',branch:'first-change',commit:'old',resultCommit:'new'}]);
+ await e['review-changes'].onclick();assert.deepEqual(h.calls[1].data,{ref:'refs/heads/first-change',fixJob:'first'});
+});

@@ -23,6 +23,7 @@ const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,w
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
+$('new-change').onclick=()=>reviewTools.open('plan');
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
 const historyDialog=document.createElement('dialog');historyDialog.id='history-dialog';historyDialog.setAttribute('aria-label','Review history');
 historyDialog.innerHTML='<header class="dialog-heading"><h2>Review history</h2><button type="button">Close</button></header>';
@@ -525,7 +526,7 @@ window.addEventListener("message", (event) => {
   }
 });
 await poll();
-const setupGuide=onboarding({api,settings:()=>reviewTools.open('workspace'),refresh:async()=>{await loadBranches();error('');}});
+const setupGuide=onboarding({api,settings:()=>reviewTools.open('workspace'),refresh:async()=>{await poll();await loadBranches();error('');}});
 void setupGuide.initialize();
 await loadBranches().catch((e) => error(e.message));
 setInterval(poll, 2000);

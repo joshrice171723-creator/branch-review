@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
-import {readFile,writeFile,mkdir,rename,access} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,rename} from 'node:fs/promises';
 import {readRecipe} from './project-settings.mjs';
-import {npmEntry} from './web-project.mjs';
+import {projectCommand} from './web-project.mjs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {validateManifest,scenarioRecipe} from './reviews.mjs';
@@ -18,14 +18,27 @@ export async function configuredChecks(git,sha){
   const checks=[];
   for(const directory of ['', 'apps/web']){
     let pkg;try{pkg=JSON.parse(await git('show',`${sha}:${directory?directory+'/':''}package.json`));}catch{continue;}
-    for(const name of ['test','typecheck','lint','build','format:check'])if(typeof pkg.scripts?.[name]==='string')checks.push({id:`${directory || '.'}:${name}`,directory,name,command:pkg.scripts[name],manager:pkg.packageManager?.startsWith('pnpm')?'pnpm':'npm'});
+    for(const name of ['test','typecheck','lint','build','format:check'])if(typeof pkg.scripts?.[name]==='string')checks.push({id:`${directory || '.'}:${name}`,directory,name,command:pkg.scripts[name],manager:['pnpm','yarn','bun'].find(manager=>pkg.packageManager?.startsWith(manager+'@')) || 'npm'});
   }
   return checks;
 }
 export class ReviewJobs {
-  constructor(directory,{git,run,previewRoot,toolchain,repo,prepareNext,changedCwd,codex,provider=()=>({provider:'codex'}),project}){Object.assign(this,{directory,git,run,previewRoot,toolchain,repo,codex,provider,project,prepareNext,changedCwd});this.rows=[];}
+  constructor(directory,{git,run,previewRoot,toolchain,repo,prepareNext,changedCwd,codex,provider=()=>({provider:'codex'}),project}){Object.assign(this,{directory,git,run,previewRoot,toolchain,repo,codex,provider,project,prepareNext,changedCwd});this.rows=[];this.processes=new Map();}
   async load(){this.rows=JSON.parse(await readFile(path.join(this.directory,'jobs.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return'[]';throw e;}));for(const row of this.rows){if(row.status==='running'){row.status='interrupted';row.error='App closed before this job reported completion. Inspect its worktree before retrying.';}if(row.kind==='fix' && row.status==='succeeded' && row.resultCommit===row.commit){row.status='failed';row.error='The agent returned without a committed fix. Review its files before committing.';}}await this.save();return this;}
   async save(){this.saving=(this.saving || Promise.resolve()).catch(()=>{}).then(async()=>{await mkdir(this.directory,{recursive:true});const file=path.join(this.directory,'jobs.json');await writeFile(file+'.tmp',JSON.stringify(this.rows,null,2));await rename(file+'.tmp',file);});return this.saving;}
+  async stopProcess(child){
+    if(!child?.pid || child.exitCode!==null || child.signalCode)return;
+    if(process.platform==='win32')await this.run('taskkill',['/PID',String(child.pid),'/T','/F']).catch(error=>{if(child.exitCode===null && !child.signalCode)throw error;});
+    else child.kill();
+  }
+  async cancel(id){
+    const job=this.rows.find(row=>row.id===id);
+    if(!job || job.status!=='running' || !job.cancellable)throw Error('This job has finished or is finalizing saved files.');
+    if(job.cancelRequested)return job;
+    job.cancelRequested=true;
+    try{await this.stopProcess(this.processes.get(id));}catch(error){job.cancelRequested=false;throw error;}
+    await this.save();return job;
+  }
   async checks(sha){const recipe=await readRecipe(this.directory);return [...await configuredChecks(this.git,sha),...(recipe?.checks || []).map(check=>({...check,directory:recipe.directory,command:check.args.join(' '),manager:'custom'}))];}
   async fixFiles(id){
     const job=this.rows.find(row=>row.id===id && row.kind==='fix');
@@ -44,12 +57,17 @@ export class ReviewJobs {
     job.resultCommit=await this.run('git',['rev-parse','HEAD'],{cwd:job.worktree});job.dirty=!!await this.run('git',['status','--porcelain'],{cwd:job.worktree});
     job.status='succeeded';job.error=null;job.committedFiles=files;job.finishedAt=new Date().toISOString();await this.save();return job;
   }
-  async start(record,kind,input={}){
+  async startNew(source,requestText){
+    if(!/^[a-f0-9]{40}$/.test(source))throw Error('Choose an exact remote default branch commit.');
+    if(typeof requestText!=='string' || !requestText.trim() || requestText.length>60000)throw Error('Describe the change you want to make.');
+    return this.start({identity:{source,changed:source},manifest:{version:2,summary:'New requested change',scenarios:[]},issues:[]},'fix',{requestText},true);
+  }
+  async start(record,kind,input={},newChange=false){
     if(this.rows.some(row=>row.status==='running'))throw new Error('Wait for the running job to finish.');
     if(!['plan','fix','check','warm'].includes(kind))throw new Error('Choose a supported job.');
     const selection=this.provider(), provider=providerId(selection.provider);
-    const cwd=this.changedCwd?.() || path.join(this.previewRoot,'changed');
-    if(await this.run('git',['rev-parse','HEAD'],{cwd})!==record.identity.changed || await this.run('git',['status','--porcelain'],{cwd}))throw new Error('Open the exact clean Changed preview before running a job.');
+    const cwd=newChange?null:this.changedCwd?.() || path.join(this.previewRoot,'changed');
+    if(!newChange && (await this.run('git',['rev-parse','HEAD'],{cwd})!==record.identity.changed || await this.run('git',['status','--porcelain'],{cwd})))throw new Error('Open the exact clean Changed preview before running a job.');
     let check;
     if(kind==='check'){check=(await this.checks(record.identity.changed)).find(check=>check.id===input.check);if(!check)throw new Error('Choose a configured check.');}
     if(kind==='fix' && input.chatId && input.provider!==undefined && input.provider!==provider)throw Error('This session belongs to a different provider. Start a new fix job.');
@@ -57,32 +75,34 @@ export class ReviewJobs {
     if(kind==='fix' && input.requestText!==undefined && (typeof input.requestText!=='string' || !input.requestText.trim() || input.requestText.length>60000))throw new Error('The fix request must contain 1–60000 characters.');
     const job={id:randomUUID(),kind,provider,executable:selection.executable,reviewId:record.id,commit:record.identity.changed,status:'running',startedAt:new Date().toISOString(),log:'',...(check?{check}:{}),...(kind==='fix'?{chatId:input.chatId}:{})};
     if(kind==='fix')job.requestText=input.requestText || fixRequest(record);
-    this.rows.push(job);await this.save();
-    void this.execute(job,record,input,cwd).then(()=>{job.status='succeeded';},error=>{job.status='failed';job.error=redact(error.message);}).finally(async()=>{job.finishedAt=new Date().toISOString();await this.save();}).catch(error=>{job.status='failed';job.error=`Could not persist job result: ${error.message}`;});
+    job.cancellable=kind!=='warm';this.rows.push(job);await this.save();
+    void this.execute(job,record,input,cwd).then(()=>{job.status=job.cancelRequested?'cancelled':'succeeded';},error=>{job.status=job.cancelRequested?'cancelled':'failed';job.error=redact(error.message);}).finally(async()=>{job.cancellable=false;job.finishedAt=new Date().toISOString();await this.save();}).catch(error=>{job.status='failed';job.error=`Could not persist job result: ${error.message}`;});
     return job;
   }
   async generatePlan(base,changed,files,previous) {
     const selection=this.provider();
     const job={id:randomUUID(),kind:'plan',provider:providerId(selection.provider),executable:selection.executable,commit:changed,status:'running',startedAt:new Date().toISOString(),log:''};
-    this.rows.push(job);await this.save();
+    job.cancellable=true;this.rows.push(job);await this.save();
     try {
       await this.execute(job,{identity:{base,changed},manifest:previous,files},{},null);
       for(const item of job.plan.scenarios)if(!item.files?.length || !item.files.some(file=>files.includes(file)))throw Error('Generated checklist contains an item without a changed source file. Retry opening the branch.');
       job.plan.source='Generated from the exact diff against the remote default branch';job.status='succeeded';return job.plan;
-    } catch(error){job.status='failed';job.error=redact(error.message);throw new Error('Could not generate the checklist for this branch. Retry opening the branch.\n\nTechnical details\n'+job.error);}
-    finally {job.finishedAt=new Date().toISOString();await this.save();}
+    } catch(error){job.status=job.cancelRequested?'cancelled':'failed';job.error=redact(error.message);throw new Error(job.cancelRequested?'Checklist generation stopped. Reopen the branch when you are ready.':'Could not generate the checklist for this branch. Retry opening the branch.\n\nTechnical details\n'+job.error);}
+    finally {job.cancellable=false;job.finishedAt=new Date().toISOString();await this.save();}
   }
   async command(job,command,args,cwd,prompt){
-    await new Promise((resolve,reject)=>{
+    if(job.cancelRequested)throw Error('Job stopped. Any saved files remain in its isolated checkout.');
+    try{await new Promise((resolve,reject)=>{
       const launch=launchCommand(command,args);
       const child=spawn(launch.file,launch.args,{cwd,windowsHide:true,shell:false,env:{...process.env,ELECTRON_RUN_AS_NODE:'1',PATH:`${this.toolchain}${path.delimiter}${process.env.PATH}`},stdio:['pipe','pipe','pipe']});
-      let timedOut=false;const timer=setTimeout(()=>{timedOut=true;child.kill();},30*60*1000);
+      this.processes.set(job.id,child);
+      let timedOut=false;const timer=setTimeout(()=>{timedOut=true;void this.stopProcess(child).catch(error=>{job.log+='\nCould not stop timed-out process: '+redact(error.message);});},30*60*1000);
       let events='';
       const output=chunk=>{job.log=redact(job.log+chunk.toString()).slice(-50000);};
       child.stdout.on('data',chunk=>{output(chunk);events+=chunk.toString();const lines=events.split('\n');events=lines.pop();for(const line of lines){try{const event=JSON.parse(line);consumeAgentEvent(job,event);}catch{}}});child.stderr.on('data',output);
-      child.on('error',error=>{clearTimeout(timer);reject(error);});child.on('close',code=>{clearTimeout(timer);if(events.trim()){try{consumeAgentEvent(job,JSON.parse(events));}catch{}}code===0&&!timedOut&&!job.agentError?resolve():reject(new Error(job.agentError || (timedOut?'Job exceeded 30 minutes. Inspect its worktree before retrying.':`Job exited ${code}. ${job.log.slice(-3000)}`)));});
+      child.on('error',error=>{clearTimeout(timer);reject(error);});child.on('close',code=>{clearTimeout(timer);if(events.trim()){try{consumeAgentEvent(job,JSON.parse(events));}catch{}}code===0&&!timedOut&&!job.agentError&&!job.cancelRequested?resolve():reject(new Error(job.cancelRequested?'Job stopped. Any saved files remain in its isolated checkout.':job.agentError || (timedOut?'Job exceeded 30 minutes. Inspect its worktree before retrying.':`Job exited ${code}. ${job.log.slice(-3000)}`)));});
       child.stdin.on('error',()=>{});child.stdin.end(prompt || '');
-    });
+    });}finally{this.processes.delete(job.id);job.cancellable=false;}
   }
   async execute(job,record,input,cwd){
     if(job.kind==='warm'){
@@ -92,15 +112,14 @@ export class ReviewJobs {
     }
     if(job.kind==='check'){
       const manager=job.check.manager;
-      if(manager==='custom'){const [file,...args]=job.check.args;await this.command(job,file==='node'?process.execPath:file==='npm'?process.execPath:file,file==='npm'?[await npmEntry(),...args]:args,path.join(cwd,job.check.directory));return;}
-      let entry=manager==='pnpm'?path.resolve(this.toolchain,'../pnpm/bin/pnpm.cjs'):path.join(path.dirname(process.execPath),'node_modules/npm/bin/npm-cli.js');
-      if(manager==='npm')for(const directory of [path.dirname(process.execPath),...(process.env.PATH || '').split(path.delimiter)]){const candidate=path.join(directory,'node_modules/npm/bin/npm-cli.js');if(await access(candidate).then(()=>true,()=>false)){entry=candidate;break;}}
-      await this.command(job,process.execPath,[entry,'run',job.check.name],path.join(cwd,job.check.directory));return;
+      if(manager==='custom'){const command=await projectCommand(job.check.args,{...process.env,PATH:[this.toolchain,process.env.PATH].filter(Boolean).join(path.delimiter)});await this.command(job,command.file,command.args,path.join(cwd,job.check.directory));return;}
+      const command=await projectCommand([manager,'run',job.check.name],{...process.env,PATH:[this.toolchain,process.env.PATH].filter(Boolean).join(path.delimiter)});
+      await this.command(job,command.file,command.args,path.join(cwd,job.check.directory));return;
     }
     const output=path.join(this.directory,job.id+'.txt');
     job.provider ||= providerId(this.provider().provider);
     const agent=this.codex && job.provider==='codex'?this.codex:await executable(job.provider,job.executable);
-    const invoke=async(cwd,prompt,chatId)=>{const connections=job.provider==='codex'&&!this.codex?await codexConnections(agent,cwd):[];await this.command(job,agent,agentArgs(job.provider,{kind:job.kind,cwd,output,chatId,connections}),cwd,prompt);if(job.provider==='claude'){if(typeof job.agentResult!=='string' || !job.agentResult.trim())throw Error('Claude returned no completed result. Inspect the job output.');await writeFile(output,job.agentResult);}};
+    const invoke=async(cwd,prompt,chatId)=>{const connections=job.provider==='codex'&&!this.codex?await codexConnections(agent,cwd):[];await this.command(job,agent,agentArgs(job.provider,{kind:job.kind,cwd,output,chatId,connections}),cwd,prompt);if(job.cancelRequested)throw Error('Job stopped. Any saved files remain in its isolated checkout.');if(job.provider==='claude'){if(typeof job.agentResult!=='string' || !job.agentResult.trim())throw Error('Claude returned no completed result. Inspect the job output.');await writeFile(output,job.agentResult);}};
     if(job.kind==='plan'){
       const worktree=path.join(this.directory,'plan-checkouts',job.id);
       await mkdir(path.dirname(worktree),{recursive:true});

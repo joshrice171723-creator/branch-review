@@ -4,8 +4,8 @@
   "asar": false,
   "npmRebuild": false,
   "directories": {"output": "../installers"},
-  "files": ["*.mjs", "*.rb", "public/**/*", "desktop/**/*.cjs", "package.json"],
-  "win": {"target": "nsis", "signExecutable": false, "artifactName": "Branch-Review-${version}-Windows-x64-Setup.${ext}"},
+  "files": ["*.mjs", "*.rb", "public/**/*", "desktop/main.cjs", "desktop/preload.cjs", "desktop/repository.cjs", "desktop/setup-help.cjs", "desktop/browser-qa.cjs", "desktop/icon.ico", "package.json"],
+  "win": {"target": "nsis", "icon":"desktop/icon.ico", "signExecutable": false, "artifactName": "Branch-Review-${version}-Windows-x64-Setup.${ext}"},
   "nsis": {"oneClick": false, "perMachine": false, "allowElevation": false, "allowToChangeInstallationDirectory": true, "deleteAppDataOnUninstall": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": false},
   "publish": null
 }

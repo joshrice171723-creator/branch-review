@@ -25,7 +25,7 @@ test('terminal error events cannot become success and provider sessions stay dis
   consumeAgentEvent(claude,{type:'result',subtype:'error_max_turns',is_error:true,result:'Limit reached'});
   assert.equal(codex.chatId,'codex-id');assert.equal(claude.chatId,'claude-id');assert.equal(claude.agentError,'Limit reached');
 });
-test('Claude protocol result drives real host commit finalization without changing the original branch',async()=>{
+test('first change uses Claude protocol and host commit finalization without a preview or edits to the original branch',async()=>{
   const directory=await mkdtemp(path.join(os.tmpdir(),'provider-workflow-')),repo=path.join(directory,'repo');await mkdir(repo);
   const run=async(command,args,options)=>{const result=await promisify(execFile)(command,args,options);return result.stdout.trim();};
   const git=(...args)=>run('git',args,{cwd:repo});
@@ -37,10 +37,20 @@ test('Claude protocol result drives real host commit finalization without changi
     await writeFile(path.join(cwd,'button.css'),'button { background: blue; }');
     consumeAgentEvent(job,{type:'result',subtype:'success',result:'Changed the button to blue.'});
   };
-  const job={id:'fixture',kind:'fix',provider:'claude',executable:'fixture.exe',requestText:'Make the button blue.'};
-  await jobs.execute(job,{identity:{source,changed:source},manifest:{scenarios:[]},issues:[]},{},repo);
+  await writeFile(path.join(repo,'personal-draft.txt'),'Keep my uncommitted work.');
+  await assert.rejects(jobs.startNew(source,''),/Describe/);
+  const job=await jobs.startNew(source,'Make the button blue.');
+  const deadline=Date.now()+10000;while(job.status==='running'){assert.ok(Date.now()<deadline,'job did not finish');await new Promise(resolve=>setTimeout(resolve,20));}
+  assert.equal(job.status,'succeeded',job.error);assert.equal(job.reviewId,undefined);
   assert.notEqual(job.resultCommit,source);assert.equal(await git('rev-parse','HEAD'),source);
-  assert.match(await git('show',job.resultCommit+':button.css'),/blue/);assert.equal(await git('status','--porcelain'),'');
+  assert.match(await git('show',job.resultCommit+':button.css'),/blue/);assert.equal(await git('status','--porcelain'),'?? personal-draft.txt');
+  assert.equal(await readFile(path.join(repo,'personal-draft.txt'),'utf8'),'Keep my uncommitted work.');await jobs.saving;
+  jobs.command=async(job,command,args,cwd)=>{await writeFile(path.join(cwd,'button.css'),'button { background: pink; }');job.cancelRequested=true;job.agentResult='Changed to pink.';};
+  const stopped=await jobs.startNew(source,'Make it pink.');
+  const end=Date.now()+10000;while(stopped.status==='running'){assert.ok(Date.now()<end);await new Promise(resolve=>setTimeout(resolve,20));}
+  assert.equal(stopped.status,'cancelled');assert.equal(stopped.resultCommit,undefined);
+  assert.equal(await run('git',['rev-parse','HEAD'],{cwd:stopped.worktree}),source);
+  assert.match(await readFile(path.join(stopped.worktree,'button.css'),'utf8'),/pink/);await jobs.saving;
 });
 test('unknown stacks get project setup instead of being rejected',async()=>{
   const directory=await mkdtemp(path.join(os.tmpdir(),'web-project-'));

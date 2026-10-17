@@ -12,4 +12,8 @@ async function chooseRepository({dialog,window,exec,detectProject}){
     }
   }
 }
-module.exports={chooseRepository};
+async function availableRepository(repository,exec){
+  try { await exec('git',['rev-parse','--show-toplevel'],{cwd:repository,windowsHide:true});return true; }
+  catch { return false; }
+}
+module.exports={chooseRepository,availableRepository};
