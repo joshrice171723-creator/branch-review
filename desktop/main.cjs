@@ -116,7 +116,7 @@ async function launch() {
   ipcMain.handle('review:show-browser-qa',async event=>{trusted(event);const state=await fetch(origin+'/api/state').then(r=>r.json());if(!state.record?.browserQa?.some(run=>run.id===runtimeState.browserQaWindowRunId))throw Error('This review has no active QA browser. Open its saved evidence in Details.');if(qaWindow&&!qaWindow.isDestroyed()){qaWindow.show();qaWindow.focus();}});
   ipcMain.handle('review:choose-repository', async event => {
     trusted(event);
-    const chosen=await chooseRepository({dialog,window,exec,detectProject});
+    const chosen=await chooseRepository({dialog,window,exec,detectProject,repository:savedConfig.repository});
     if(!chosen)return null;
     const {repository,projectInfo}=chosen;
     const response = await dialog.showMessageBox(window, { type: 'question', buttons: ['Open repository', 'Cancel'], defaultId: 0, cancelId: 1,

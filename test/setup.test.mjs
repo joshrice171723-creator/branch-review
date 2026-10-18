@@ -22,3 +22,12 @@ test('startup detects a missing or non-Git previous project before opening its s
  assert.equal(await repository.availableRepository('/present',exec),true);
  assert.equal(await repository.availableRepository('/moved',exec),false);
 });
+
+test('switch project starts in the current repository; first run keeps the system default',async()=>{
+ const shown=[],window={};
+ const dialog={showOpenDialog:async(...args)=>{shown.push(args.at(-1));return {canceled:true};}};
+ await repository.chooseRepository({dialog,window,repository:'C:/projects/current'});
+ await repository.chooseRepository({dialog});
+ assert.equal(shown[0].defaultPath,'C:/projects/current');
+ assert.equal(Object.hasOwn(shown[1],'defaultPath'),false);
+});
