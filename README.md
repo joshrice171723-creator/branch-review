@@ -2,9 +2,19 @@
 
 A local desktop workspace for reviewing changes in Git projects: choose a branch, compare isolated versions, report findings, ask Codex for a fix, and retest within the same review.
 
+**[Download the Windows beta](https://github.com/joshrice171723-creator/branch-review/releases/tag/v0.6.0)** · [Installation guide](INSTALL.md) · [Run from source](#get-started)
+
+## Status and engineering
+
+Active development. The public Windows 0.6.0 beta is unsigned and is an older snapshot than the current source. There is no hosted browser demo: previews run locally against a trusted Git project. Signing, automatic updates and clean-machine distribution acceptance remain separate work; see [distribution evidence](DISTRIBUTION_AUDIT.md).
+
+The implementation separates review evidence from permission to ship. [Delivery](delivery.mjs) binds approval to a specific commit and refuses a moved default branch; an uncertain push is reconciled before another attempt. [Project delivery](project-delivery.mjs) requires an HTTPS receipt identifying the exact clean commit before reporting a deployment as published. Isolated previews preserve the original/changed comparison without treating a passing page check as complete product acceptance.
+
+Built with Electron and JavaScript, with AI-assisted development using Codex. Generated checklists and fixes are inputs to human review, not a claim of autonomous correctness.
+
 ## Get started
 
-Windows users: download the installer and follow [Install Branch Review](INSTALL.md). The beta is unsigned; releases in this private repository require access or direct file sharing by the owner.
+Windows users: download the installer from the [public beta release](https://github.com/joshrice171723-creator/branch-review/releases/tag/v0.6.0) and follow [Install Branch Review](INSTALL.md). The beta is unsigned. Source setup requires Node.js 24 or later.
 
 1. Open Branch Review.exe from its packaged folder, or run `npm ci`, `node node_modules/electron/install.js`, then `npm run desktop` from source.
 2. Choose a trusted Git repository. Previewing executes project code. Git must be installed; generated checklists and fixes need an installed, signed-in Codex CLI or Claude Code.

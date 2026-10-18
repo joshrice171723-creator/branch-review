@@ -1,6 +1,6 @@
 # Install Branch Review on Windows
 
-Download `Branch-Review-0.6.0-Windows-x64-Setup.exe` from this repository's release, run it, then open Branch Review from Start. The beta installer is unsigned; Windows may display an unknown-publisher warning. Only use a download you trust, and compare its SHA-256 with `SHA256SUMS.txt` if verifying a shared file.
+Download `Branch-Review-0.6.0-Windows-x64-Setup.exe` from the [public v0.6.0 release](https://github.com/joshrice171723-creator/branch-review/releases/tag/v0.6.0), run it, then open Branch Review from Start. The beta installer is unsigned; Windows may display an unknown-publisher warning. Only use a download you trust, and compare its SHA-256 with `SHA256SUMS.txt` if verifying a shared file.
 
 The installer includes the desktop runtime. It does not include your project, accounts, Git, or your project's build tools. It installs for your Windows user and does not require administrator installation. Updates use the same installer; uninstall keeps reviews and project files. There is no automatic updater yet.
 
@@ -20,7 +20,7 @@ If a project folder moves or a drive is disconnected, startup offers another pro
 
 ## Sharing and validation boundary
 
-This repository is currently private. Its release download requires repository access; alternatively the owner can share the installer and checksum directly. No repository visibility change is made by packaging.
+This repository and its v0.6.0 release are public. Download the installer and checksum from the release linked above. The released installer is a versioned snapshot; current source may contain newer behavior.
 
 Fresh-profile testing is distinct from a clean Windows machine. The Windows installer workflow is configured to build and test on a hosted Windows runner, install silently and check the installed runtime with Node/agent discovery unavailable. Its first run was blocked before execution by GitHub account billing; it is not clean-machine proof. It does not supply provider credentials or prove live agent work on every machine. Live Claude work still requires a signed-in test account. See DISTRIBUTION_AUDIT.md for the tested boundaries.
 
