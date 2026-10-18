@@ -25,7 +25,8 @@ const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,w
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
-$('new-change').onclick=()=>{$('change-request').focus();$('change-composer').scrollIntoView({block:'nearest'});};
+$('preview-area').append($('change-composer'));
+$('new-change').onclick=()=>reviewTools.requestChange();
 $('toolbar-agent').onclick=()=>activityView.open();
 const historyDialog=document.createElement('dialog');historyDialog.id='history-dialog';historyDialog.setAttribute('aria-label','Review history');
 historyDialog.innerHTML='<header class="dialog-heading"><h2>Review history</h2><button type="button">Close</button></header>';
@@ -272,8 +273,10 @@ $('view-diff').onclick=()=>openDiff();
 $('review-code').onclick=()=>{const r=currentState.record;if(r)void openDiff(undefined,{base:r.identity.base,branch:{sha:r.identity.changed,name:r.identity.ref.replace(/^refs\/(heads|remotes)\//,'')}});};
 $('download-plan').onclick=()=>{if(!selectedComparison)return;const url=URL.createObjectURL(new Blob([JSON.stringify(selectedComparison.plan,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='review-checklist.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 $('close-diff').onclick=()=>{diffGeneration++;$('diff-dialog').close();};
+function renderAddress(){$('preview-address').textContent=['original','changed'].filter(side=>$('layout-mode').value==='side-by-side' || side===active).map(side=>`${side==='original'?'Original':'Changed'}: ${reviewWorkflow.getContext(side).location ? 'http://127.0.0.1:'+currentState[side]?.proxy+reviewWorkflow.getContext(side).location : 'Waiting for page…'}`).join('   |   ');}
 function toggle(side) {
   active = side;
+  renderAddress();
   reviewWorkflow.viewChanged();
   for (const name of ["original", "changed"]) {
     $(name).setAttribute("aria-pressed", String(side === name));
@@ -375,7 +378,8 @@ async function poll() {
     const ready = currentState.status === "ready";
     const previewReady=ready || currentState.status==='preview-ready';
     pendingChecks.hidden=currentState.status!=='preview-ready';
-    $('change-composer').hidden=currentState.status==='preview-ready';
+    if(currentState.status==='preview-ready')$('change-composer').hidden=true;
+    renderAddress();
       const publishing=currentState.busy && currentState.record?.delivery?.stage==='deploying';
       const release=currentState.record?.delivery;
       $('publish-progress').hidden=!publishing;
@@ -507,7 +511,12 @@ window.addEventListener("message", (event) => {
   )
     error(`${side}: ${event.data.message}`);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:focus-status' && event.data.key===currentState.manifest?.scenarios.find(item=>item.id===reviewWorkflow.scenario())?.focus && ['waiting','found','missing','cancelled'].includes(event.data.status)){focusStates[side]=event.data.status;renderFocusStatus();}
-  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context') reviewWorkflow.context(side,event.data);
+  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context'){reviewWorkflow.context(side,event.data);renderAddress();}
+  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:change-target' && currentState.status==='ready' && !currentState.busy){
+    const data=event.data;if(typeof data.location!=='string' || !data.location.startsWith('/') || !data.target)return;
+    toggle(side);reviewWorkflow.context(side,{...reviewWorkflow.getContext(side),location:data.location});renderAddress();
+    reviewTools.requestChange({location:data.location,selector:String(data.target.selector || '').slice(0,1000),label:String(data.target.label || '').slice(0,160),rect:data.target.rect});
+  }
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:active' && $('layout-mode').value==='side-by-side')toggle(side);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:shortcut')runShortcut(event.data.command);
   if ($('sync-scroll').checked && side === active && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:scroll') {

@@ -28,6 +28,13 @@ export function reviewToolsBridge(appOrigin){
     if(event.type==='change' && ['checkbox','radio'].includes(element.type))return;
     send({type:'review:action',action:{type:event.type==='change'?'input':'click',selector,tag:element.tagName,inputType:element.type || '',label,route:route(),value:event.type==='change'?String(element.value).slice(0,2000):undefined}});
   }
+  addEventListener('contextmenu',event=>{
+    const element=event.target.closest('button,a,input,select,textarea,[role="button"],h1,h2,h3,img,p') || event.target;
+    if(!(element instanceof Element))return;
+    event.preventDefault();context();
+    const box=element.getBoundingClientRect();
+    send({type:'review:change-target',location:route(),target:{selector:locator(element) || element.localName,label:clean(element.getAttribute('aria-label') || element.textContent || element.getAttribute('alt') || element.localName).trim().slice(0,160),rect:{x:Math.round(box.x),y:Math.round(box.y),width:Math.round(box.width),height:Math.round(box.height)}}});
+  },true);
   addEventListener('click',record,true);addEventListener('change',record,true);
   async function axe(){if(window.axe)return window.axe;if(!axeLoading)axeLoading=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/__review/axe.js';script.onload=()=>resolve(window.axe);script.onerror=()=>{axeLoading=null;reject(Error('Accessibility engine did not load.'));};document.head.append(script);});return axeLoading;}
   addEventListener('message',async event=>{

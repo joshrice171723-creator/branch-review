@@ -50,3 +50,5 @@ test('navigation during screenshot capture stops submission and preserves the dr
  let count=0;h.flow.getContext=()=>({location:++count>3?'/other':'/tutorials'});
  await e['make-changes'].onclick();assert.equal(h.calls.length,0);assert.equal(e['change-request'].value,'Remove brown shadow');
 });
+test('selected area stays pinned and is included in the fix request',async t=>{const h=harness(t),e=h.elements;h.view.open({location:'/tutorials',selector:'#cta',label:'Try sandbox',rect:{x:1,y:2,width:30,height:40}});assert.equal(e['change-composer'].hidden,false);e['change-request'].value='Blue';await e['make-changes'].onclick();assert.match(h.calls[0].data.requestText,/Selected area:.*#cta/);});
+test('selected area cannot be sent after navigating elsewhere',async t=>{const h=harness(t),e=h.elements;h.view.open({location:'/tutorials',selector:'#cta',label:'Try sandbox'});e['change-request'].value='Blue';h.flow.getContext=()=>({location:'/other'});await e['make-changes'].onclick();assert.equal(h.calls.length,0);assert.match(e['change-status'].textContent,/Right-click/);});

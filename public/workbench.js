@@ -103,7 +103,7 @@ export function workbench({api,getState,getSide,workflow,capture,previewReady,po
   setInterval(()=>{if(!getState().busy){if($('tools-dialog').open)void refresh();else void api('/api/jobs').then(rows=>changes.render(rows)).catch(()=>{});}},2500);
   setInterval(()=>{const id=current()?.id;if(!getState().busy && id)void api(`/api/update?id=${id}`).then(value=>{if(current()?.id!==id)return;if(value.changed){$('updated-branch').hidden=false;$('updated-branch').textContent=`Updated branch ${value.latest.slice(0,7)} · Review changes`;}else $('updated-branch').hidden=true;}).catch(()=>{});},30000);
   $('updated-branch').onclick=()=>{update=null;open('updates');};
-  return{open,render(state){changes.render();$('toolbar-review').disabled=!!state.busy;$('toolbar-agent').disabled=!state.record || !!state.busy;$('review-tools').disabled=!!state.busy;$('capture-item').disabled=!state.record || state.status!=='ready' || state.busy;
+  return{open,requestChange:changes.open,render(state){changes.render();$('toolbar-review').disabled=!!state.busy;$('toolbar-agent').disabled=!state.record || !!state.busy;$('review-tools').disabled=!!state.busy;$('capture-item').disabled=!state.record || state.status!=='ready' || state.busy;
     const key=JSON.stringify(state.agent);if(key!==settingsKey){settingsKey=key;$('agent-provider').value=state.agent?.provider || 'codex';$('agent-executable').value=state.agent?.executable || '';$('codex-chat').value='';}
     $('agent-save').disabled=!!state.jobsRunning || !!state.busy;
     $('project-adapter').textContent=state.project?.error || `${state.project?.name || 'Project'} · ${state.project?.kind || 'Meta Clinic'} preview adapter`;

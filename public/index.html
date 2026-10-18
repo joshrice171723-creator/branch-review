@@ -96,6 +96,7 @@
           </button>
         </div>
         <div class="comparison-options"><label for="layout-mode">View</label><select id="layout-mode"><option value="toggle">Toggle versions</option><option value="side-by-side">Side by side</option></select><label class="sync-option"><input id="sync-scroll" type="checkbox" checked> Link scrolling</label><label id="split-control" hidden>Split <input id="split-position" type="range" min="30" max="70" value="50" aria-label="Preview split position"></label><button id="review-code" class="quiet" disabled>Review code</button><span id="target-status" role="status" hidden></span></div>
+        <div id="preview-address" aria-label="Current preview URL">Waiting for page…</div><p class="preview-change-hint">Right-click an area in the preview to request a change.</p>
         <div id="preview-area">
           <div id="empty" class="empty">
             <span class="empty-mark">⑂</span>
@@ -128,7 +129,8 @@
         </footer>
       </section>
       <aside class="review">
-<section id="change-composer" aria-label="Request a change">
+<section hidden id="change-composer" aria-label="Request a change">
+        <button id="close-change" class="quiet" aria-label="Close change request">×</button>
         <label class="change-prompt" for="change-request">What would you like to change?</label>
         <textarea id="change-request" rows="3" maxlength="10000" placeholder="Change the main button on the home page to blue."></textarea>
         <p id="change-context" class="small"></p><p id="change-explanation" class="small"></p>
