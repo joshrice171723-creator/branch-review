@@ -870,3 +870,15 @@ dialog::backdrop {background:#152c2b80}
 #change-composer .primary{margin:8px 0 0}
 #change-status{font-size:13px;line-height:1.5}
 #tools-dialog:has(#tools-plan:not([hidden])) > #tools-status{display:block}
+
+#work-progress{display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #dce3d9;background:#f5f8f3;font-size:12px;min-height:42px;box-sizing:border-box}
+#work-progress[hidden]{display:none}
+#work-progress>div{flex:1;min-width:0}
+#work-progress strong{display:block;font-size:13px}
+#work-progress [data-detail]{display:block;color:#607166;overflow-wrap:anywhere}
+#work-progress button{white-space:nowrap;margin:0}
+.work-light{width:8px;height:8px;border-radius:50%;background:#87958a;flex:none}
+#work-progress.working .work-light{background:#28745c;animation:work-pulse 1.4s ease-in-out infinite}
+@keyframes work-pulse{50%{box-shadow:0 0 0 4px #28745c22}}
+@media(prefers-reduced-motion:reduce){#work-progress.working .work-light{animation:none}}
+#review-handoff{font-size:12px;line-height:1.6;padding:10px 12px;background:#edf4ec;border-left:3px solid #3d705b;margin:0 0 16px}

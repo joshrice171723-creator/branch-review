@@ -5,11 +5,11 @@ async function runBrowserQa({run,record,origin,report,isCancelled,onWindow}){
   const partition=`qa-${run.id}`,isolated=session.fromPartition(partition);
   isolated.setPermissionRequestHandler((_wc,_permission,callback)=>callback(false));
   isolated.webRequest.onBeforeRequest((details,callback)=>callback({cancel:details.resourceType==='mainFrame' && new URL(details.url).origin!==origin}));
-  const browser=new BrowserWindow({title:'Branch Review · Browser QA',width:1200,height:850,webPreferences:{partition,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
+  const browser=new BrowserWindow({title:'Branch Review · Browser QA',width:1200,height:850,show:!run.automatic,webPreferences:{partition,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,backgroundThrottling:false}});
   onWindow(browser);browser.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   browser.webContents.on('will-navigate',(event,url)=>{if(new URL(url).origin!==origin)event.preventDefault();});
   const check=()=>{if(isCancelled()||browser.isDestroyed())throw Error('Browser QA cancelled.');};
-  let currentItem,lastStatus=200;
+  let currentItem,lastStatus=200,unverified=false;
   browser.webContents.on('did-navigate',(_event,_url,status)=>{lastStatus=status;});
   try{
     for(const [index,step] of run.actions.entries()){
@@ -30,23 +30,29 @@ async function runBrowserQa({run,record,origin,report,isCancelled,onWindow}){
         }while(Date.now()<deadline);
         if(!result?.ok)throw Error(result?.message || 'Expected page state did not appear.');
         await pause(200);check();
-        await report({index,passed:true,message:result.message,screenshot:(await browser.webContents.capturePage()).toDataURL()});
+        unverified ||= !!result.skipped;
+        await report({index,passed:!result.skipped,...(result.skipped?{skipped:true}:{}),message:result.message,screenshot:(await browser.webContents.capturePage()).toDataURL()});
       }catch(error){
         if(!isCancelled()&&!browser.isDestroyed())await report({index,passed:false,message:error.message,screenshot:(await browser.webContents.capturePage()).toDataURL()});
         throw error;
       }
     }
-    await report({finish:'passed'});if(!browser.isDestroyed())browser.setTitle('Branch Review · Browser QA finished');
+    await report({finish:unverified?'needs-review':'passed'});if(!browser.isDestroyed())browser.setTitle('Branch Review · Browser QA finished');
   }catch(error){await report({finish:isCancelled()||browser.isDestroyed()?'cancelled':'failed',error:error.message});}
 }
 function browserAction(step){
   if(step.action==='visit')return document.body?.innerText.trim()?{ok:true,message:'Page rendered. Behavior still requires its checklist.'}:{ok:false,retry:true,message:'Page has no visible text.'};
   const matches=document.querySelectorAll(step.selector);
-  if(matches.length!==1)return {ok:false,retry:matches.length===0,message:`Expected one matching control; found ${matches.length}.`};
+  if(matches.length!==1)return step.optional?{ok:true,skipped:true,message:`Needs human review: expected one control; found ${matches.length}.`}:{ok:false,retry:matches.length===0,message:`Expected one matching control; found ${matches.length}.`};
   const element=matches[0];
   if(!element.getClientRects().length)return {ok:false,retry:true,message:'The control is not visible.'};
   if(step.action==='text')return {ok:element.textContent.includes(step.value),retry:true,message:`Expected text: ${step.value}`};
-  if(step.action==='style'){const actual=getComputedStyle(element).getPropertyValue(step.property).trim();return {ok:actual===step.value,retry:true,message:`${step.property}: ${actual}; expected ${step.value}`};}
+  if(step.action==='style'){
+    if(!CSS.supports(step.property,step.value))return step.optional?{ok:true,skipped:true,message:'The CSS value needs human review.'}:{ok:false,message:'Unsupported CSS assertion.'};
+    const probe=document.createElement('span');probe.style.cssText='all:initial;position:absolute;visibility:hidden';probe.style.setProperty(step.property,step.value);document.body.append(probe);
+    const expected=getComputedStyle(probe).getPropertyValue(step.property).trim();probe.remove();
+    const actual=getComputedStyle(element).getPropertyValue(step.property).trim();return {ok:actual===expected,retry:true,message:`${step.property}: ${actual}; expected ${expected}`};
+  }
   if(element.disabled)return {ok:false,retry:true,message:'The control is disabled.'};
   element.scrollIntoView({block:'center'});
   if(step.action==='click'){element.click();return {ok:true,message:'Clicked '+step.selector};}

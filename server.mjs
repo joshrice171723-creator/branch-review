@@ -15,6 +15,7 @@ import { publish, target } from './publish.mjs';
 import {providerId,probeProvider} from './providers.mjs';
 import {readRecipe,saveRecipe} from './project-settings.mjs';
 import {beginBrowserQa,browserQaResult} from './browser-qa.mjs';
+import {automaticBrowserChecks} from './automatic-qa.mjs';
 import {readDelivery,saveDelivery,deployProject,createReviewPr} from './project-delivery.mjs';
 import { MuseQa } from './muse-qa.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
@@ -228,7 +229,7 @@ async function mutate(endpoint, data) {
     if(record.projectDeployment?.status!=='needs-inspection'||typeof data.note!=='string'||data.note.trim().length<10)throw Error('Describe your inspection of the failed deployment first.');
     await store.event(record,'project-deployment-retry',{previous:record.projectDeployment,note:data.note.slice(0,2000)});delete record.projectDeployment;await store.persist();return;
   }
-  if(endpoint==='/api/browser-qa')return beginBrowserQa(store,record,data.steps);
+  if(endpoint==='/api/browser-qa')return beginBrowserQa(store,record,data.automatic===true?await automaticBrowserChecks(git,record):data.steps,data.automatic===true);
   if(endpoint==='/api/browser-qa-result')return browserQaResult(store,local,record,data);
   if(endpoint==='/api/plan'){
     if(jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running job before editing the plan.');
@@ -308,7 +309,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaRunning:qaRunning(),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,groupedBranches(await branches(),jobs.rows,store.records));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
@@ -352,7 +353,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/project-setup.js','/onboarding.js','/activity.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/project-setup.js','/onboarding.js','/activity.js','/progress-model.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312 http://127.0.0.1:4313; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));

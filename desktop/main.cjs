@@ -84,18 +84,36 @@ async function launch() {
       catch(error){if(!error.retryable || attempt>=40)throw error;await new Promise(resolve=>setTimeout(resolve,250));}
     }
   }
-  let qaWindow,qaCancelled=false,qaTask;
-  ipcMain.handle('review:browser-qa',async(event,input)=>{
-    trusted(event);if(qaTask)throw Error('A browser run is already active.');
+  const {state:runtimeState}=await import(pathToFileURL(path.join(root,'adapter.mjs')).href);
+  runtimeState.automaticQa=true;
+  let qaWindow,qaCancelled=false,qaTask,qaStarting=false;
+  async function startQa(input){
+    if(qaTask || qaStarting)throw Error('A browser run is already active.');
+    qaStarting=true;
+    try{
     const state=await fetch(origin+'/api/state').then(r=>r.json());
     if(state.record?.id!==input.id || state.status!=='ready')throw Error('Open the review before starting browser QA.');
-    const {result:run}=await control('/api/browser-qa',input);qaCancelled=false;if(qaWindow&&!qaWindow.isDestroyed())qaWindow.close();
+    const {result:run}=await control('/api/browser-qa',input);if(run.reused)return run.id;qaCancelled=false;if(qaWindow&&!qaWindow.isDestroyed())qaWindow.close();
     const {runBrowserQa}=require('./browser-qa.cjs');
-    qaTask=runBrowserQa({run,record:state.record,origin:`http://127.0.0.1:${state.changed.proxy}`,isCancelled:()=>qaCancelled,onWindow:browser=>{qaWindow=browser;},report:data=>reportQa({id:input.id,runId:run.id,commit:run.commit,...data})}).catch(async error=>{await control('/api/browser-qa-result',{id:input.id,runId:run.id,commit:run.commit,finish:'failed',error:error.message}).catch(()=>{});}).finally(()=>{qaTask=null;});
+    qaTask=runBrowserQa({run,record:state.record,origin:`http://127.0.0.1:${state.changed.proxy}`,isCancelled:()=>qaCancelled,onWindow:browser=>{qaWindow=browser;runtimeState.browserQaWindowRunId=run.id;browser.on('closed',()=>{if(runtimeState.browserQaWindowRunId===run.id)runtimeState.browserQaWindowRunId=null;});},report:data=>reportQa({id:input.id,runId:run.id,commit:run.commit,...data})}).catch(async error=>{await control('/api/browser-qa-result',{id:input.id,runId:run.id,commit:run.commit,finish:'failed',error:error.message}).catch(()=>{});}).finally(()=>{qaTask=null;});
     return run.id;
-  });
+    }finally{qaStarting=false;}
+  }
+  ipcMain.handle('review:browser-qa',async(event,input)=>{trusted(event);return startQa(input);});
+  const autoAttempts=new Set();
+  setInterval(async()=>{
+    if(qaStarting || qaTask || closing)return;
+    let reviewId;
+    try{
+      const state=await fetch(origin+'/api/state').then(r=>r.json()),record=state.record;
+      if(state.status!=='ready' || state.busy || state.jobsRunning || !record || record.delivery || autoAttempts.has(record.id) || record.browserQa?.some(run=>run.automatic))return;
+      reviewId=record.id;
+      await startQa({id:record.id,automatic:true});
+      autoAttempts.add(record.id);
+    }catch(error){if(error.retryable)return;if(reviewId)autoAttempts.add(reviewId);runtimeState.error='Automatic QA could not start: '+error.message;}
+  },1000).unref();
   ipcMain.handle('review:stop-browser-qa',event=>{trusted(event);qaCancelled=true;if(qaWindow&&!qaWindow.isDestroyed())qaWindow.close();});
-  ipcMain.handle('review:show-browser-qa',event=>{trusted(event);if(qaWindow&&!qaWindow.isDestroyed()){qaWindow.show();qaWindow.focus();}});
+  ipcMain.handle('review:show-browser-qa',async event=>{trusted(event);const state=await fetch(origin+'/api/state').then(r=>r.json());if(!state.record?.browserQa?.some(run=>run.id===runtimeState.browserQaWindowRunId))throw Error('This review has no active QA browser. Open its saved evidence in Details.');if(qaWindow&&!qaWindow.isDestroyed()){qaWindow.show();qaWindow.focus();}});
   ipcMain.handle('review:choose-repository', async event => {
     trusted(event);
     const chosen=await chooseRepository({dialog,window,exec,detectProject});

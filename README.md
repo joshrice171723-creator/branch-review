@@ -31,6 +31,10 @@ Native/mobile apps and headless tools need an appropriate web harness to use the
 
 ## Activity and browser QA
 
+The compact strip above the preview shows agent work, preparation, browser checks and readiness. **Details** opens existing Activity logs and screenshot evidence. **Watch** brings the current QA browser forward; it never steals focus automatically. After checks finish, a short handoff distinguishes automated assertions, pages opened and items still needing human review.
+
+The desktop automatically checks each newly opened review once. It opens checklist routes in a separate browser and checks simple changed CSS colors or corner radii on the active affected screen when the selector is unambiguous. Conditional styles and unsupported behavior remain human checks. Missing selectors are unverified, not passes. Failed checks become existing review findings with screenshots, available to the same agent fix handoff. Interrupted runs stay interrupted; use **Run browser checks** in Activity to retry deliberately.
+
 **Activity** shows jobs and browser runs with running indicators, logs, commit identity and screenshots. **Stop job** stops an active agent/check process and preserves saved work; Git finalization cannot be interrupted there. **Run browser checks** opens a separate browser you can watch and stop. Its default visit checks prove checklist screens render; they do not prove every requirement passes.
 
 Expand Browser actions for behavior checks using actual checklist item IDs. Supported actions: visit, click, fill, text, style. Selectors must match exactly one visible control.
@@ -44,7 +48,7 @@ Expand Browser actions for behavior checks using actual checklist item IDs. Supp
 ]
 ```
 
-Evidence is ordered and pinned to the reviewed commit. Missing or interrupted results cannot become passes. Browser results do not approve manual items. This is an explicit browser-check runner; autonomous test discovery and generic hosted QA are not implemented. Muse hosted QA remains part of the optional Meta Clinic integration.
+Evidence is ordered and pinned to the reviewed commit. Missing or interrupted results cannot become passes. Browser results do not approve manual items. General autonomous behavior discovery and generic hosted QA are not implemented. Muse hosted QA remains part of the optional Meta Clinic integration.
 
 ## Delivery
 
