@@ -285,3 +285,31 @@ test('an unrelated old finding does not filter the latest changed item out of th
  h.view.render(h.state);
  assert.equal(e['item-filter'].value,'all');assert.equal(e['item-title'].textContent,'Check the button');assert.equal(e['item-queue'].children.length,2);
 });
+
+
+test('verify and next resolves the fix once and leaves the fix filter for remaining work',async t=>{
+ let h;h=harness(t,{api:async(path,data)=>{
+  if(path==='/api/resolve')h.state.record.issues.find(i=>i.id===data.issueId).status='resolved';
+  if(path==='/api/cursor')h.state.record.cursor={itemId:data.itemId,view:data.view};
+ }});
+ const r=h.state.record,first=r.manifest.scenarios[0];
+ r.manifest={...r.manifest,scenarios:[first,{...first,id:'second'}]};
+ r.issues=[{id:'fix',scenario:first.id,status:'needs-retest',expected:'Fixed',actual:'Wrong',commit:'aaaaaaa',side:'changed',consoleErrors:[]}];
+ first.steps.forEach((_,i)=>r.checks[`${first.id}:${i}`]=true);h.view.render(h.state);
+ await h.elements['review-fixes'].onclick();
+ assert.match(h.elements['item-next'].textContent,/Verify fix and next/);
+ await h.elements['item-next'].onclick();
+ assert.equal(r.cursor.itemId,'second');assert.equal(r.cursor.view,'item');assert.equal(r.issues[0].status,'resolved');
+ assert.equal(h.elements['item-filter'].value,'all');assert.equal(h.elements['fix-mode-note'].hidden,true);
+ assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,1);
+});
+
+test('Next wraps to earlier unfinished items and clears stale completion warnings',async t=>{
+ let h;h=harness(t,{api:async(path,data)=>{if(path==='/api/cursor')h.state.record.cursor={itemId:data.itemId,view:data.view};}});
+ const r=h.state.record,first=r.manifest.scenarios[0];r.manifest={...r.manifest,scenarios:[first,{...first,id:'last'}]};
+ r.cursor={itemId:'last',view:'item'};h.view.render(h.state);await h.elements['item-next'].onclick();
+ assert.equal(h.elements['unfinished-choice'].hidden,false);
+ first.steps.forEach((_,i)=>r.checks[`last:${i}`]=true);h.view.render(h.state);
+ assert.equal(h.elements['unfinished-choice'].hidden,true);assert.equal(h.elements['retry-item-save'].hidden,true);
+ assert.match(h.elements['item-next'].textContent,/Next item/);await h.elements['item-next'].onclick();assert.equal(r.cursor.itemId,first.id);
+});

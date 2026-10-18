@@ -179,13 +179,13 @@
             <h2 id="item-title"></h2>
             <p id="item-description"></p>
             <p id="item-instructions"></p>
-            <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Fix verified</button><p class="small muted">Complete the checks below, then verify the fix. If it is still wrong, report a problem.</p></section>
+            <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Verify fix and next. If it is still wrong, report a problem.</p></section>
             <details><summary>Expected result</summary><p id="item-expected"></p></details>
             <p class="small muted">Check means passed. Leave untested checks empty; use Needs fixes to report a failure.</p><div id="checks"></div>
             <label class="field-label" for="item-notes">Notes</label>
             <textarea id="item-notes" maxlength="4000" placeholder="What did you observe?"></textarea>
             <label class="field-label" for="item-outcome">Outcome</label>
-            <select id="item-outcome"><option value="">Use checklist result</option><option value="needs-fixes">Needs fixes</option><option value="blocked">Blocked — cannot test</option><option value="not-applicable">Not applicable</option></select>
+            <select id="item-outcome"><option value="">Automatic — based on checks</option><option value="needs-fixes">Needs fixes</option><option value="blocked">Blocked — cannot test</option><option value="not-applicable">Not applicable</option></select>
             <div id="item-reason-wrap" hidden><label class="field-label" for="item-reason">Reason / what needs fixing</label><textarea id="item-reason" maxlength="2000"></textarea></div>
             <div class="save-line"><span id="item-save" role="status" aria-live="polite">Saved</span><button id="retry-item-save" class="quiet">Save now</button></div>
             <div id="unfinished-choice" class="inline-choice" hidden><p>This item is unfinished. Leave it open and continue?</p><button id="keep-testing" class="quiet">Keep testing</button><button id="leave-unfinished" class="secondary">Leave unfinished and continue</button></div>

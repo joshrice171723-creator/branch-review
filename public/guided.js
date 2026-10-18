@@ -40,10 +40,13 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
       const r=getState().record, old=r.manifest.scenarios.find(item=>item.id===itemId), target=r.manifest.scenarios.find(item=>item.id===next);
       if(view==='item' && old && target && (old.path!==target.path || old.originalPath!==target.originalPath || needsNavigation(target)) && !confirm('Open the next screen in both previews? Save any edits inside the preview first.'))return;
       await api('/api/cursor',{id:r.id,itemId:next,view});
-      if(view==='item' && target && !matchesItem(r,target,$('item-search').value,$('item-filter').value || 'all')){$('item-search').value='';$('item-filter').value='all';}
+      if(view==='item' && target && !matchesItem(r,target,$('item-search').value,$('item-filter').value || 'all')){$('item-search').value='';$('item-filter').value='all';fixMode=false;}
       await poll();if(view==='item')onSelect(next);$(view==='item'?'guided-item':'guided-results').scrollIntoView({block:'start'});
     }
     catch(e){error(e.message);}finally{pending=false;render(getState());}
+  }
+  function following(r) {
+    return (fixMode && nextItem(r,itemId,'attention')) || nextItem(r,itemId,'remaining') || r.manifest.scenarios.find(item=>item.id!==itemId && !isComplete(itemStatus(r,item)))?.id;
   }
   async function advance(leave=false) {
     if(advancing || pending)return;
@@ -51,22 +54,19 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     try {
     if(!await flush())return;
     const r=getState().record,item=r.manifest.scenarios.find(item=>item.id===itemId);
-    if(!leave && !isComplete(itemStatus(r,item)) && !['blocked','needs-fixes'].includes(itemStatus(r,item))) { $('unfinished-choice').hidden=false;$('unfinished-choice').scrollIntoView({block:'center'});return; }
-    $('unfinished-choice').hidden=true;
-    const next=nextItem(r,itemId,fixMode?'attention':'all');await navigate(next || itemId,next?'item':'results');
-    } finally { advancing=false; }
-  }
-  $('verify-fix').onclick=async()=>{
-    try {
-      if(!await flush())return;
-      const r=getState().record,item=r.manifest.scenarios.find(item=>item.id===itemId);
-      if(!item.steps.every((_,i)=>r.checks[`${item.id}:${i}`]))return;
-      for(const issue of r.issues.filter(issue=>issue.scenario===item.id && issue.status==='needs-retest'))await api('/api/resolve',{id:r.id,issueId:issue.id,note:r.items?.[item.id]?.notes?.trim() || 'Verified the latest fix using Before fix / After fix and completed this item’s checklist.'});
+    if(!leave && itemStatus(r,item)==='ready-to-retest' && item.steps.every((_,i)=>r.checks[`${item.id}:${i}`])) {
+      for(const issue of r.issues.filter(issue=>issue.scenario===item.id && issue.status==='needs-retest'))await api('/api/resolve',{id:r.id,issueId:issue.id,note:r.items?.[item.id]?.notes?.trim() || 'Verified the fix in both previews and completed the checklist.'});
       await poll();
-    }catch(e){error(e.message);}
-  };
+    }
+    if(!leave && !isComplete(itemStatus(getState().record,item)) && !['blocked','needs-fixes'].includes(itemStatus(r,item))) { $('unfinished-choice').hidden=false;$('unfinished-choice').scrollIntoView({block:'center'});return; }
+    $('unfinished-choice').hidden=true;
+    const next=following(getState().record);await navigate(next || itemId,next?'item':'results');
+    } catch(e){error(e.message);} finally { advancing=false;render(getState()); }
+  }
+  $('verify-fix').onclick=()=>advance();
   $('item-next').onclick=()=>advance();
-  $('item-search').oninput=$('item-filter').onchange=()=>render(getState());
+  $('item-search').oninput=()=>render(getState());
+  $('item-filter').onchange=()=>{fixMode=$('item-filter').value==='attention';render(getState());};
   $('leave-unfinished').onclick=()=>advance(true);
   $('keep-testing').onclick=()=>{$('unfinished-choice').hidden=true;};
   $('item-previous').onclick=()=>{const r=getState().record,items=r.manifest.scenarios,index=items.findIndex(item=>item.id===itemId),previous=items.slice(0,index).findLast(item=>!fixMode || matchesItem(r,item,'','attention'));if(previous)void navigate(previous.id);};
@@ -106,7 +106,9 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const displayRecord=dirty?{...r,items:{...r.items,[itemId]:draft()}}:r;
     const currentStatus=itemStatus(displayRecord,current);
     $('guided-item').hidden=results;$('guided-results').hidden=!results;
-    $('fix-mode-note').hidden=!fixMode;
+    $('fix-mode-note').hidden=$('item-filter').value!=='attention';
+    $('retry-item-save').hidden=!dirty;
+    if(isComplete(currentStatus))$('unfinished-choice').hidden=true;
     $('review-fixes').textContent=`Review fixes (${counts['ready-to-retest']+counts['needs-fixes']+counts.blocked})`;
     $('review-fixes').disabled=!enabled || !(counts['ready-to-retest']+counts['needs-fixes']+counts.blocked);
     $('item-reason-wrap').hidden=!$('item-outcome').value;
@@ -117,6 +119,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const retests=r.issues.filter(issue=>issue.scenario===current.id && issue.status==='needs-retest');
     $('latest-fix').hidden=!retests.length;
     $('latest-fix-expected').textContent=retests.map(issue=>issue.expected).join('\n');
+    $('verify-fix').hidden=true;
     $('verify-fix').disabled=!enabled || currentStatus!=='ready-to-retest' || !current.steps.every((_,i)=>r.checks[`${current.id}:${i}`]);
     $('item-status').textContent=statusLabels[currentStatus]+(dirty?' · unsaved':'');$('item-status').className=`item-status status-${currentStatus}`;
     $('queue-progress').textContent=`${counts.complete} of ${counts.total} complete`;
@@ -145,7 +148,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     $('prepare-handoff').hidden=canApprove(r) || !(counts['needs-fixes']+counts.blocked);
     if($('prepare-handoff').hidden)$('handoff-panel').hidden=true;
     $('results-message').hidden=canApprove(r);
-    $('item-next').textContent=nextItem(r,itemId,fixMode?'attention':'all')?(fixMode?'Next fix →':'Next item →'):'Review results →';
+    $('item-next').textContent=currentStatus==='ready-to-retest'?'Verify fix and next →':following(r)?'Next item →':isComplete(currentStatus)?'Review summary →':'Finish item →';
   }
   return {render,flush,navigate};
 }
