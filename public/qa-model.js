@@ -12,6 +12,6 @@ export function qaState(record){
 }
 export function qaReviews(records){
   const latest=new Map();
-  for(const record of records){const key=record.reviewRootId || record.identity.ref;latest.set(key,record);}
+  for(const record of records){const root=records.find(candidate=>candidate.id===record.reviewRootId);const key=root?.identity.ref || record.identity.ref;latest.set(key,record);}
   return [...latest.values()].filter(record=>record.qaSubmission).reverse().map(record=>({id:record.id,title:record.reviewTitle || record.manifest.title || record.title,ref:record.identity.ref,commit:record.identity.changed,updatedAt:record.updatedAt,status:qaState(record).status,ready:qaState(record).ready,delivered:['pushed','deploying','published','verified'].includes(record.delivery?.stage)}));
 }
