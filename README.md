@@ -4,6 +4,10 @@ A local desktop workspace for reviewing changes in Git projects: choose a branch
 
 **[Download the Windows beta](https://github.com/joshrice171723-creator/branch-review/releases/tag/v0.6.0)** · [Installation guide](INSTALL.md) · [Run from source](#get-started)
 
+![Branch Review showing the Changed version of a disposable Field Notes demo and its guided review checklist](docs/screenshots/field-notes-review.png)
+
+Actual Electron screenshot from the October 17, 2026 disposable Field Notes acceptance run: a blue button changed to pink, with the review checklist alongside it. The notes fields are empty and the project contains no patient records. This is a historical capture, not a mockup or a claim that the current live review passed. Current controls may differ. See the [capture procedure](test/renderer-smoke.cjs) and [recorded distribution evidence](DISTRIBUTION_AUDIT.md).
+
 ## Status and engineering
 
 Active development. The public Windows 0.6.0 beta is unsigned and is an older snapshot than the current source. There is no hosted browser demo: previews run locally against a trusted Git project. Signing, automatic updates and clean-machine distribution acceptance remain separate work; see [distribution evidence](DISTRIBUTION_AUDIT.md).
