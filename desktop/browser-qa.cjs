@@ -9,6 +9,11 @@ async function runBrowserQa({run,record,origin,report,isCancelled,onWindow}){
   onWindow(browser);browser.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   browser.webContents.on('will-navigate',(event,url)=>{if(new URL(url).origin!==origin)event.preventDefault();});
   const check=()=>{if(isCancelled()||browser.isDestroyed())throw Error('Browser QA cancelled.');};
+  const capture=async()=>{
+    // A hidden window can retain its first frame until a capture wakes its compositor.
+    for(let frame=0;frame<3;frame++){await browser.webContents.capturePage({}, {stayHidden:true,stayAwake:true});await pause(500);check();}
+    return (await browser.webContents.capturePage({}, {stayHidden:true,stayAwake:true})).toDataURL();
+  };
   let currentItem,lastStatus=200,unverified=false;
   browser.webContents.on('did-navigate',(_event,_url,status)=>{lastStatus=status;});
   try{
@@ -31,9 +36,9 @@ async function runBrowserQa({run,record,origin,report,isCancelled,onWindow}){
         if(!result?.ok)throw Error(result?.message || 'Expected page state did not appear.');
         await pause(200);check();
         unverified ||= !!result.skipped;
-        await report({index,passed:!result.skipped,...(result.skipped?{skipped:true}:{}),message:result.message,screenshot:(await browser.webContents.capturePage()).toDataURL()});
+        await report({index,passed:!result.skipped,...(result.skipped?{skipped:true}:{}),message:result.message,screenshot:await capture()});
       }catch(error){
-        if(!isCancelled()&&!browser.isDestroyed())await report({index,passed:false,message:error.message,screenshot:(await browser.webContents.capturePage()).toDataURL()});
+        if(!isCancelled()&&!browser.isDestroyed())await report({index,passed:false,message:error.message,screenshot:await capture()});
         throw error;
       }
     }
