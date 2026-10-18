@@ -375,6 +375,7 @@ async function poll() {
     const ready = currentState.status === "ready";
     const previewReady=ready || currentState.status==='preview-ready';
     pendingChecks.hidden=currentState.status!=='preview-ready';
+    $('change-composer').hidden=currentState.status==='preview-ready';
       const publishing=currentState.busy && currentState.record?.delivery?.stage==='deploying';
       const release=currentState.record?.delivery;
       $('publish-progress').hidden=!publishing;
