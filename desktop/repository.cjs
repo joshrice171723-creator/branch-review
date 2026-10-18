@@ -1,7 +1,8 @@
+const path=require('node:path');
 async function chooseRepository({dialog,window,exec,detectProject,repository}){
   const show=(method,options)=>dialog[method](...(window?[window,options]:[options]));
   for(;;){
-    const choice=await show('showOpenDialog',{title:'Choose a local Git project',properties:['openDirectory'],...(repository?{defaultPath:repository}:{})});
+    const choice=await show('showOpenDialog',{title:'Choose a local Git project',properties:['openDirectory'],...(repository?{defaultPath:path.resolve(repository)}:{})});
     if(choice.canceled)return null;
     try{
       const repository=(await exec('git',['rev-parse','--show-toplevel'],{cwd:choice.filePaths[0],windowsHide:true})).stdout.trim();

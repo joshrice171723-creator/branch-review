@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import {setupChecks} from '../setup-checks.mjs';
 import repository from '../desktop/repository.cjs';
 const options=()=>({git:async()=> 'configured',run:async()=> 'git version',defaultBranch:async()=> 'main',project:{kind:'vite'},recipe:async()=>null,agent:{provider:'codex'},probe:async()=>({status:'ready',message:'Signed in'}),npm:async()=>'/npm.js'});
@@ -28,6 +29,6 @@ test('switch project starts in the current repository; first run keeps the syste
  const dialog={showOpenDialog:async(...args)=>{shown.push(args.at(-1));return {canceled:true};}};
  await repository.chooseRepository({dialog,window,repository:'C:/projects/current'});
  await repository.chooseRepository({dialog});
- assert.equal(shown[0].defaultPath,'C:/projects/current');
+ assert.equal(shown[0].defaultPath,path.resolve('C:/projects/current'));
  assert.equal(Object.hasOwn(shown[1],'defaultPath'),false);
 });
