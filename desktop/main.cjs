@@ -85,7 +85,7 @@ async function launch() {
     }
   }
   const {state:runtimeState}=await import(pathToFileURL(path.join(root,'adapter.mjs')).href);
-  runtimeState.automaticQa=true;
+  runtimeState.automaticQa=false;
   let qaWindow,qaCancelled=false,qaTask,qaStarting=false;
   async function startQa(input){
     if(qaTask || qaStarting)throw Error('A browser run is already active.');
@@ -100,18 +100,6 @@ async function launch() {
     }finally{qaStarting=false;}
   }
   ipcMain.handle('review:browser-qa',async(event,input)=>{trusted(event);return startQa(input);});
-  const autoAttempts=new Set();
-  setInterval(async()=>{
-    if(qaStarting || qaTask || closing)return;
-    let reviewId;
-    try{
-      const state=await fetch(origin+'/api/state').then(r=>r.json()),record=state.record;
-      if(state.status!=='ready' || state.busy || state.jobsRunning || !record || record.delivery || autoAttempts.has(record.id) || record.browserQa?.some(run=>run.automatic))return;
-      reviewId=record.id;
-      await startQa({id:record.id,automatic:true});
-      autoAttempts.add(record.id);
-    }catch(error){if(error.retryable)return;if(reviewId)autoAttempts.add(reviewId);runtimeState.error='Automatic QA could not start: '+error.message;}
-  },1000).unref();
   ipcMain.handle('review:stop-browser-qa',event=>{trusted(event);qaCancelled=true;if(qaWindow&&!qaWindow.isDestroyed())qaWindow.close();});
   ipcMain.handle('review:show-browser-qa',async event=>{trusted(event);const state=await fetch(origin+'/api/state').then(r=>r.json());if(!state.record?.browserQa?.some(run=>run.id===runtimeState.browserQaWindowRunId))throw Error('This review has no active QA browser. Open its saved evidence in Details.');if(qaWindow&&!qaWindow.isDestroyed()){qaWindow.show();qaWindow.focus();}});
   ipcMain.handle('review:choose-repository', async event => {

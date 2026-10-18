@@ -1,3 +1,4 @@
+import {canApprove} from './public/review-model.js';
 import {randomUUID} from 'node:crypto';
 import {mkdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
@@ -16,12 +17,13 @@ export function browserChecks(manifest,steps=[]){
     return {itemId:step.itemId,action:step.action,selector:step.selector,...(step.value!==undefined?{value:step.value}:{}),...(step.property?{property:step.property}:{})};
   });
 }
-export async function beginBrowserQa(store,record,steps,automatic=false){
-  if(automatic){const previous=record.browserQa?.find(run=>run.automatic && run.commit===record.identity.changed);if(previous)return {...previous,reused:true};}
+export async function beginBrowserQa(store,record,steps,automatic=false,submitted=false){
+  if(submitted && !canApprove(record))throw Error('Finish your guided review and resolve findings before sending to QA.');
+  if(automatic && !submitted){const previous=record.browserQa?.find(run=>run.automatic && run.commit===record.identity.changed);if(previous)return {...previous,reused:true};}
   if(store.records.some(r=>r.browserQa?.some(run=>run.status==='running')))throw Error('A browser check is already running.');
   const actions=automatic?steps:browserChecks(record.manifest,steps);
   const run={id:randomUUID(),commit:record.identity.changed,status:'running',startedAt:new Date().toISOString(),automatic,mode:actions.some(step=>step.action!=='visit')?'assertions':'page-smoke',actions,results:[]};
-  (record.browserQa ||= []).push(run);await store.event(record,'browser-qa-started',{runId:run.id,commit:run.commit});return run;
+  (record.browserQa ||= []).push(run);if(submitted)record.qaSubmission={commit:run.commit,runId:run.id,sentAt:run.startedAt};await store.event(record,'browser-qa-started',{runId:run.id,commit:run.commit});return run;
 }
 export async function browserQaResult(store,local,record,data){
   const run=record.browserQa?.find(run=>run.id===data.runId);

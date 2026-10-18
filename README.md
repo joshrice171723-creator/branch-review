@@ -11,9 +11,9 @@ Windows users: download the installer and follow [Install Branch Review](INSTALL
 3. The first-run **Set up your project** guide checks Git, your remote/default branch, commit identity, previews and your chosen agent. Resolve any flagged items, choose **Check again**, then **Start reviewing**. Reopen the guide from the **Settings** toolbar icon. Existing reviews stay available without repeating setup.
 4. Choose a branch, or **Make changes** to start a new change from the remote default branch. The summary appears immediately; the combined result against the remote default branch, checklist and isolated previews prepare before QA.
 5. Compare Original and Changed. Select an item or Next to open its screen, record observations and report problems.
-   To request a change, type in **What would you like to change?** beside the preview and click **Make changes**. The current page, version and cropped preview screenshot accompany the request. Drafts stay with their review. The separate **Review checklist** toolbar control edits testing instructions.
+   To request a change, right-click the affected area, describe what you want and click **Make changes**. The current page, version and cropped preview screenshot accompany the request. Drafts stay with their review. The separate **Review checklist** toolbar control edits testing instructions.
 6. Send findings through **Updates & fixes**. Codex edits an isolated checkout; the host validates and commits the result. **Review fix** returns to the same review group with Before fix / After fix and unresolved findings ready to retest.
-7. Approve the candidate and merge/push. Protected repositories can use **Workspace > Delivery > Create pull request**, with an authenticated GitHub CLI.
+7. Finish the guided review, then choose **Send to QA**. Testing runs in the background. Open the flask-shaped **QA** icon to inspect results, approve a passed version, merge/push, and publish. Protected repositories can use **Workspace > Delivery > Create pull request**, with an authenticated GitHub CLI.
 
 ## Any project's setup
 
@@ -31,22 +31,11 @@ Native/mobile apps and headless tools need an appropriate web harness to use the
 
 ## Activity and browser QA
 
-The compact strip above the preview shows agent work, preparation, browser checks and readiness. **Details** opens existing Activity logs and screenshot evidence. **Watch** brings the current QA browser forward; it never steals focus automatically. After checks finish, a short handoff distinguishes automated assertions, pages opened and items still needing human review.
+The compact strip above the preview shows work and readiness. The **QA** navigation icon opens a full-page workspace with results and delivery controls. Logs stay under Technical details. **Watch browser** brings the current QA browser forward; it never steals focus automatically.
 
-The desktop automatically checks each newly opened review once. It opens checklist routes in a separate browser and checks simple changed CSS colors or corner radii on the active affected screen when the selector is unambiguous. Conditional styles and unsupported behavior remain human checks. Missing selectors are unverified, not passes. Failed checks become existing review findings with screenshots, available to the same agent fix handoff. Interrupted runs stay interrupted; use **Run browser checks** in Activity to retry deliberately.
+Opening a branch does not start QA. Complete your guided review and resolve findings, then choose **Send to QA**. You remain in Review while testing runs. The QA icon opens a separate page; Back to review preserves your preview. Its badge counts passed, current submitted reviews awaiting delivery. Superseded versions and old automatic runs do not count. The runner opens checklist routes and checks simple changed CSS properties on the active affected screen. Missing selectors remain unverified. Failed checks become findings with screenshots. Use **Run QA again** to retry deliberately.
 
-**Activity** shows jobs and browser runs with running indicators, logs, commit identity and screenshots. **Stop job** stops an active agent/check process and preserves saved work; Git finalization cannot be interrupted there. **Run browser checks** opens a separate browser you can watch and stop. Its default visit checks prove checklist screens render; they do not prove every requirement passes.
-
-Expand Browser actions for behavior checks using actual checklist item IDs. Supported actions: visit, click, fill, text, style. Selectors must match exactly one visible control.
-
-```json
-[
-  {"itemId":"tutorial-button","action":"visit","path":"/tutorials"},
-  {"itemId":"tutorial-button","action":"style","selector":"#try-tutorials","property":"background-color","value":"rgb(37, 99, 235)"},
-  {"itemId":"tutorial-button","action":"click","selector":"#try-tutorials"},
-  {"itemId":"tutorial-button","action":"text","selector":"#try-tutorials","value":"Sandbox opened"}
-]
-```
+The QA boxes show waiting, checking, passed, failed or unverified states. Select a box for evidence. The page states its coverage: page checks prove screens render, not that every requirement passes. The current run pins its preview; switching projects or replacing the runtime requires completing or stopping QA. You can return to the existing review without stopping it.
 
 Evidence is ordered and pinned to the reviewed commit. Missing or interrupted results cannot become passes. Browser results do not approve manual items. General autonomous behavior discovery and generic hosted QA are not implemented. Muse hosted QA remains part of the optional Meta Clinic integration.
 

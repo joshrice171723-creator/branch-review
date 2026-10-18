@@ -23,7 +23,7 @@ const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>act
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
-const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate});
+const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('preview-area').append($('change-composer'));
 $('new-change').onclick=()=>reviewTools.requestChange();

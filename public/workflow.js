@@ -109,6 +109,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   $('results-action').onclick=async()=>{
     const state=getState(),r=state.record;
     if(delivering || approving || state.busy)return;
+    if(!['published','verified'].includes(r.delivery?.stage) && canApprove(r)){window.dispatchEvent(new Event('review:send-qa'));return;}
     if(state.publishTarget===null && r.approval){if(r.delivery?.stage==='pushed')return;return $('ship').click();}
     if(['published','verified'].includes(r.delivery?.stage)){try{await api('/api/published-review',{id:r.id,action:'start'});await window.desktop.openPublished(state.publishTarget+'/qa?view=office');}catch(e){error(e.message);}return;}
     if(canApprove(r) && r.approval && r.integration?.sha===r.identity.changed && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(r.delivery?.stage)){

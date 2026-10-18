@@ -1,3 +1,4 @@
+import {qaState,qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
 import {npmEntry} from './web-project.mjs';
 import http from 'node:http';
@@ -223,13 +224,14 @@ async function mutate(endpoint, data) {
     await access(data.keyPath); await access(data.recoveryDirectory); await writeFile(path.join(local,'release.json'),JSON.stringify({keyPath:data.keyPath,recoveryDirectory:data.recoveryDirectory})); return;
   }
   const record = await active(data.id, ['/api/approve','/api/ship','/api/publish','/api/candidate','/api/browser-qa','/api/project-deploy','/api/pull-request'].includes(endpoint));
+  if(['/api/approve','/api/ship','/api/publish','/api/project-deploy','/api/pull-request'].includes(endpoint) && !qaState(record).ready)throw Error('Send this version to QA and resolve its checks before approving or delivering it.');
   if(endpoint==='/api/pull-request')return createReviewPr(record,{delivery,git,run,store,local,repo,defaultBranch});
   if(endpoint==='/api/project-deploy')return deployProject(record,{local,cwd:state.changed.directory,run,git,store,defaultBranch,confirmation:data.confirmation});
   if(endpoint==='/api/project-deploy-retry'){
     if(record.projectDeployment?.status!=='needs-inspection'||typeof data.note!=='string'||data.note.trim().length<10)throw Error('Describe your inspection of the failed deployment first.');
     await store.event(record,'project-deployment-retry',{previous:record.projectDeployment,note:data.note.slice(0,2000)});delete record.projectDeployment;await store.persist();return;
   }
-  if(endpoint==='/api/browser-qa')return beginBrowserQa(store,record,data.automatic===true?await automaticBrowserChecks(git,record):data.steps,data.automatic===true);
+  if(endpoint==='/api/browser-qa')return beginBrowserQa(store,record,data.automatic===true || data.submit===true?await automaticBrowserChecks(git,record):data.steps,data.automatic===true || data.submit===true,data.submit===true);
   if(endpoint==='/api/browser-qa-result')return browserQaResult(store,local,record,data);
   if(endpoint==='/api/plan'){
     if(jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running job before editing the plan.');
@@ -309,8 +311,9 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,groupedBranches(await branches(),jobs.rows,store.records));
+    if(req.method==='GET' && url.pathname==='/api/qa-review')return json(res,200,store.get(url.searchParams.get('id')));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
     if(req.method==='GET' && url.pathname==='/api/project-settings')return json(res,200,await readRecipe(local));
@@ -353,7 +356,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/visual-office.js','/progress-model.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312 http://127.0.0.1:4313; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
