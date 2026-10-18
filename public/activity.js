@@ -1,3 +1,4 @@
+import {visualOffice} from './visual-office.js';
 import {reviewProgress} from './progress-model.js';
 import {officeItems} from './office-model.js';
 const node=(tag,text)=>{const element=document.createElement(tag);element.textContent=text;return element;};
@@ -11,7 +12,9 @@ export function activity({api,getState,navigate}){
   aside.prepend(panel);const find=selector=>panel.querySelector(selector);
   let lastRuns='',lastJobs='',lastMap='',recordId,refreshing=false;
   const close=()=>{panel.hidden=true;aside.classList.remove('office-open');};
-  const open=()=>{panel.hidden=false;aside.classList.add('office-open');aside.scrollTop=0;void render();find('[data-close]').focus();};
+  const details=()=>{panel.hidden=false;aside.classList.add('office-open');aside.scrollTop=0;void render();};
+  const office=visualOffice({getState,navigate,details,start:()=>find('[data-start]').onclick()});
+  const open=()=>{office.open();};
   const select=async id=>{await navigate(id);close();};
   button.onclick=open;strip.querySelector('[data-details]').onclick=open;find('[data-close]').onclick=close;
   const watch=()=>window.desktop?.showBrowserQa();strip.querySelector('[data-watch]').onclick=watch;find('[data-watch]').onclick=watch;
@@ -27,6 +30,7 @@ export function activity({api,getState,navigate}){
     const watchable=!!progress.run && progress.run.id===state.browserQaWindowRunId && !state.jobsRunning && !progress.awaitingReview;
     strip.querySelector('[data-watch]').hidden=!watchable;
     button.classList.toggle('working',progress.working);button.dataset.tooltip='Office — work and QA';button.setAttribute('aria-label','Office — work and QA');
+    office.render(state,progress);
     if(panel.hidden)return;
     if(recordId!==record?.id){recordId=record?.id;find('[data-actions]').value='';lastMap='';}
     panel.classList.toggle('working',progress.working);find('[data-status]').textContent=progress.label;

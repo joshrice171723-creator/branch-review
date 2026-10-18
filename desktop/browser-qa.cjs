@@ -5,7 +5,7 @@ async function runBrowserQa({run,record,origin,report,isCancelled,onWindow}){
   const partition=`qa-${run.id}`,isolated=session.fromPartition(partition);
   isolated.setPermissionRequestHandler((_wc,_permission,callback)=>callback(false));
   isolated.webRequest.onBeforeRequest((details,callback)=>callback({cancel:details.resourceType==='mainFrame' && new URL(details.url).origin!==origin}));
-  const browser=new BrowserWindow({title:'Branch Review · Browser QA',width:1200,height:850,show:!run.automatic,webPreferences:{partition,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,backgroundThrottling:false}});
+  const browser=new BrowserWindow({title:'Branch Review · Browser QA',width:1200,height:850,show:false,webPreferences:{partition,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,backgroundThrottling:false}});
   onWindow(browser);browser.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   browser.webContents.on('will-navigate',(event,url)=>{if(new URL(url).origin!==origin)event.preventDefault();});
   const check=()=>{if(isCancelled()||browser.isDestroyed())throw Error('Browser QA cancelled.');};
@@ -41,7 +41,11 @@ async function runBrowserQa({run,record,origin,report,isCancelled,onWindow}){
   }catch(error){await report({finish:isCancelled()||browser.isDestroyed()?'cancelled':'failed',error:error.message});}
 }
 function browserAction(step){
-  if(step.action==='visit')return document.body?.innerText.trim()?{ok:true,message:'Page rendered. Behavior still requires its checklist.'}:{ok:false,retry:true,message:'Page has no visible text.'};
+  if(step.action==='visit'){
+    const text=document.body?.innerText.trim() || '';
+    if(document.readyState!=='complete' || !text || /^(?:loading(?: this)? page\b|(?:loading|please wait)[. …!]*$)/i.test(text))return {ok:false,retry:true,message:'Waiting for page content to finish loading.'};
+    return {ok:true,message:'Page rendered. Behavior still requires its checklist.'};
+  }
   const matches=document.querySelectorAll(step.selector);
   if(matches.length!==1)return step.optional?{ok:true,skipped:true,message:`Needs human review: expected one control; found ${matches.length}.`}:{ok:false,retry:matches.length===0,message:`Expected one matching control; found ${matches.length}.`};
   const element=matches[0];

@@ -14,3 +14,14 @@ export function officeItems(record){
     return {id:item.id,title:item.title,tone,label:`${evidence} · ${statusLabels[manual]}`};
   });
 }
+export function officeChecks(record){
+  if(!record)return [];
+  const run=record.browserQa?.findLast(run=>run.commit===record.identity.changed);
+  if(!run)return record.manifest.scenarios.map(item=>({id:item.id,itemId:item.id,title:item.title,action:'Review',tone:'queued',label:'Not run',path:item.path}));
+  return run.actions.map((action,index)=>{
+    const result=run.results.find(result=>result.index===index),item=record.manifest.scenarios.find(item=>item.id===action.itemId);
+    const active=run.status==='running' && index===run.results.length;
+    const tone=result?.skipped?'unverified':result?.passed?'passed':result?.passed===false?'failed':active?'checking':run.status==='running'?'queued':'unverified';
+    return {id:run.id+':'+index,itemId:action.itemId,title:item?.title || action.itemId,path:action.path || item?.path,action:action.action==='visit'?'Page load':action.action==='style'?action.property:action.action,tone,label:({queued:'Queued',checking:'Checking',passed:'Passed',failed:'Failed',unverified:'Not verified'})[tone],message:result?.message,screenshot:result?.screenshot,commit:run.commit};
+  });
+}
