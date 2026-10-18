@@ -24,6 +24,7 @@ import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks
 
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false, preparedFix=null;
+let displayDefaultBranch=await defaultBranch().catch(()=>null);
 const store = await new ReviewStore(local).load();
 for(const record of store.records)for(const run of record.browserQa || [])if(run.status==='running'){run.status='interrupted';run.error='The app closed before browser evidence completed.';}
 await store.persist();
@@ -70,7 +71,7 @@ async function readyFix(ref,priorId){
   const cached=preparedFix;
   if(!cached || cached.ref!==ref || cached.priorId!==priorId || state.recordId!==priorId)return null;
   const [source,remote,health,clean]=await Promise.all([
-    git('rev-parse',ref),git('ls-remote','origin','refs/heads/'+await defaultBranch()),
+    git('rev-parse',ref),defaultBranch().then(branch=>{displayDefaultBranch=branch;return git('ls-remote','origin','refs/heads/'+branch);}),
     previewHealth({...cached,status:'ready'},fetch,webHealthy),
     Promise.all([cached.original,cached.changed].map(async preview=>{
       const cwd=path.join(previewRoot,preview.runtime);
@@ -81,12 +82,20 @@ async function readyFix(ref,priorId){
   if(source===cached.selected.branch.sha && remote.split(/\s/)[0]===cached.integration.main && clean.every(Boolean) && Object.values(health.sides).every(side=>side.ok))return cached;
   preparedFix=null;return null;
 }
-async function startCandidate(ref, previousReviewId) {
+async function startCandidate(ref, previousReviewId, expectedCommit) {
   if(project.error)throw Error(project.error);
   if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
-  const warmed=await readyFix(ref,previousReviewId).catch(()=>null);
+  const checking=readyFix(ref,previousReviewId);
+  const sourceCheck=expectedCommit?git('rev-parse',ref).then(sha=>{if(sha!==expectedCommit)throw Error('Choose an unchanged, committed fix job before retesting.');}):Promise.resolve();
+  const pending=preparedFix;
+  if(pending && pending.ref===ref && pending.priorId===previousReviewId && state.recordId===previousReviewId){
+    Object.assign(state,{status:'preview-ready',recordId:null,comparison:pending.combined,integration:pending.integration,original:pending.original,changed:pending.changed,
+      manifest:{...pending.combined.plan,scenarios:[pending.item,...pending.combined.plan.scenarios.filter(item=>item.id!==pending.item.id)]}});
+    progress('Checking GitHub main, clean checkouts and running previews');
+  }
+  const [warmed]=await Promise.all([checking.catch(()=>null),sourceCheck]);
   if(!warmed)preparedFix=null;
-  state.status='preparing';state.recordId=null;state.manifest=null;progress(warmed?'Opening your prepared review':'Checking changes against the remote default branch');
+  state.status=warmed?'preview-ready':'preparing';state.recordId=null;if(!warmed)state.manifest=null;progress(warmed?'Opening your prepared review':'Checking changes against the remote default branch');
   const selected=warmed?.selected || await comparison(ref,'main');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
   const integration=warmed?.integration || await delivery.prepare(ref,selected.branch.sha,previous);
@@ -97,7 +106,7 @@ async function startCandidate(ref, previousReviewId) {
   if(prior){combined.base=prior.identity.changed;combined.baseline='commit';combined.baselineCommit=prior.identity.changed;combined.fixReview={previousId:prior.id,files:fixFiles};}
   if(!combined.files.length)throw Error('This branch has no application changes left to review against the remote default branch. Its old checklist is no longer part of the code.');
   const planKey=prior?digest({before:prior.identity.changed,after:integration.sha}):integration.sha;
-  state.manifest=prior?{...prior.manifest,scenarios:[...prior.manifest.scenarios].sort((a,b)=>Number(b.id===prior.cursor?.itemId)-Number(a.id===prior.cursor?.itemId))}:combined.plan;
+  if(!warmed)state.manifest=prior?{...prior.manifest,scenarios:[...prior.manifest.scenarios].sort((a,b)=>Number(b.id===prior.cursor?.itemId)-Number(a.id===prior.cursor?.itemId))}:combined.plan;
   if(warmed){Object.assign(state,{comparison:combined,integration,original:warmed.original,changed:warmed.changed});}
   else combined.plan=await prepareTogether(
     async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior});if(state.status==='error')throw Error(state.error);},
@@ -195,14 +204,15 @@ async function mutate(endpoint, data) {
   if(project.kind!=='meta-clinic' && ['/api/publish','/api/retry-muse','/api/release-settings','/api/published-review','/api/smoke'].includes(endpoint))throw Error('Publishing is not configured for this project. Use your existing delivery process.');
   if(endpoint==='/api/tools-settings'){if(typeof data.autoPlan!=='boolean')throw new Error('Choose whether to generate plans automatically.');const next={autoPlan:data.autoPlan};await writeFile(path.join(local,'tools-settings.json'),JSON.stringify(next));toolsSettings=next;return next;}
   if (endpoint === '/api/start') {
-    let prior;
+    let prior,expectedCommit;
     const fixJob=data.fixJob || jobs.rows.findLast(row=>row.branch && data.ref==='refs/heads/'+row.branch && row.status==='succeeded')?.id;
     if(fixJob){
       const job=jobs.rows.find(row=>row.id===fixJob && row.kind==='fix' && row.status==='succeeded');
-      if(!job || data.ref!=='refs/heads/'+job.branch || await git('rev-parse',data.ref)!==job.resultCommit)throw new Error('Choose an unchanged, committed fix job before retesting.');
+      if(!job || data.ref!=='refs/heads/'+job.branch)throw new Error('Choose an unchanged, committed fix job before retesting.');
+      expectedCommit=job.resultCommit;
       if(job.reviewId)prior=store.get(job.reviewId);
     }
-    await startCandidate(data.ref,prior?.id);return;
+    await startCandidate(data.ref,prior?.id,expectedCommit);return;
   }
   if (endpoint === '/api/stop') return stopReview();
   if (endpoint === '/api/fetch') return git('fetch','origin');
@@ -298,7 +308,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaRunning:qaRunning(),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:await defaultBranch().catch(()=>null),record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaRunning:qaRunning(),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,groupedBranches(await branches(),jobs.rows,store.records));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));
@@ -338,7 +348,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
       busy=true;
       let data; try { data=await body(req); } catch(error) { busy=false; throw error; }
       state.error=null;
-      const operation=async()=>{try {return await mutate(url.pathname,data);}catch(error){state.error=error.message;if(state.status==='preparing'||state.status==='stopping') state.status='error';throw error;}finally{busy=false;}};
+      const operation=async()=>{try {return await mutate(url.pathname,data);}catch(error){state.error=error.message;if(['preparing','stopping','preview-ready'].includes(state.status)) state.status='error';throw error;}finally{busy=false;}};
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }

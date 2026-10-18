@@ -7,7 +7,7 @@ import { reviewShortcut, refreshedSelection, selectedReviewState } from './short
 import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
-const pendingChecks=document.createElement('p');pendingChecks.setAttribute('role','status');pendingChecks.hidden=true;pendingChecks.textContent='Your preview is ready. You can compare both versions while the checklist finishes. Review and approval will unlock when it is ready.';$('review-branch-status').before(pendingChecks);
+const pendingChecks=document.createElement('p');pendingChecks.setAttribute('role','status');pendingChecks.hidden=true;pendingChecks.textContent='Your preview is ready. Final checks are running. Review and approval unlock when all checks pass.';$('review-branch-status').before(pendingChecks);
 const openingSummary=document.createElement('p');openingSummary.id='opening-summary';$('phase').before(openingSummary);
 const fixNotice=document.createElement('p');fixNotice.style.cssText='font-size:12px;line-height:1.5;white-space:normal';fixNotice.hidden=true;$('review-branch-status').after(fixNotice);
 const versionHistory=document.createElement('details'),versionHeading=document.createElement('summary'),versionResults=document.createElement('div');versionHeading.textContent='Review history';versionHistory.append(versionHeading,versionResults);versionHistory.hidden=true;fixNotice.after(versionHistory);
@@ -321,7 +321,7 @@ function focusItem(item,sides=['original','changed']) {
   renderFocusStatus();
 }
 function mountFrames(state, force = false) {
-  const item=state.manifest.scenarios.find(s=>s.id===reviewWorkflow.scenario()) || state.manifest.scenarios[0];
+  const item=(state.record && state.manifest.scenarios.find(s=>s.id===reviewWorkflow.scenario())) || state.manifest.scenarios[0];
   const key = `${state.original.sha}:${state.changed.sha}:${item.path}:${item.originalPath || item.path}`;
   if(focusedItem!==item.id && reviewWorkflow.needsNavigation(item))force=true;
   if (frameKey === key && !force) { if(focusedItem!==item.id){focusedItem=item.id;focusItem(item);}return; }
@@ -394,7 +394,7 @@ async function poll() {
         : "");
     $("preview-status").textContent = ready
       ? healthResult?.key===healthKey() && !healthResult.healthy ? 'Needs attention' : "Running"
-      : currentState.status==='preview-ready' ? "Preview ready - preparing checklist" : preparing
+      : currentState.status==='preview-ready' ? "Preview ready - checking" : preparing
         ? currentState.status==='stopping'?'Stopping':"Preparing"
         : currentState.status === "error"
           ? "Needs attention"

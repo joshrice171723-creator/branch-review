@@ -34,7 +34,7 @@ app.whenReady().then(async()=>{
   await writeFile(path.join(output,'receipt.json'),JSON.stringify({...sent,attachment:{...sent.attachment,screenshot:`PNG ${size.width}x${size.height}`}},null,2));
   assert.equal(await js("document.getElementById('change-request').value"),'');
   await js(`(async()=>{globalThis.readyState=await originalFetch('/api/state').then(r=>r.json());globalThis.slowChecklist=true;globalThis.fetch=async(url,options)=>url==='/api/state'?new Response(JSON.stringify(slowChecklist?{...readyState,status:'preview-ready',busy:true,record:null,recordId:null}:readyState),{headers:{'Content-Type':'application/json'}}):originalFetch(url,options);})()`);
-  await wait("document.getElementById('preview-status').textContent.includes('preparing checklist')");
+  await wait("document.getElementById('preview-status').textContent.includes('checking')");
   assert.equal(await js("document.getElementById('frames').hidden"),false);
   assert.equal(await js("document.getElementById('loading').hidden"),true);
   assert.equal(await js("document.getElementById('make-changes').disabled"),true);
