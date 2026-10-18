@@ -23,10 +23,10 @@ const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>act
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
-const activityView=activity({api,getState:()=>currentState});
+const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('new-change').onclick=()=>{$('change-request').focus();$('change-composer').scrollIntoView({block:'nearest'});};
-$('toolbar-agent').onclick=()=>reviewTools.open('updates');
+$('toolbar-agent').onclick=()=>activityView.open();
 const historyDialog=document.createElement('dialog');historyDialog.id='history-dialog';historyDialog.setAttribute('aria-label','Review history');
 historyDialog.innerHTML='<header class="dialog-heading"><h2>Review history</h2><button type="button">Close</button></header>';
 document.body.append(historyDialog);historyDialog.querySelector('button').onclick=()=>historyDialog.close();

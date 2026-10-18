@@ -1,0 +1,8 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {officeItems} from '../public/office-model.js';
+import {reviewProgress} from '../public/progress-model.js';
+const record=()=>({identity:{changed:'new'},manifest:{scenarios:[{id:'button',title:'Blue button',steps:['Check color']}]},issues:[],checks:{},items:{},browserQa:[]});
+test('Office ignores stale tests and keeps page loads distinct from behavior',()=>{const r=record();r.browserQa=[{commit:'old',status:'passed',actions:[{itemId:'button',action:'style'}],results:[{index:0,passed:true}]}];assert.match(officeItems(r)[0].label,/Not automatically verified/);r.browserQa[0].commit='new';r.browserQa[0].actions[0].action='visit';assert.match(officeItems(r)[0].label,/behavior unverified/);assert.equal(officeItems(r)[0].tone,'pending');});
+test('Office shows failed, checking and manually completed states',()=>{const r=record();r.browserQa=[{commit:'new',status:'running',actions:[{itemId:'button',action:'style'}],results:[]}];assert.equal(officeItems(r)[0].tone,'checking');r.browserQa[0].results=[{index:0,passed:false}];assert.equal(officeItems(r)[0].tone,'attention');r.browserQa[0].results=[{index:0,passed:true}];r.browserQa[0].status='passed';assert.equal(officeItems(r)[0].tone,'pending');r.checks['button:0']=true;assert.equal(officeItems(r)[0].tone,'complete');});
+test('clicks and fills are not counted as assertions',()=>{const r=record();r.browserQa=[{commit:'new',status:'passed',actions:['visit','click','fill','text'].map(action=>({itemId:'button',action})),results:[0,1,2,3].map(index=>({index,passed:true}))}];const p=reviewProgress({record:r,status:'ready'});assert.equal(p.assertions,1);assert.equal(p.pages,1);assert.equal(p.pending,1);});

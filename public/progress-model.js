@@ -9,7 +9,7 @@ export function reviewProgress(state,jobs=[],now=Date.now()){
   const failed=run?.results.find(result=>result.passed===false);
   const next=record?.manifest.scenarios.find(item=>item.id===run?.actions[failed?.index]?.itemId) || pending.find(item=>item.id===current?.id) || pending[0];
   const pages=run?.results.filter(result=>result.passed && run.actions[result.index]?.action==='visit').length || 0;
-  const assertions=run?.results.filter(result=>result.passed && run.actions[result.index]?.action!=='visit').length || 0;
+  const assertions=run?.results.filter(result=>result.passed && ['text','style','url','visible'].includes(run.actions[result.index]?.action)).length || 0;
   const unverified=run?.results.filter(result=>result.skipped).length || 0;
   const result={label:'Choose a change',detail:'',working:false,run,next,pending:pending.length,pages,assertions,unverified};
   if(state.error)return {...result,label:'Needs attention',detail:state.error};

@@ -264,7 +264,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('retry-publish').disabled=!enabled;
     void history(state);
   }
-  return {render, viewChanged, flush:guide.flush, needsNavigation,
+  return {render, viewChanged, flush:guide.flush, navigate:guide.navigate, needsNavigation,
     attachScreenshot(data,notes=''){screenshot=data;screenshotKey=currentKey();screenshotContext=contexts[getSide()];$('attachment').src=data;$('attachment').hidden=false;$('remove-attachment').hidden=false;if(notes){$('actual').value=[$('actual').value,notes].filter(Boolean).join('\n');saveFindingDraft();}$('finding-form').closest('details').open=true;if($('problem-dialog')?.showModal && !$('problem-dialog').open)$('problem-dialog').showModal();$('finding-form').scrollIntoView({block:'start'});},
     attachVideo(data){video=data;videoKey=currentKey();$('video-attachment').src=data;$('video-attachment').hidden=false;$('remove-attachment').hidden=false;$('finding-form').closest('details').open=true;if($('problem-dialog')?.showModal && !$('problem-dialog').open)$('problem-dialog').showModal();$('finding-form').scrollIntoView({block:'start'});},
     getContext:side=>contexts[side] || {}, resetContexts:()=>{contexts.original={};contexts.changed={};clearScreenshot();}, scenario:()=>scenario, context:(side,data)=>{contexts[side]={location:String(data.location||'').slice(0,700),heading:String(data.heading||'').slice(0,160),anchor:String(data.anchor||'').slice(0,160),errors:Array.isArray(data.errors)?data.errors.slice(-10):[]};}};

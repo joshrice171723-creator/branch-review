@@ -882,3 +882,22 @@ dialog::backdrop {background:#152c2b80}
 @keyframes work-pulse{50%{box-shadow:0 0 0 4px #28745c22}}
 @media(prefers-reduced-motion:reduce){#work-progress.working .work-light{animation:none}}
 #review-handoff{font-size:12px;line-height:1.6;padding:10px 12px;background:#edf4ec;border-left:3px solid #3d705b;margin:0 0 16px}
+.review.office-open > :not(#activity-dialog){display:none!important}
+#activity-dialog{width:100%;box-sizing:border-box;overflow-wrap:anywhere}
+#activity-dialog[hidden]{display:none}
+#activity-dialog h2{margin:0;font-size:24px}
+#activity-dialog h3{font-size:15px;margin:22px 0 8px}
+#activity-dialog .dialog-heading{display:flex;align-items:center;gap:12px;justify-content:space-between}
+#activity-dialog [data-status]{display:flex;align-items:center;gap:8px;font-weight:600}
+#activity-dialog [data-status]::before{content:'';width:9px;height:9px;border-radius:50%;background:#718577;flex-shrink:0}
+#activity-dialog.working [data-status]::before{background:#28745c;animation:work-pulse 1.4s ease-in-out infinite}
+#activity-dialog details{margin-top:20px}
+#activity-dialog .office-map{display:grid;gap:8px}
+#activity-dialog .office-tile{display:grid;text-align:left;gap:6px;border-left:4px solid #9cae9e;width:100%;font:inherit}
+#activity-dialog .office-tile span{font-size:12px}
+#activity-dialog .office-tile.attention{border-left-color:#b95431;background:#fff4eb}
+#activity-dialog .office-tile.checking{border-left-color:#26749c;background:#edf6fb}
+#activity-dialog .office-tile.complete{border-left-color:#28745c;background:#eaf4ec}
+#activity-dialog img{max-height:none;max-width:100%;height:auto}
+#activity-dialog pre{max-height:300px;overflow:auto;font-size:11px}
+@media(prefers-reduced-motion:reduce){#activity-dialog.working [data-status]::before{animation:none}}
