@@ -431,7 +431,7 @@ async function poll() {
     const previousReview=currentState.record?.id;
     currentState = selectedReviewState(await api("/api/state"),openingSelection);
     if (previousBusy && !currentState.busy && currentState.status === "ready" && !currentState.error) error("");
-    if(openingSelection && currentState.record && currentState.status==='ready' && !currentState.busy){openingSelection=null;try{sessionStorage.removeItem('branch-review:opening');}catch{}}
+    if(openingSelection && currentState.record && currentState.status==='ready' && !currentState.busy){openingSelection=null;branchVisibility=false;try{sessionStorage.removeItem('branch-review:opening');localStorage.setItem('branch-review:branches-visible','false');}catch{}}
     token = currentState.token;
     previews.preload(currentState.preparedReview);
     $('project-name').textContent=$('preview-project-name').textContent=currentState.project?.name || 'Project';
