@@ -49,6 +49,7 @@ const exists = async (p) =>
 
 export function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    if (process.platform === 'win32' && command === 'git') args = ['-c', 'core.longpaths=true', ...args];
     const child = spawn(command, args, {
       cwd: repo,
       windowsHide: true,

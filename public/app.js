@@ -1,3 +1,4 @@
+import {describeError} from './error-message.js';
 import {framePool} from './frame-pool.js';
 import {onboarding} from './onboarding.js';
 import {projectSetup} from './project-setup.js';
@@ -94,7 +95,7 @@ function error(message) {
   if(message===lastErrorMessage)return;
   lastErrorMessage=message;
   $("error").replaceChildren();
-  const [summary,technical]=(message || '').split('\n\nTechnical details\n');
+  const {summary,technical}=describeError(message);
   $("error").append(document.createTextNode(summary));
   if(technical){const details=document.createElement('details'),label=document.createElement('summary'),body=document.createElement('pre');label.textContent='Technical details';body.textContent=technical;body.style.whiteSpace='pre-wrap';details.append(label,body);$("error").append(details);}
   $("error").hidden = !message;
