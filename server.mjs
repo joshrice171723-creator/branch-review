@@ -24,7 +24,7 @@ import { MuseQa } from './muse-qa.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
 import { reviewReport } from './report.mjs';
 import { previewHealth } from './health.mjs';
-import {groupedBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan,appearanceFixPlan} from './fix-review.mjs';
+import {groupedBranches,consolidateFixBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan,appearanceFixPlan} from './fix-review.mjs';
 
 const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
 let busy = false, preparedFix=null;
@@ -343,7 +343,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
     if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
-    if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,groupedBranches(await branches(),jobs.rows,store.records));
+    if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await consolidateFixBranches(groupedBranches(await branches(),jobs.rows,store.records),git));
     if(req.method==='GET' && url.pathname==='/api/qa-review')return json(res,200,store.get(url.searchParams.get('id')));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
     if(req.method==='GET' && url.pathname==='/api/jobs')return json(res,200,jobs.rows.slice(-30));

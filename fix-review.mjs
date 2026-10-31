@@ -3,6 +3,21 @@ import {isReviewDestination} from './public/preview-routes.js';
 
 export const frontendOnly = files => files.length>0 && files.every(file=>/^apps\/web\/src\/.+\.(tsx?|jsx?|css|scss)$/.test(file));
 
+export async function consolidateFixBranches(branches,git){
+  const generated=branches.filter(branch=>branch.ref.startsWith('refs/heads/branch-review/fixes-'));
+  const hidden=new Set();
+  for(const branch of generated){
+    const same=branches.find(other=>other!==branch && other.sha===branch.sha && !other.ref.startsWith('refs/heads/branch-review/fixes-'));
+    if(same){hidden.add(branch.ref);continue;}
+    for(const other of generated){
+      if(other===branch || other.sha===branch.sha)continue;
+      const ancestor=await git('merge-base','--is-ancestor',branch.sha,other.sha).then(()=>true,()=>false);
+      if(ancestor){hidden.add(branch.ref);break;}
+    }
+  }
+  return branches.filter(branch=>!hidden.has(branch.ref));
+}
+
 export function reviewRoot(record,records){
   const seen=new Set();
   while(record?.previousId && !seen.has(record.id)){
