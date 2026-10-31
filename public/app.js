@@ -340,6 +340,7 @@ async function poll() {
     const previousBusy = currentState.busy;
     const previousReview=currentState.record?.id;
     currentState = selectedReviewState(await api("/api/state"),openingSelection);
+    if (previousBusy && !currentState.busy && currentState.status === "ready" && !currentState.error) error("");
     if(openingSelection && currentState.record && currentState.status==='ready' && !currentState.busy){openingSelection=null;try{sessionStorage.removeItem('branch-review:opening');}catch{}}
     token = currentState.token;
     previews.preload(currentState.preparedReview);
