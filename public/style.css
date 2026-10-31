@@ -973,3 +973,9 @@ body.focused .panel-divider {display:none}
 #batch-requests{margin:8px 0 16px}#item-more{margin:16px 0}#item-more[open] summary{margin-bottom:14px}
 
 #request-dialog,#requests-dialog{box-sizing:border-box}#request-dialog button,#requests-dialog button{box-sizing:border-box;max-width:100%;margin-right:0}
+
+.main-tools .labeled-tool{width:auto;min-width:0;gap:7px;padding:9px 12px;font:inherit;font-size:13px}
+.project-switch{font:inherit;font-size:12px;border:1px solid #ccd7cf;background:white;color:#244e40;border-radius:6px;padding:6px 9px;margin-left:10px;cursor:pointer}
+#item-more>button{display:block;margin:10px 0;width:100%}
+#tools-dialog:has(#tools-workspace:not([hidden])) .tools-tabs{display:none}
+@media(max-width:700px){.main-tools .labeled-tool{padding:8px;font-size:12px}.main-tools .labeled-tool svg{display:none}}
