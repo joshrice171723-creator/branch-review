@@ -31,7 +31,7 @@ export function canApprove(record) {
 }
 export function deliveryStep(record,configured=false) {
   if(!canApprove(record))return{action:'resume-review',label:'Continue remaining checks',detail:'Finish the review or prepare a fix request for Codex.'};
-  if(record.integration?.sha!==record.identity.changed)return{action:'candidate',label:'Prepare merge candidate',detail:'Combine this branch with current main, then test the combined result. This does not push or publish.'};
+  if(record.integration?.sha!==record.identity.changed)return{action:'candidate',label:'Update review with latest main',detail:'Combine the branch with current main and review the combined version before merging.'};
   if(!record.approval)return{action:'reviewer',label:'Approve changes',detail:'Enter your reviewer name and approve this version.'};
   const stage=record.delivery?.stage;
   if(stage==='verified')return{action:null,label:'Published workflow verified',detail:'The release and its workflow result have been recorded.'};

@@ -117,7 +117,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     if(['reviewer','release-note'].includes(action)){$('results-checks').open=true;const section=target.closest('details');if(section)section.open=true;target.scrollIntoView({block:'center'});target.focus();}
     else if(!target.disabled)target.click();
   };
-  $('candidate').onclick = () => { if(confirm('Prepare the merged result against the current remote default branch? Save your preview edits first. The new candidate needs its own completed checklist and approval.')) act('candidate'); };
+  $('candidate').onclick = () => { if(confirm('Update this review to include the latest main branch? You will review the combined version before merging. Save any preview edits first.')) act('candidate'); };
   $('ship').onclick = () => {
     const r = getState().record;
     if(confirm(`Merge and push reviewed commit ${r.identity.changed} to origin/${getState().defaultBranch || "main"} in ${r.identity.repository}?`)) act('ship', {confirmation:`MERGE ${r.identity.changed} TO origin/${getState().defaultBranch || "main"}`});
@@ -240,7 +240,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
       }));
       if(!visibleFindings.length) $('findings').append(node('p',r.issues.length?'No findings match this view.':'No findings recorded.','small muted'));
       $('approval-state').textContent=r.approval?`Approved by ${r.approval.reviewer} · ${r.approval.commit.slice(0,7)}`:canApprove(r)?'Review complete. Enter your name to approve this exact version.':'Complete every check and resolve findings before approval.';
-      $('delivery-state').textContent=r.delivery?`Delivery: ${r.delivery.stage.replaceAll('-',' ')}${r.delivery.error?' · '+r.delivery.error:''}`:r.integration?`Integration candidate ${r.integration.sha.slice(0,7)} against the default branch ${r.integration.main.slice(0,7)}`:'Prepare the integration candidate before merging. It includes the remote default branch.';
+      $('delivery-state').textContent=r.delivery?`Delivery: ${r.delivery.stage.replaceAll('-',' ')}${r.delivery.error?' · '+r.delivery.error:''}`:r.integration?`Integration candidate ${r.integration.sha.slice(0,7)} against the default branch ${r.integration.main.slice(0,7)}`:'Update this review with the latest main before merging.';
     }
     for(const id of ['scenario-select','expected','actual','capture','report','reviewer','candidate','approve']) $(id).disabled=!enabled;
     $('reviewer').disabled ||= approving;

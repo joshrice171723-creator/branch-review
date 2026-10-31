@@ -13,6 +13,7 @@ export function activity({api,getState,navigate,flush,poll}){
   for(const id of ['publish','project-deploy'])delivery.querySelector('[data-publishing]').append(document.getElementById(id));
   delivery.querySelector('[data-settings]').append(document.getElementById('delivery-heading').closest('details'));
   const advanced=document.getElementById('delivery-heading').closest('details');advanced.open=true;
+  const setup=document.createElement('div');setup.innerHTML='<h3>Meta Clinic publishing</h3><p>Optional: configure publishing to aimetaclinic.com. You will choose an existing Lightsail SSH key and an encrypted recovery archive folder. This does not publish anything.</p>';setup.append(document.getElementById('release-settings'));document.getElementById('tools-workspace').append(setup);
   return {open:async()=>{const r=getState().record;if(r)await navigate(r.cursor.itemId,'results');},render(){
     if(approval.parentElement!==delivery.querySelector('[data-approval]'))delivery.querySelector('[data-approval]').append(approval);
     if(advanced.parentElement!==delivery.querySelector('[data-settings]'))delivery.querySelector('[data-settings]').append(advanced);
@@ -21,6 +22,7 @@ export function activity({api,getState,navigate,flush,poll}){
     strip.querySelector('[data-label]').textContent=r?.delivery?.stage==='pushed'?'Merged and pushed':progress.label;strip.querySelector('[data-detail]').textContent=r?.delivery?.stage==='pushed'?`Reviewed commit ${r.delivery.commit.slice(0,7)} was pushed to main.`:progress.label==='Ready for review'?(canApprove(r)?r.approval?'Approved. Ready to merge and push.':'Manual review complete. Approve this version from the summary.':`${progress.pending} review items remaining`):progress.detail;
     delivery.hidden=!r||!canApprove(r)||isPublished(r);delivery.dataset.merged=String(r?.delivery?.stage==='pushed');
     delivery.querySelector('h3').textContent=r?.delivery?.stage==='pushed'?'Merged to main':'Review approval';
+    setup.hidden=state.publishTarget===null;document.getElementById('candidate').hidden=!r || r.integration?.sha===r.identity.changed || r.delivery?.stage==='pushed';
     const deploy=document.getElementById('project-deploy');deploy.hidden=state.publishTarget!==null;deploy.disabled=!r?.approval||r?.delivery?.stage!=='pushed'||state.busy;
   }};
 }
