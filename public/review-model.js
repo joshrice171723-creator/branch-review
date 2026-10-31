@@ -37,7 +37,7 @@ export function deliveryStep(record,configured=false) {
   if(stage==='verified')return{action:null,label:'Published workflow verified',detail:'The release and its workflow result have been recorded.'};
   if(stage==='published')return{action:'release-note',label:'Verify published workflow',detail:'Record your test of the published app. Deployment alone does not complete QA.'};
   if(stage==='deployment-needs-inspection')return{action:'release-note',label:'Inspect interrupted release',detail:'Review the release and recovery artifacts before enabling a retry.'};
-  if(stage==='pushed')return{action:configured?'publish':'release-settings',label:configured?'Publish approved commit':'Set up publishing',detail:'Main has the reviewed candidate. Publishing is a separate, confirmed action.'};
+  if(stage==='pushed')return{action:null,label:'Merged and pushed',detail:'The reviewed commit was pushed to main.'};
   return{action:'ship',label:stage==='push-unconfirmed'?'Reconcile merge and push':'Merge and push to main',detail:stage==='push-unconfirmed'?'The previous push is unconfirmed. Recheck remote main before proceeding.':'Push only the approved candidate. A moving branch or main stops this action.'};
 }
 export function fixRequest(record) {

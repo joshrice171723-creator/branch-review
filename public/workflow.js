@@ -111,13 +111,6 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     if(delivering || approving || state.busy)return;
     if(state.publishTarget===null && r.approval){if(r.delivery?.stage==='pushed')return;return $('ship').click();}
     if(['published','verified'].includes(r.delivery?.stage)){try{await api('/api/published-review',{id:r.id,action:'start'});await window.desktop.openPublished(state.publishTarget+'/qa?view=office');}catch(e){error(e.message);}return;}
-    if(canApprove(r) && r.approval && r.integration?.sha===r.identity.changed && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(r.delivery?.stage)){
-      if(!await guide.flush())return;
-      if(!confirm(`Merge and publish this approved version to ${state.publishTarget}, then start Muse QA?`))return;
-      delivering=true;officeAfterPublish=r.identity.changed;render(state);
-      try{error('');await mergeAndPublish(api,state);}catch(e){officeAfterPublish=null;error(e.message);}finally{delivering=false;await poll();}return;
-    }
-
     const action=deliveryStep(getState().record,getState().releaseConfigured).action;if(!action)return;
     if(action==='reviewer'){await $('approve').onclick();return;}
     const target=$(action);
@@ -193,8 +186,9 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
       $('approval-section').hidden=published || !!r.approval || !canApprove(r) || r.integration?.sha!==r.identity.changed;
       $('review-notice').hidden=published || r.cursor?.view==='results';
       if(done){$('results-action').textContent='Watch Muse in Office';$('results-action').disabled=!enabled || !window.desktop;}
-      else if(approved && state.releaseConfigured && !['deployment-needs-inspection','push-unconfirmed'].includes(stage)){$('results-action').textContent=stage==='deploying'?'Publishing…':delivering?'Merging…':stage==='pushed'?'Publish':'Merge and publish';$('results-action').disabled=!enabled || delivering;}
-      if(state.publishTarget===null && approved){$('results-action').textContent=stage==='pushed'?'Merged and pushed':'Merge and push';$('results-action').disabled=!enabled || stage==='pushed';$('results-message').textContent=stage==='pushed'?'Open Workspace > Delivery to publish or use your existing deployment process.':'Approved. Ready to merge and push.';}
+      else if(approved && !stage){$('results-action').textContent='Merge and push to main';$('results-action').disabled=!enabled || delivering;}
+      if(approved && stage==='pushed'){$('results-action').textContent='Merged and pushed';$('results-action').disabled=true;$('results-message').textContent=`Merged and pushed to main · ${r.delivery.commit.slice(0,7)}. Publishing is optional.`;}
+      else if(approved && !stage)$('results-message').textContent='Approved. Ready to merge and push to main.';
       if(approving){$('results-action').textContent='Approving…';$('results-action').disabled=true;}
     }
     $('review-workflow').hidden=!r;

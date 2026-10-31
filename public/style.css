@@ -998,3 +998,6 @@ body.focused .panel-divider {display:none}
 #qa-page [data-title]:empty{display:none}
 
 #review-delivery{margin-top:24px;border-top:1px solid #dce3da;padding-top:16px}#review-delivery .tool-actions{display:flex;gap:8px;flex-wrap:wrap}#review-delivery [data-settings]>details>summary{display:none}
+
+#guided-results:has(#review-delivery[data-merged="true"]) > #results-action{display:none}
+#review-delivery [data-actions][hidden]{display:none}
