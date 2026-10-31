@@ -38,7 +38,6 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     try {
       if(!await flush())return;
       const r=getState().record, old=r.manifest.scenarios.find(item=>item.id===itemId), target=r.manifest.scenarios.find(item=>item.id===next);
-      if(view==='item' && old && target && (old.path!==target.path || old.originalPath!==target.originalPath || needsNavigation(target)) && !confirm('Open the next screen in both previews? Save any edits inside the preview first.'))return;
       await api('/api/cursor',{id:r.id,itemId:next,view});
       if(view==='item' && target && !matchesItem(r,target,$('item-search').value,$('item-filter').value || 'all')){$('item-search').value='';$('item-filter').value='all';fixMode=false;}
       await poll();if(view==='item')onSelect(next);$(view==='item'?'guided-item':'guided-results').scrollIntoView({block:'start'});
@@ -46,7 +45,9 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     catch(e){error(e.message);}finally{pending=false;render(getState());}
   }
   function following(r) {
-    return (fixMode && nextItem(r,itemId,'attention')) || nextItem(r,itemId,'remaining') || r.manifest.scenarios.find(item=>item.id!==itemId && !isComplete(itemStatus(r,item)))?.id;
+    const items=r.manifest.scenarios,index=items.findIndex(i=>i.id===itemId);
+    const unreviewed=i=>!['passed','needs-fixes','blocked','not-applicable'].includes(itemStatus(r,i));
+    return items.slice(index+1).find(unreviewed)?.id || items.slice(0,index).find(unreviewed)?.id;
   }
   async function advance(leave=false) {
     if(advancing || pending)return;
@@ -95,6 +96,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
       key=currentKey;recordId=r.id;itemId=current.id;dirty=false;version++;
       let saved=r.items?.[itemId]||{};
       try{const local=JSON.parse(localStorage.getItem(draftKey())||'null');if(local){saved=local;dirty=true;}}catch{}
+      if(saved.outcome==='needs-fixes' && !saved.reason?.trim()){saved={...saved,outcome:''};}
       $('item-notes').value=saved.notes||'';$('item-reason').value=saved.reason||'';$('item-outcome').value=saved.outcome||'';
       status(dirty?'Recovered unsaved notes — save to continue.':'Saved');
       $('unfinished-choice').hidden=true;$('handoff-panel').hidden=true;

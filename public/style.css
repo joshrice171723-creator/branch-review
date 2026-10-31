@@ -962,3 +962,14 @@ body.focused .panel-divider {display:none}
 #history-dialog .tool-actions button{width:auto;margin:0;flex:0 1 auto}
 .branch-version-list article{padding:16px 0;border-bottom:1px solid #dce3da;overflow-wrap:anywhere}
 .branch-version-list p{margin:6px 0 10px}
+
+#request-dialog,#requests-dialog{width:min(620px,90vw);max-height:85vh;overflow:auto;padding:24px}
+#request-dialog textarea{display:block;width:100%;box-sizing:border-box;min-height:100px;margin:10px 0 16px;font:inherit;padding:12px;border:1px solid #b8c6bd;border-radius:6px}
+#request-dialog img{max-width:100%;max-height:180px;object-fit:contain;display:block;margin:12px 0}
+#request-dialog img[hidden]{display:none}
+#request-dialog button,#requests-dialog button{font:inherit;padding:10px 14px;margin:8px 8px 0 0;border:1px solid #b8c6bd;border-radius:6px;cursor:pointer}
+#request-dialog .primary,#batch-send{background:#244e40;color:white}
+#requests-dialog article{padding:16px 0;border-bottom:1px solid #dce3da;overflow-wrap:anywhere}
+#batch-requests{margin:8px 0 16px}#item-more{margin:16px 0}#item-more[open] summary{margin-bottom:14px}
+
+#request-dialog,#requests-dialog{box-sizing:border-box}#request-dialog button,#requests-dialog button{box-sizing:border-box;max-width:100%;margin-right:0}

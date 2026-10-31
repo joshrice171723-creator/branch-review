@@ -1,3 +1,4 @@
+import {batchReview} from './batch-review.js';
 import {branchHistory} from './branch-history.js';
 import {describeError} from './error-message.js';
 import {framePool} from './frame-pool.js';
@@ -67,6 +68,7 @@ let allBranches = [],
 try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') || 'null');if(openingSelection){openingSelection.starting=false;selected=openingSelection;}}catch{}
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
+const batch=batchReview({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
@@ -88,7 +90,7 @@ $('results-action').after($('muse-qa-state'),$('retry-muse'));
 $('results-checks').before($('prepare-handoff'),$('handoff-panel'));
 const problem=$('problem-dialog'),findingSection=$('finding-form').closest('details');
 problem.append(findingSection,$('findings-title').closest('details'));findingSection.open=true;
-$('report-problem').onclick=()=>problem.showModal();$('close-problem').onclick=()=>problem.close();
+$('close-problem').onclick=()=>problem.close();
 $('problem-evidence').onclick=()=>{problem.close();reviewTools.open('evidence');};
 $('open-codex-handoff').onclick=()=>reviewTools.open('updates');
 const comparisonMenu=document.createElement('details');comparisonMenu.className='comparison-menu';
@@ -196,8 +198,9 @@ async function loadBranches(refreshSelection=true) {
   allBranches = await api("/api/branches");
   if(!refreshSelection && JSON.stringify(allBranches)===previous)return;
   const reviewed=currentState.record?.identity, latest=reviewed && allBranches.find(branch=>[branch.ref,...branch.aliases].includes(reviewed.ref));
-  $('revision-warning').hidden=!reviewed || latest?.sha===reviewed.source;
-  $('revision-warning').textContent=reviewed && latest?.sha!==reviewed.source ? latest?`This branch has a new commit (${latest.sha.slice(0,7)}). You are reviewing ${reviewed.source.slice(0,7)}. Open the latest branch to retest; saved results stay attached to their original version.`:'The reviewed branch is no longer listed. Saved evidence remains available.':'';
+  const update=reviewed?await api('/api/update?id='+encodeURIComponent(currentState.record.id)):null;
+  $('revision-warning').hidden=!update?.missing && !update?.changed;
+  $('revision-warning').textContent=update?.missing?'The source branch is unavailable. Saved evidence remains available.':update?.changed?`This branch has a new commit (${update.latest.slice(0,7)}). Reopen it to review the latest version.`:'';
   const latestSelection=selected && allBranches.find(branch=>branch.ref===selected.ref);
   if(refreshSelection || selected && latestSelection?.sha!==selected.sha){
     const next=(!openingSelection && currentState.status==='ready' && allBranches.find(branch=>[branch.ref,...branch.aliases].includes(reviewed?.ref))) || refreshedSelection(allBranches,selected,reviewed?.ref,$('branch-filter').value==='all');
@@ -423,7 +426,7 @@ async function poll() {
     if(currentState.record?.sameBranch)$('review-branch-status').textContent=`${currentState.record.identity.ref.replace('refs/heads/','')} · ${currentState.record.identity.source.slice(0,7)} · Latest version`;
     if(currentState.previewVersion){$('review-branch-status').hidden=false;$('review-branch-status').textContent=`Previewing ${currentState.previewVersion.sha.slice(0,7)} · Branch stays at ${currentState.record.identity.source.slice(0,7)} · Use history to return or restore`;$('review-workflow').hidden=true;}
     branchHistoryView.render(currentState);
-    reviewTools.render(currentState);
+    reviewTools.render(currentState);batch.render(currentState);
     void activityView.render();
     renderFocusStatus();
     const ready = currentState.status === "ready";
@@ -486,6 +489,7 @@ async function poll() {
     if(reviewChanged){delete $('branch-brief').dataset.selecting;selected=null;$('baseline').value=currentState.record.comparisonMode?.baseline || 'parent';$('commit-choice').hidden=$('baseline').value!=='commit';commitBranchSha='';}
     if (reviewChanged || previousBusy && !currentState.busy) await loadBranches();
     if(previousBusy!==currentState.busy)branchList();
+    batch.render(currentState);
   } catch (e) {
     $("connection").textContent = "REVIEW SERVER DISCONNECTED";
     error(e.message);
@@ -566,7 +570,7 @@ window.addEventListener("message", (event) => {
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:change-target' && currentState.status==='ready' && !currentState.busy){
     const data=event.data;if(typeof data.location!=='string' || !data.location.startsWith('/') || !data.target)return;
     toggle(side);reviewWorkflow.context(side,{...reviewWorkflow.getContext(side),location:data.location});renderAddress();
-    reviewTools.requestChange({location:data.location,selector:String(data.target.selector || '').slice(0,1000),label:String(data.target.label || '').slice(0,160),rect:data.target.rect});
+    batch.openTarget({location:data.location,selector:String(data.target.selector || '').slice(0,1000),label:String(data.target.label || '').slice(0,160),rect:data.target.rect});
   }
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:active' && $('layout-mode').value==='side-by-side')toggle(side);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:shortcut')runShortcut(event.data.command);

@@ -8,14 +8,16 @@ export async function consolidateFixBranches(branches,git){
   const hidden=new Set();
   for(const branch of generated){
     const same=branches.find(other=>other!==branch && other.sha===branch.sha && !other.ref.startsWith('refs/heads/branch-review/fixes-'));
-    if(same){hidden.add(branch.ref);continue;}
+    if(same){same.aliases=[...new Set([...(same.aliases||[]),branch.ref,...(branch.aliases||[])])];hidden.add(branch.ref);continue;}
     for(const other of generated){
       if(other===branch || other.sha===branch.sha)continue;
       const ancestor=await git('merge-base','--is-ancestor',branch.sha,other.sha).then(()=>true,()=>false);
-      if(ancestor){hidden.add(branch.ref);break;}
+      if(ancestor){other.aliases=[...new Set([...(other.aliases||[]),branch.ref,...(branch.aliases||[])])];hidden.add(branch.ref);break;}
     }
   }
-  return branches.filter(branch=>!hidden.has(branch.ref));
+  const visible=branches.filter(branch=>!hidden.has(branch.ref));
+  for(const old of branches.filter(branch=>hidden.has(branch.ref))){for(const current of visible){if(current.sha===old.sha || await git('merge-base','--is-ancestor',old.sha,current.sha).then(()=>true,()=>false)){current.aliases=[...new Set([...(current.aliases||[]),old.ref,...(old.aliases||[])])];break;}}}
+  return visible;
 }
 
 export function reviewRoot(record,records){

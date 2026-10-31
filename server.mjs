@@ -1,3 +1,4 @@
+import {reviewAccountedFor} from './public/batch-review.js';
 import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaState,qaReviews} from './public/qa-model.js';
@@ -265,7 +266,7 @@ async function mutate(endpoint, data) {
     if(jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running job before editing the plan.');
     await plans.save(record.identity.changed,data.manifest);await activate();return state.recordId;
   }
-  if(endpoint==='/api/job')return jobs.start(record,data.kind,data);
+  if(endpoint==='/api/job'){if(data.batch && (!reviewAccountedFor(record) || !record.issues.some(i=>i.status!=='resolved')))throw Error('Finish reviewing every item and collect change requests before starting this batch.');return jobs.start(record,data.kind,data);}
   if(endpoint==='/api/fix-commit'){
     if(!jobs.rows.some(job=>job.id===data.jobId && job.reviewId===record.id))throw Error('Choose a fix job from this review.');
     return jobs.commitFix(data.jobId,data.files);
@@ -284,6 +285,21 @@ async function mutate(endpoint, data) {
     return store.event(record,'tool-evidence-saved',{kind:data.kind,itemId:data.itemId});
   }
   if (endpoint === '/api/check') return store.check(record.id,data.scenario,data.index,data.passed);
+  if(endpoint==='/api/item-accept'){
+    store.editable(record);const item=record.manifest.scenarios.find(i=>i.id===data.itemId);if(!item)throw Error('Choose a review item.');
+    if(record.issues.some(i=>i.scenario===item.id && !['resolved','needs-retest'].includes(i.status)))throw Error('Edit or remove this item’s requested changes before accepting it.');
+    for(const issue of record.issues.filter(i=>i.scenario===item.id && i.status==='needs-retest'))await store.resolve(record.id,issue.id,'Reviewer accepted the updated behavior.');
+    record.items[item.id]={...record.items[item.id],outcome:'',reason:''};item.steps.forEach((_,index)=>record.checks[`${item.id}:${index}`]=true);store.invalidate(record);return store.event(record,'item-accepted',{itemId:item.id,commit:record.identity.changed});
+  }
+  if(endpoint==='/api/request-update'){
+    if(jobs.rows.some(row=>row.status==='running'))throw Error('Wait for the running job before editing its requests.');
+    store.editable(record);const issue=record.issues.find(i=>i.id===data.issueId && i.status!=='resolved');if(!issue)throw Error('Choose an open request.');
+    if(!data.remove && (typeof data.actual!=='string'||!data.actual.trim()||data.actual.length>4000||typeof data.expected!=='string'||!data.expected.trim()||data.expected.length>4000))throw Error('Describe the requested change and expected result.');
+    (issue.edits ||= []).push({at:new Date().toISOString(),actual:issue.actual,expected:issue.expected,status:issue.status});
+    if(data.remove){issue.status='resolved';issue.withdrawn=true;issue.resolution='Request removed by reviewer';}
+    else{issue.actual=data.actual.trim();issue.expected=data.expected.trim();}
+    store.invalidate(record);return store.event(record,data.remove?'request-withdrawn':'request-edited',{issueId:issue.id,actual:issue.actual,expected:issue.expected});
+  }
   if (endpoint === '/api/item') return store.item(record.id,data.itemId,data);
   if (endpoint === '/api/cursor') return store.cursor(record.id,data.itemId,data.view);
   if (endpoint === '/api/issue') return store.issue(record.id,data);
@@ -331,7 +347,7 @@ for(const endpoint of ['/api/project-delivery','/api/project-deploy','/api/proje
 actions.add('/api/database-cleanup');actions.add('/api/database-start');
 actions.add('/api/onboarding');
 actions.add('/api/job-cancel');
-actions.add('/api/new-change');
+actions.add('/api/new-change');actions.add('/api/item-accept');actions.add('/api/request-update');
 for(const endpoint of ['/api/version-preview','/api/version-latest','/api/version-restore','/api/fix-apply'])actions.add(endpoint);
 longActions.add('/api/version-restore');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
@@ -389,7 +405,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/branch-history.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/branch-history.js','/batch-review.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312 http://127.0.0.1:4313; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
