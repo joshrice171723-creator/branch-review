@@ -13,13 +13,11 @@
         <span class="edition">LOCAL / 01</span></a
       >
       <div class="project">
-        <span class="dot"></span> <span id="project-name">Project</span>
+        <span class="dot"></span> <span id="project-name">Project</span> <button id="choose-repository" class="project-switch" aria-label="Switch project" hidden>Switch project</button>
         <span class="divider">/</span> Review workspace
       </div>
       <div class="header-actions">
-          <button id="updated-branch" class="secondary" hidden></button><nav class="main-tools" aria-label="Review tools"><button id="choose-repository" class="toolbar-icon" aria-label="Switch project" data-tooltip="Switch project" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v11H3z"/><path d="M3 7V4h7l2 3"/></svg></button><button id="toolbar-review" class="toolbar-icon" aria-label="Review checklist" data-tooltip="Review checklist" ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3h6v4H9zM9 12h6M9 16h6"/></svg></button><button id="toolbar-agent" class="toolbar-icon" aria-label="Agent fixes" data-tooltip="Agent fixes" ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M1 12h3m16 0h3M8 16h8"/><circle cx="8" cy="11" r="1"/><circle cx="16" cy="11" r="1"/></svg></button><button id="toolbar-qa" class="toolbar-icon" aria-label="Browser QA and activity" data-tooltip="Browser QA and activity" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6m-5 0v7l-6 9a1 1 0 0 0 1 2h14a1 1 0 0 0 1-2l-6-9V3M8 15h8"/></svg></button><button id="toolbar-history" class="toolbar-icon" aria-label="Review history" data-tooltip="Review history" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v6l4 2"/></svg></button><button id="review-tools" class="toolbar-icon" aria-label="Settings" data-tooltip="Settings" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg></button></nav><button id="capture-item" class="quiet" disabled>Add this screen</button><button id="focus" class="quiet" aria-pressed="false">
-          Expand preview</button
-        ><button id="stop" class="quiet" disabled>Stop previews</button>
+          <button id="updated-branch" class="secondary" hidden></button><nav class="main-tools" aria-label="Review tools"><button id="toolbar-history" class="toolbar-icon labeled-tool" aria-label="Versions" data-tooltip="Versions" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v6l4 2"/></svg>Versions</button><button id="review-tools" class="toolbar-icon labeled-tool" aria-label="Settings" data-tooltip="Settings" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>Settings</button></nav>
       </div>
     </header>
     <main>
@@ -86,7 +84,9 @@
               Changed <code id="changed-sha">—</code>
             </button>
           </div>
-          <button
+          <details class="comparison-menu"><summary>Compare options</summary><div class="comparison-options"><label for="layout-mode">View</label><select id="layout-mode"><option value="toggle">Toggle versions</option><option value="side-by-side">Side by side</option></select><label class="sync-option"><input id="sync-scroll" type="checkbox" checked> Link scrolling</label><label id="split-control" hidden>Split <input id="split-position" type="range" min="30" max="70" value="50" aria-label="Preview split position"></label><button id="review-code" class="quiet" disabled>Review code</button><button id="focus" class="quiet" aria-pressed="false">
+          Expand preview</button
+        ><span id="target-status" role="status" hidden></span></div></details><button
             id="reopen"
             class="quiet"
             disabled
@@ -95,9 +95,17 @@
             ↗ Reset item
           </button>
         </div>
-        <div class="comparison-options"><label for="layout-mode">View</label><select id="layout-mode"><option value="toggle">Toggle versions</option><option value="side-by-side">Side by side</option></select><label class="sync-option"><input id="sync-scroll" type="checkbox" checked> Link scrolling</label><label id="split-control" hidden>Split <input id="split-position" type="range" min="30" max="70" value="50" aria-label="Preview split position"></label><button id="review-code" class="quiet" disabled>Review code</button><span id="target-status" role="status" hidden></span></div>
+
         <div id="preview-address" aria-label="Current preview URL">Waiting for page…</div><p class="preview-change-hint">Right-click an area in the preview to request a change.</p>
-        <div id="preview-area">
+        <div id="preview-area"><section hidden id="change-composer" aria-label="Request a change">
+        <button id="close-change" class="quiet" aria-label="Close change request">×</button>
+        <label class="change-prompt" for="change-request">What would you like to change?</label>
+        <textarea id="change-request" rows="3" maxlength="10000" placeholder="Change the main button on the home page to blue."></textarea>
+        <p id="change-context" class="small"></p><p id="change-explanation" class="small"></p>
+        <button id="make-changes" class="primary" disabled>Make changes</button>
+        <p id="change-status" role="status" aria-live="polite"></p>
+        <button id="review-changes" class="primary" hidden>Review changes</button>
+</section>
           <div id="empty" class="empty">
             <span class="empty-mark">⑂</span>
             <p class="eyebrow">SEE WHAT CHANGED</p>
@@ -129,15 +137,7 @@
         </footer>
       </section>
       <aside class="review">
-<section hidden id="change-composer" aria-label="Request a change">
-        <button id="close-change" class="quiet" aria-label="Close change request">×</button>
-        <label class="change-prompt" for="change-request">What would you like to change?</label>
-        <textarea id="change-request" rows="3" maxlength="10000" placeholder="Change the main button on the home page to blue."></textarea>
-        <p id="change-context" class="small"></p><p id="change-explanation" class="small"></p>
-        <button id="make-changes" class="primary" disabled>Make changes</button>
-        <p id="change-status" role="status" aria-live="polite"></p>
-        <button id="review-changes" class="primary" hidden>Review changes</button>
-</section>
+
         <p class="eyebrow">GUIDED REVIEW</p>
         <details id="branch-brief" open>
         <summary>Selected branch and comparison</summary>
@@ -182,7 +182,7 @@
             <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Verify fix and next. If it is still wrong, report a problem.</p></section>
             <details><summary>Expected result</summary><p id="item-expected"></p></details>
             <p class="small muted">Use these checks to inspect the change, then choose Looks good or Needs a change.</p><div id="checks"></div>
-            <details id="item-more"><summary>More options</summary><label class="field-label" for="item-notes">Notes</label>
+            <details id="item-more"><summary>More options</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Agent activity and recovery</button><label class="field-label" for="item-notes">Notes</label>
             <textarea id="item-notes" maxlength="4000" placeholder="Optional note"></textarea>
             <label class="field-label" for="item-outcome">Can’t check this?</label>
             <select id="item-outcome"><option value="">Choose an exception</option><option value="needs-fixes" hidden>Needs fixes</option><option value="blocked">Blocked — cannot test</option><option value="not-applicable">Not applicable</option></select>
@@ -233,7 +233,7 @@
             <button id="retry-muse" class="secondary" hidden>Retry Muse handoff</button>
             <button id="candidate" class="secondary">Update review with latest main</button>
             <button id="ship" class="secondary">Merge and push to main</button>
-            <button id="release-settings" class="quiet" hidden>Publish settings</button>
+
             <button id="publish" class="secondary">Publish to aimetaclinic.com</button>
             <label class="field-label" for="release-note">Published workflow result / recovery inspection</label>
             <textarea id="release-note" maxlength="2000" placeholder="Record what you tested and the result"></textarea>
@@ -269,7 +269,7 @@
       <header class="dialog-heading"><h2 id="tools-title">Review tools</h2><button id="close-tools" class="quiet">Close</button></header>
       <nav class="tools-tabs" aria-label="Review tools"><button id="tab-plan">Review checklist</button><button id="tab-updates">Updates &amp; fixes</button><button id="tab-evidence">Evidence</button><button id="tab-checks">Checks</button><button id="tab-release">Published review</button><button id="tab-workspace">Workspace</button></nav>
       <p id="tools-status" role="status" aria-live="polite"></p>
-      <section id="tools-workspace" hidden><h3>Workspace</h3><p id="project-adapter" class="small"></p><label for="agent-provider">AI provider</label><select id="agent-provider"><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option></select><label for="agent-executable">CLI executable path (optional)</label><input id="agent-executable" placeholder="Automatic discovery"><div class="tool-actions"><button id="agent-save">Save and test connection</button><button id="agent-probe">Test saved connection</button></div><p id="agent-status" role="status"></p><p class="small">Uses your CLI account. Settings apply to this project. Claude fixes use restricted file tools; run validation scripts from Checks.</p><div id="workspace-actions" class="tool-actions"></div><div id="workspace-details"></div><section id="database-cleanup" hidden><h3>Preview databases</h3><p>Review data is separate from saved review history. Stopped containers must be started to inspect them.</p><button id="database-refresh">Inspect databases</button><div id="database-list"></div><button id="database-delete" disabled>Delete selected databases</button><p id="database-status" role="status"></p></section></section><section id="tools-plan">
+      <section id="tools-workspace" hidden><h3>Workspace</h3><p id="project-adapter" class="small"></p><label for="agent-provider">AI provider</label><select id="agent-provider"><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option></select><label for="agent-executable">CLI executable path (optional)</label><input id="agent-executable" placeholder="Automatic discovery"><div class="tool-actions"><button id="agent-save">Save and test connection</button><button id="agent-probe">Test saved connection</button></div><p id="agent-status" role="status"></p><p class="small">Uses your CLI account. Settings apply to this project. Claude fixes use restricted file tools; run validation scripts from Checks.</p><div id="publishing-setup"><h3>Meta Clinic publishing</h3><p>Optional: configure publishing to aimetaclinic.com. Use an SSH key file path or paste a key, and choose an encrypted recovery archive folder. This does not publish anything.</p><label for="publishing-key-path">SSH key file path</label><input id="publishing-key-path" type="text" autocomplete="off" placeholder="Absolute path to your existing SSH key file"><label for="publishing-recovery-path">Encrypted recovery archive folder</label><input id="publishing-recovery-path" type="text" autocomplete="off" placeholder="Absolute path to an existing folder"><button id="publishing-save-paths" type="button">Save paths</button><p id="publishing-path-status" role="status"></p><button id="release-settings" class="quiet" hidden>Choose files instead</button><div id="publishing-paste"><label for="publishing-key-text">Or paste an SSH private key</label><textarea id="publishing-key-text" rows="5" autocomplete="off" spellcheck="false" placeholder="Paste the complete private key"></textarea><p>Your key is saved in a protected local file and is not shown again. Enter the recovery folder above, or leave it blank to reuse the saved folder.</p><button id="publishing-save-key" type="button">Save pasted key</button><p id="publishing-key-status" role="status"></p></div></div><div id="workspace-actions" class="tool-actions"><button id="stop" class="quiet" disabled>Stop previews</button></div><div id="workspace-details"></div><section id="database-cleanup" hidden><h3>Preview databases</h3><p>Review data is separate from saved review history. Stopped containers must be started to inspect them.</p><button id="database-refresh">Inspect databases</button><div id="database-list"></div><button id="database-delete" disabled>Delete selected databases</button><p id="database-status" role="status"></p></section></section><section id="tools-plan">
         <details id="checklist-advanced"><summary>Edit review checklist</summary><h3>Review checklist</h3>
         <label class="field-label" for="plan-summary-edit">What changed</label><textarea id="plan-summary-edit" rows="2" maxlength="2000"></textarea>
         <div class="checklist-heading"><h3>Review items</h3><button id="plan-add">Add item</button></div><div id="plan-item-list" aria-label="Review items"></div>
@@ -284,7 +284,7 @@
             <label>Affected files (one per line)<textarea id="plan-files" rows="3"></textarea></label><label>Required viewport<select id="plan-viewport"><option value="">Any size</option><option value="desktop">Desktop</option><option value="tablet">Tablet</option><option value="phone">Phone</option></select></label>
           </div><div class="tool-actions"><button id="plan-remove">Remove item</button><button id="plan-up">Move up</button><button id="plan-down">Move down</button><button id="plan-responsive">Add tablet &amp; phone checks</button></div></details>
         </section>
-        <details id="plan-advanced"><summary>Checklist tools</summary><div id="plan-advanced-actions" class="tool-actions"><button id="generate-plan">Generate with Codex</button><button id="copy-plan-instructions">Copy branch instructions</button><button id="plan-export">Export checklist</button></div></details>
+        <details id="plan-advanced"><summary>Checklist tools</summary><div id="plan-advanced-actions" class="tool-actions"><button id="capture-item" class="quiet" disabled>Add this screen</button><button id="generate-plan">Generate with Codex</button><button id="copy-plan-instructions">Copy branch instructions</button><button id="plan-export">Export checklist</button></div></details>
         <button id="plan-save" class="primary">Save checklist</button></details>
       </section>
       <section id="tools-updates" hidden><h3>Send fixes</h3><p>Your selected agent works in a dedicated isolated checkout. Leave the chat field blank for a new fix chat, or resume an existing one. Review the resulting branch before merging.</p><label for="codex-chat">Existing session UUID (optional, same provider)</label><input id="codex-chat" placeholder="New dedicated fix chat"><button id="send-codex" class="secondary">Review and send fix request</button><hr><h3>Branch updates</h3><p id="update-summary"></p><pre id="update-commits"></pre><div class="tool-actions"><button id="refresh-updates">Refresh analysis</button><button id="open-updated">Open updated branch</button></div><h3>Recommended retest order</h3><p class="small">Recommendations never carry a pass forward. Every new commit has its own checklist.</p><ol id="retest-advice"></ol><h3>Related branches</h3><div id="branch-relations"></div></section>

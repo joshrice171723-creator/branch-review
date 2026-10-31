@@ -97,20 +97,12 @@ const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,w
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
-$('preview-area').append($('change-composer'));
 $('new-change').onclick=()=>reviewTools.requestChange();
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
-$('toolbar-agent').textContent='Agent activity and recovery';$('toolbar-agent').className='secondary';
-$('toolbar-review').textContent='Edit review checklist';$('toolbar-review').className='secondary';
-$('item-more').append($('toolbar-review'),$('toolbar-agent'));
-const projectSwitch=$('choose-repository');projectSwitch.className='project-switch';projectSwitch.textContent='Switch project';$('project-name').after(projectSwitch);
-for(const [id,label] of [['toolbar-history','Versions'],['toolbar-qa','Testing'],['review-tools','Settings']]){const button=$(id);button.append(document.createTextNode(label));button.classList.add('labeled-tool');button.setAttribute('aria-label',label);button.dataset.tooltip=label;}
 const evidenceMenu=document.createElement('button');evidenceMenu.textContent='Evidence tools';evidenceMenu.className='secondary';evidenceMenu.onclick=()=>reviewTools.open('evidence');$('item-more').append(evidenceMenu);
 const branchHistoryView=branchHistory({api,getState:()=>currentState,flush:reviewWorkflow.flush,poll,error});
 
 // Move existing controls so their state and handlers stay intact.
-$('plan-advanced-actions').append($('capture-item'));
-$('workspace-actions').append($('stop'));
 for(const id of ['history','health-status','files'])$('workspace-details').append($(id).closest('details'));
 $('results-options').append($('export-review'),$('delivery-heading').closest('details'));
 $('results-action').before($('approval-section'));
@@ -123,9 +115,6 @@ problem.append(findingSection,$('findings-title').closest('details'));findingSec
 $('close-problem').onclick=()=>problem.close();
 $('problem-evidence').onclick=()=>{problem.close();reviewTools.open('evidence');};
 $('open-codex-handoff').onclick=()=>reviewTools.open('updates');
-const comparisonMenu=document.createElement('details');comparisonMenu.className='comparison-menu';
-const comparisonSummary=document.createElement('summary');comparisonSummary.textContent='Compare options';comparisonMenu.append(comparisonSummary,document.querySelector('.comparison-options'));
-$('reopen').before(comparisonMenu);$('review-code').after($('focus'));
 let branchVisibility=null;
 try{branchVisibility=JSON.parse(localStorage.getItem('branch-review:branches-visible') || 'null');}catch{}
 function branchVisibilityUI() {
