@@ -53,7 +53,25 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     notice('');
   }
   $('choose-repository').hidden = !window.desktop;
-  $('choose-repository').onclick = async () => { try { if(await guide.flush())await window.desktop.chooseRepository(); } catch(e) { error(e.message); } };
+  const projects=document.createElement('dialog');projects.id='projects-dialog';projects.setAttribute('aria-label','Projects');
+  projects.innerHTML='<header class="dialog-heading"><h2>Projects</h2><button type="button" data-close>Close</button></header><label for="projects-search">Find a project</label><input id="projects-search" type="search" placeholder="Search by name or folder"><div data-projects></div><button type="button" data-add>Add a project…</button><p role="status" data-status></p>';
+  document.body.append(projects);const projectList=projects.querySelector('[data-projects]'),projectSearch=projects.querySelector('#projects-search'),projectStatus=projects.querySelector('[data-status]');let recent=[];
+  const projectNode=(tag,value)=>{const e=document.createElement(tag);e.textContent=value;return e;};
+  function renderProjects(){
+    const query=projectSearch.value.trim().toLowerCase(),matches=recent.filter(item=>`${item.name} ${item.path}`.toLowerCase().includes(query));
+    projectList.replaceChildren(...matches.map(item=>{
+      const row=document.createElement('article'),button=projectNode('button',item.current?'Current project':'Open project'),name=projectNode('strong',item.name),location=projectNode('small',item.path),status=projectNode('span',item.available?(item.current?'Current project':''):'Folder not found');
+      row.className='project-row';button.type='button';button.className='project-open';button.disabled=!!item.current;button.replaceChildren(name,location,status);
+      button.onclick=async()=>{try{if(!await guide.flush())return;projectStatus.textContent='Opening project…';await window.desktop.chooseRepository(item.path);}catch(e){projectStatus.textContent=e.message;}};
+      row.append(button);
+      if(!item.current){if(!item.available){button.disabled=true;const locate=projectNode('button','Locate folder');locate.onclick=async()=>{try{if(await guide.flush())await window.desktop.chooseRepository();}catch(e){projectStatus.textContent=e.message;}};row.append(locate);}
+        const remove=projectNode('button','Remove from list');remove.onclick=async()=>{try{await window.desktop.forgetProject(item.path);recent=await window.desktop.recentProjects();renderProjects();}catch(e){projectStatus.textContent=e.message;}};row.append(remove);}
+      return row;
+    }));if(!matches.length)projectList.append(projectNode('p','No projects match this search.'));
+  }
+  projectSearch.oninput=renderProjects;projects.querySelector('[data-close]').onclick=()=>projects.close();
+  projects.querySelector('[data-add]').onclick=async()=>{try{if(await guide.flush())await window.desktop.chooseRepository();}catch(e){projectStatus.textContent=e.message;}};
+  $('choose-repository').onclick=async()=>{try{if(!await guide.flush())return;recent=await window.desktop.recentProjects();projectSearch.value='';projectStatus.textContent='';renderProjects();projects.showModal();}catch(e){error(e.message);}};
   $('scenario-select').onchange = () => guide.navigate($('scenario-select').value);
   $('capture').hidden = !window.desktop;
   $('capture').onclick = async () => {

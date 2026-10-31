@@ -12,7 +12,7 @@ const origin = 'http://127.0.0.1:4310';
 if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') {
   const devRoot = path.resolve(__dirname, '..', '.local-dev');
   app.setPath('userData', path.join(devRoot, 'desktop'));
-  process.env.BRANCH_REVIEW_HOME = path.join(devRoot, 'workspace');
+  process.env.BRANCH_REVIEW_HOME ||= path.join(devRoot, 'workspace');
   delete process.env.META_CLINIC_REPO;
 }
 let window, closing = false, home;
@@ -28,7 +28,7 @@ async function launch() {
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
   if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') await mkdir(path.dirname(settingsPath), {recursive:true});
   const settings = JSON.parse(await readFile(settingsPath, 'utf8').catch(() => '{}'));
-  home = process.env.BRANCH_REVIEW_HOME || settings.home || (app.isPackaged ? path.join(app.getPath('userData'), 'workspace') : path.join(root, '.local'));
+  home = (!app.isPackaged && process.env.BRANCH_REVIEW_DEV==='1' ? settings.home : process.env.BRANCH_REVIEW_HOME) || process.env.BRANCH_REVIEW_HOME || settings.home || (app.isPackaged ? path.join(app.getPath('userData'), 'workspace') : path.join(root, '.local'));
   await mkdir(home, { recursive: true });
   process.env.BRANCH_REVIEW_HOME = home;
   const configured=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
@@ -122,9 +122,32 @@ async function launch() {
   ipcMain.handle('review:browser-qa',async(event,input)=>{trusted(event);return startQa(input);});
   ipcMain.handle('review:stop-browser-qa',event=>{trusted(event);qaCancelled=true;if(qaWindow&&!qaWindow.isDestroyed())qaWindow.close();});
   ipcMain.handle('review:show-browser-qa',async event=>{trusted(event);const state=await fetch(origin+'/api/state').then(r=>r.json());if(!state.record?.browserQa?.some(run=>run.id===runtimeState.browserQaWindowRunId))throw Error('This review has no active QA browser. Open its saved evidence in Details.');if(qaWindow&&!qaWindow.isDestroyed()){qaWindow.show();qaWindow.focus();}});
-  ipcMain.handle('review:choose-repository', async event => {
+  ipcMain.handle('review:recent-projects',async event=>{
+    trusted(event);const current=path.resolve(savedConfig.repository).toLowerCase(),hidden=new Set(settings.hiddenProjects || []);
+    const paths=[current,...(settings.recentProjects || []),...Object.keys(settings.projects || {})].filter((entry,index,all)=>all.indexOf(entry)===index && (entry===current||!hidden.has(entry)));
+    return Promise.all(paths.map(async entry=>{
+      const config=JSON.parse(await readFile(path.join(settings.projects?.[entry] || home,'config.json'),'utf8').catch(()=>'{}'));
+      const display=typeof config.repository==='string' && path.resolve(config.repository).toLowerCase()===entry ? config.repository : entry;
+      return {path:display,name:path.basename(display),current:entry===current,available:await availableRepository(display,exec)};
+    }));
+  });
+  ipcMain.handle('review:forget-project',async(event,repository)=>{
+    trusted(event);const key=typeof repository==='string'?path.resolve(repository).toLowerCase():'';
+    if(!settings.projects?.[key] || key===path.resolve(savedConfig.repository).toLowerCase())throw Error('Choose a different saved project to remove.');
+    settings.hiddenProjects=[...new Set([...(settings.hiddenProjects || []),key])];settings.recentProjects=(settings.recentProjects || []).filter(p=>p!==key);await writeFile(settingsPath,JSON.stringify({...settings,home}));return true;
+  });
+  ipcMain.handle('review:choose-repository', async (event,requested) => {
     trusted(event);
-    const chosen=await chooseRepository({dialog,window,exec,detectProject,repository:savedConfig.repository});
+    let chosen;
+    if(requested!==undefined){
+      const key=typeof requested==='string'?path.resolve(requested).toLowerCase():'';
+      if(!settings.projects?.[key])throw Error('Choose a saved project from the list.');
+      if(key===path.resolve(savedConfig.repository).toLowerCase())return null;
+      if(!await availableRepository(key,exec))throw Error('This project folder is unavailable. Use Locate folder to find it.');
+      const repository=(await exec('git',['rev-parse','--show-toplevel'],{cwd:key,windowsHide:true})).stdout.trim();
+      if(path.resolve(repository).toLowerCase()!==key)throw Error('This folder now belongs to a different project. Choose it as a new project.');
+      chosen={repository,projectInfo:await detectProject(repository)};
+    }else chosen=await chooseRepository({dialog,window,exec,detectProject,repository:savedConfig.repository});
     if(!chosen)return null;
     const {repository,projectInfo}=chosen;
     const response = await dialog.showMessageBox(window, { type: 'question', buttons: ['Open repository', 'Cancel'], defaultId: 0, cancelId: 1,
@@ -137,7 +160,8 @@ async function launch() {
     await mkdir(newHome, { recursive: true });
     const existing = JSON.parse(await readFile(path.join(newHome, 'config.json'), 'utf8').catch(() => '{}'));
     await writeFile(path.join(newHome, 'config.json'), JSON.stringify({ ...existing, repository, previewRoot: existing.previewRoot || path.join(newHome, 'previews') }, null, 2));
-    await writeFile(settingsPath, JSON.stringify({...settings,projects:{...settings.projects,[path.resolve(repository).toLowerCase()]:newHome},home:newHome,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));
+    const selectedKey=path.resolve(repository).toLowerCase();settings.hiddenProjects=(settings.hiddenProjects || []).filter(key=>key!==selectedKey);settings.recentProjects=[selectedKey,...(settings.recentProjects || []).filter(key=>key!==selectedKey)].slice(0,50);
+    await writeFile(settingsPath, JSON.stringify({...settings,projects:{...settings.projects,[selectedKey]:newHome},home:newHome,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));
     delete process.env.BRANCH_REVIEW_HOME;
     closing = true; app.relaunch(); app.exit(0);
   });
