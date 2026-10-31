@@ -5,7 +5,7 @@ import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
 import {npmEntry} from './web-project.mjs';
 import http from 'node:http';
-import { readFile, writeFile, access, rename } from 'node:fs/promises';
+import { readFile, writeFile, access, rename, stat, mkdir, open, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario, project, webHealthy, defaultBranch } from './adapter.mjs';
@@ -247,9 +247,28 @@ async function mutate(endpoint, data) {
   if (endpoint === '/api/stop') {delete state.previewVersion;return stopReview();}
   if (endpoint === '/api/fetch') return git('fetch','origin');
   if (endpoint === '/api/retest') { const prior=store.get(data.id); await startCandidate(prior.identity.ref,prior.id); return; }
+  if(endpoint==='/api/release-key-text'){
+    if(project.kind!=='meta-clinic')throw Error('Publishing is available for Meta Clinic only.');
+    if(typeof data.privateKey!=='string' || data.privateKey.length>50000 || !/^-----BEGIN (?:OPENSSH |RSA |EC )?PRIVATE KEY-----/.test(data.privateKey.trim()) || !/-----END (?:OPENSSH |RSA |EC )?PRIVATE KEY-----$/.test(data.privateKey.trim()))throw Error('Paste a complete SSH private key.');
+    const previous=JSON.parse(await readFile(path.join(local,'release.json'),'utf8').catch(()=> '{}'));
+    const recoveryDirectory=data.recoveryDirectory || previous.recoveryDirectory;
+    if(typeof recoveryDirectory!=='string' || !path.isAbsolute(recoveryDirectory) || !(await stat(recoveryDirectory).catch(()=>null))?.isDirectory())throw Error('Enter an absolute path to an existing recovery folder.');
+    const directory=path.join(local,'private-keys');await mkdir(directory,{recursive:true,mode:0o700});
+    const keyPath=path.join(directory,randomBytes(16).toString('hex')+'.key');let file;
+    try{
+      file=await open(keyPath,'wx',0o600);
+      if(process.platform==='win32'){const user=(await run('whoami',[])).trim();await run('icacls',[keyPath,'/inheritance:r','/grant:r',user+':(F)']);}
+      await file.writeFile(data.privateKey.trim()+'\n');await file.close();file=null;
+      const config=path.join(local,'release.json');await writeFile(config+'.tmp',JSON.stringify({keyPath,recoveryDirectory}));await rename(config+'.tmp',config);
+    }catch(error){if(file)await file.close().catch(()=>{});await unlink(keyPath).catch(()=>{});throw Error('Could not save the protected key and publishing settings. Existing settings were not changed.');}
+    return {saved:true};
+  }
   if (endpoint === '/api/release-settings') {
     if (typeof data.keyPath !== 'string' || typeof data.recoveryDirectory !== 'string' || !path.isAbsolute(data.keyPath) || !path.isAbsolute(data.recoveryDirectory)) throw new Error('Choose an existing key and recovery folder.');
-    await access(data.keyPath); await access(data.recoveryDirectory); await writeFile(path.join(local,'release.json'),JSON.stringify({keyPath:data.keyPath,recoveryDirectory:data.recoveryDirectory})); return;
+    const key=await stat(data.keyPath).catch(()=>null),recovery=await stat(data.recoveryDirectory).catch(()=>null);
+    if(!key?.isFile())throw Error('The SSH key path must point to an existing file.');
+    if(!recovery?.isDirectory())throw Error('The recovery path must point to an existing folder.');
+    const file=path.join(local,'release.json');await writeFile(file+'.tmp',JSON.stringify({keyPath:data.keyPath,recoveryDirectory:data.recoveryDirectory}));await rename(file+'.tmp',file);return;
   }
   const record = await active(data.id, ['/api/approve','/api/ship','/api/publish','/api/candidate','/api/browser-qa','/api/project-deploy','/api/pull-request'].includes(endpoint));
   if(endpoint==='/api/pull-request')return createReviewPr(record,{delivery,git,run,store,local,repo,defaultBranch});
@@ -345,7 +364,7 @@ for(const endpoint of ['/api/project-delivery','/api/project-deploy','/api/proje
 actions.add('/api/database-cleanup');actions.add('/api/database-start');
 actions.add('/api/onboarding');
 actions.add('/api/job-cancel');
-actions.add('/api/new-change');actions.add('/api/item-accept');actions.add('/api/request-update');
+actions.add('/api/release-key-text');actions.add('/api/new-change');actions.add('/api/item-accept');actions.add('/api/request-update');
 for(const endpoint of ['/api/version-preview','/api/version-latest','/api/version-restore','/api/fix-apply'])actions.add(endpoint);
 longActions.add('/api/version-restore');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
