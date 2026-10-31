@@ -56,7 +56,7 @@ export function activity({api,getState,navigate,flush,poll}){
     selectedId=null;savedRecord=null;
     if(page.hidden)return;
     const r=selected(),qa=qaState(r),active=r?.id===record?.id,checks=officeChecks(r?{...r,browserQa:qa.run?[qa.run]:[]}:null);
-    find('[data-title]').textContent='Results for this version';find('[data-status]').textContent=qa.label;find('[data-status]').classList.toggle('working',qa.status==='running');
+    find('[data-title]').textContent='Results for this version';find('[data-status]').textContent=qa.run?qa.label:'Not run';find('[data-status]').classList.toggle('working',qa.status==='running');
     if(state.error)find('[data-error]').textContent=state.error;
     const pages=qa.run?.actions.filter(a=>a.action==='visit').length || 0,assertions=(qa.run?.actions.length || 0)-pages;
     find('[data-scope]').textContent=qa.run?`${pages} page checks · ${assertions} behavior assertions. These checks do not cover the entire app.`:'Checks open the review pages and verify supported changes. Finish your review and resolve requests to enable Run checks.';
@@ -64,6 +64,7 @@ export function activity({api,getState,navigate,flush,poll}){
     find('[data-watch]').hidden=!active || !qa.run || qa.run.id!==state.browserQaWindowRunId;
     find('[data-stop]').hidden=qa.status!=='running';find('[data-open]').hidden=!r || active;find('[data-open]').disabled=state.busy || state.qaRunning;
     const nextKey=JSON.stringify(checks);if(key!==nextKey){key=nextKey;find('[data-boxes]').replaceChildren(...checks.map(check=>{const box=node('button','');box.className='qa-box '+check.tone;box.append(node('strong',check.title),node('span',check.path || ''),node('small',check.action+' · '+check.label));box.onclick=()=>{selectedCheck=check.id;evidence(check);};return box;}));}
+    find('[data-boxes]').hidden=!qa.run;page.querySelector('.office-legend').hidden=!qa.run;
     evidence(checks.find(check=>check.id===selectedCheck));
     find('[data-delivery]').hidden=!r?.qaSubmission || !active;
     find('[data-delivery-message]').textContent=qa.ready?'The listed checks passed. Approve this version, then merge and push or publish.':'Delivery stays locked until this version passes automated checks and all review findings are resolved.';
