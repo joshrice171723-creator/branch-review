@@ -949,3 +949,9 @@ body.focused .panel-divider {display:none}
 
 .branches.show-branches #guided-queue {display:none}
 .branches.show-branches .branch-list {flex:1 1 auto;min-height:0}
+
+#toggle-branches {display:flex;align-items:center;justify-content:space-between;gap:12px;width:calc(100% - 24px);margin:0 12px 12px;padding:10px 12px;border:1px solid #9aada3;border-radius:7px;background:#fff;color:#203f34;font-size:12px;font-weight:650;cursor:pointer}
+#toggle-branches::after {content:"⇄";font-size:16px;line-height:1}
+#toggle-branches:hover {background:#eaf1ec;border-color:#537c68}
+#toggle-branches:focus-visible {outline:3px solid #4d7a66;outline-offset:2px}
+#toggle-branches[hidden] {display:none}
