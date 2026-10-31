@@ -11,7 +11,7 @@ export function activity({api,getState,navigate,flush,poll}){
   const approval=document.getElementById('approval-section');delivery.querySelector('[data-approval]').append(approval);
   for(const id of ['ship','publish','project-deploy'])delivery.querySelector('[data-actions]').append(document.getElementById(id));
   delivery.querySelector('[data-settings]').append(document.getElementById('delivery-heading').closest('details'));
-  const advanced=document.getElementById('delivery-heading').closest('details');
+  const advanced=document.getElementById('delivery-heading').closest('details');advanced.open=true;
   return {open:async()=>{const r=getState().record;if(r)await navigate(r.cursor.itemId,'results');},render(){
     if(approval.parentElement!==delivery.querySelector('[data-approval]'))delivery.querySelector('[data-approval]').append(approval);
     if(advanced.parentElement!==delivery.querySelector('[data-settings]'))delivery.querySelector('[data-settings]').append(advanced);
