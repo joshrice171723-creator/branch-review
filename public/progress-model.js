@@ -1,3 +1,4 @@
+import {describeError} from './error-message.js';
 import {itemStatus,isComplete} from './review-model.js';
 
 export function reviewProgress(state,jobs=[],now=Date.now()){
@@ -12,9 +13,9 @@ export function reviewProgress(state,jobs=[],now=Date.now()){
   const assertions=run?.results.filter(result=>result.passed && ['text','style','url','visible'].includes(run.actions[result.index]?.action)).length || 0;
   const unverified=run?.results.filter(result=>result.skipped).length || 0;
   const result={label:'Choose a change',detail:'',working:false,run,next,pending:pending.length,pages,assertions,unverified};
-  if(state.error)return {...result,label:'Needs attention',detail:state.error};
+  if(state.error)return {...result,label:'Needs attention',detail:describeError(state.error).summary};
   if(job?.status==='running')return {...result,label:job.phase || (job.kind==='check'?'Running checks':'Making changes'),working:true,detail:'Your preview stays available while the agent works.'};
-  if(job && ['failed','interrupted','cancelled'].includes(job.status))return {...result,label:'Needs attention',detail:job.error || `The agent job ${job.status}. Open Details for its saved work.`};
+  if(job && ['failed','interrupted','cancelled'].includes(job.status))return {...result,label:'Needs attention',detail:job.error ? describeError(job.error).summary : `The agent job ${job.status}. Open Details for its saved work.`};
   if(state.busy || ['preparing','preview-ready'].includes(state.status))return {...result,label:state.status==='preview-ready'?'Checking the prepared preview':'Preparing preview',working:true,detail:'Review unlocks after the version checks pass.'};
   if(job?.status==='succeeded' && job.kind==='fix' && job.resultCommit && job.resultCommit!==sha)return {...result,awaitingReview:true,label:'Your changes are ready',detail:'Open Review changes to compare the new version and start its checks.'};
   if(!record)return result;
@@ -24,7 +25,7 @@ export function reviewProgress(state,jobs=[],now=Date.now()){
     if(now-Date.parse(last)>45000)return {...result,label:'Waiting for QA',detail:'No recent result. Open Details to inspect or stop the run.'};
     return {...result,label:'Testing your changes',working:true,detail:`${run.results.length} of ${run.actions.length} checks complete`};
   }
-  if(run && ['failed','interrupted','cancelled'].includes(run.status))return {...result,label:'Needs attention',detail:run.error || `Browser checks ${run.status}. Results remain saved.`};
+  if(run && ['failed','interrupted','cancelled'].includes(run.status))return {...result,label:'Needs attention',detail:run.error ? describeError(run.error).summary : `Browser checks ${run.status}. Results remain saved.`};
   if(!run)return {...result,label:state.automaticQa?'Preparing checks':'Ready for review',detail:'Behavior has not been checked automatically yet.'};
   return {...result,label:'Ready for review',detail:`${assertions} automatic ${assertions===1?'assertion':'assertions'} passed · ${pages} pages opened${unverified?` · ${unverified} checks need review`:''}`};
 }
