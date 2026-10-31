@@ -100,8 +100,11 @@ let branchVisibility=null;
 try{branchVisibility=JSON.parse(localStorage.getItem('branch-review:branches-visible') || 'null');}catch{}
 function branchVisibilityUI() {
   const visible=branchVisibility ?? !currentState.record;
-  $('branches').closest('.branches').classList.toggle('compact',!visible);
-  $('toggle-branches').textContent=visible?'Hide branches':'Show branches';$('toggle-branches').setAttribute('aria-expanded',String(visible));
+  const rail=$('branches').closest('.branches');
+  rail.classList.toggle('compact',!visible);
+  rail.classList.toggle('show-branches',visible);
+  $('toggle-branches').hidden=!currentState.record;
+  $('toggle-branches').textContent=visible?'Show review items':'Show branches';$('toggle-branches').setAttribute('aria-expanded',String(visible));
   $('rail-review').hidden=visible || !currentState.record;
   $('rail-review').textContent=currentState.record?.identity.ref.replace(/^refs\/(heads|remotes)\//,'') || '';
   $('rail-review').title=$('rail-review').textContent;

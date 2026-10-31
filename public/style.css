@@ -946,3 +946,6 @@ body.focused main.resizable-layout {grid-template-columns:minmax(0, 1fr)}
 body.focused .panel-divider {display:none}
 @media(max-width:1250px){main.resizable-layout{grid-template-columns:var(--rail-width, 200px) minmax(320px, 1fr) var(--review-width, 325px)}.panel-divider-left{left:var(--rail-width, 200px)}.panel-divider-right{left:calc(100% - var(--review-width, 325px))}}
 @media(max-width:950px){main.resizable-layout{grid-template-columns:var(--rail-width, 185px) minmax(320px, 1fr)}.panel-divider-left{left:var(--rail-width, 185px)}.panel-divider-right{display:none}.panel-divider-left{bottom:auto;height:calc(100vh - 66px)}}
+
+.branches.show-branches #guided-queue {display:none}
+.branches.show-branches .branch-list {flex:1 1 auto;min-height:0}
