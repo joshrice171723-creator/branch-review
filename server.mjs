@@ -1,3 +1,4 @@
+import {databaseCleanup} from './database-cleanup.mjs';
 import {qaState,qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
 import {npmEntry} from './web-project.mjs';
@@ -40,6 +41,7 @@ const jobs=await new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,provid
   const selected=await comparison(branch.ref,'parent'),runtime=state.changed?.runtime==='standby'?'changed':'standby';
   const prepared=await prepare(runtime,sha,selected.files);state.prepared={...prepared,recipe:scenarioRecipe(selected.files)};await writeFile(path.join(local,'prepared.json'),JSON.stringify(state.prepared));return prepared;
 }}).load();
+const cleanup=databaseCleanup({run,local,state,records:store.records,preparedFix:()=>preparedFix,jobs:()=>jobs.rows});
 let toolsSettings=JSON.parse(await readFile(path.join(local,'tools-settings.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
 const delivery = new Delivery(git, store, defaultBranch);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
@@ -202,6 +204,8 @@ async function mutate(endpoint, data) {
     const next={provider,executables:{...agentSettings.executables,[provider]:executable}};
     await writeFile(path.join(local,'agent-settings.json.tmp'),JSON.stringify(next));await rename(path.join(local,'agent-settings.json.tmp'),path.join(local,'agent-settings.json'));agentSettings=next;return probeProvider(provider,executable);
   }
+  if(endpoint==='/api/database-start') { if(project.kind!=='meta-clinic')throw Error('Available for Meta Clinic only.'); return cleanup.start(data.slot); }
+  if(endpoint==='/api/database-cleanup') { if(project.kind!=='meta-clinic')throw Error('Database cleanup is available for Meta Clinic only.'); return cleanup.remove(data.names,data.confirmation); }
   if(endpoint==='/api/agent-probe'){const agent=selectedAgent();return probeProvider(agent.provider,agent.executable);}
   if(project.kind!=='meta-clinic' && ['/api/publish','/api/retry-muse','/api/release-settings','/api/published-review','/api/smoke'].includes(endpoint))throw Error('Publishing is not configured for this project. Use your existing delivery process.');
   if(endpoint==='/api/tools-settings'){if(typeof data.autoPlan!=='boolean')throw new Error('Choose whether to generate plans automatically.');const next={autoPlan:data.autoPlan};await writeFile(path.join(local,'tools-settings.json'),JSON.stringify(next));toolsSettings=next;return next;}
@@ -300,6 +304,7 @@ actions.add('/api/agent-settings');actions.add('/api/agent-probe');
 actions.add('/api/project-settings');
 actions.add('/api/browser-qa');actions.add('/api/browser-qa-result');
 for(const endpoint of ['/api/project-delivery','/api/project-deploy','/api/project-deploy-retry','/api/pull-request'])actions.add(endpoint);
+actions.add('/api/database-cleanup');actions.add('/api/database-start');
 actions.add('/api/onboarding');
 actions.add('/api/job-cancel');
 actions.add('/api/new-change');
@@ -319,6 +324,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     if(req.method==='GET' && url.pathname==='/api/project-settings')return json(res,200,await readRecipe(local));
     if(req.method==='GET' && url.pathname==='/api/project-delivery')return json(res,200,await readDelivery(local));
     if(req.method==='GET' && url.pathname==='/api/onboarding')return json(res,200,{needed:!store.records.length && !await access(path.join(local,'onboarding.json')).then(()=>true,()=>false),repository:repo,project,agent:selectedAgent()});
+    if(req.method==='GET' && url.pathname==='/api/databases') { if(busy)throw Error('Wait for the current operation to finish.'); if(project.kind!=='meta-clinic')throw Error('Database cleanup is available for Meta Clinic only.'); return json(res,200,await cleanup.inventory()); }
     if(req.method==='GET' && url.pathname==='/api/diagnostics')return json(res,200,await diagnostics());
     if(req.method==='GET' && url.pathname==='/api/fix-files')return json(res,200,await jobs.fixFiles(url.searchParams.get('job')));
     if(req.method==='GET' && url.pathname==='/api/tools-settings')return json(res,200,toolsSettings);

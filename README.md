@@ -87,3 +87,9 @@ Reports include outcomes, findings, screenshots, approval and delivery history. 
 `npm test` includes disposable Git repositories, actual custom-preview processes, provider protocol tests and browser-evidence validation. `npm run package:desktop` builds Windows x64. `npm start` provides the web UI; desktop capture and browser runs require Electron.
 
 Meta Clinic's `npm run test:live` and `node test/qa-live.mjs` need their matching prepared preview pair. `npm run installer` creates the unsigned Windows x64 installer. The Windows installer workflow is configured for a fresh hosted runner, but account billing currently blocks it from starting. Signing and automatic updates remain separate distribution work. See [distribution evidence](DISTRIBUTION_AUDIT.md).
+
+### Preview database cleanup
+
+In Settings, choose **Inspect databases** under Preview databases. Branch Review lists matching databases in its Meta Clinic preview containers, their sizes, known commits and review titles. Start a stopped preview container from the list to inspect it; starting it leaves the container running. Docker must be available. Missing containers do not establish whether an earlier Docker engine or disk still contains data.
+
+Active or prepared databases, databases with connections, and databases without a matching local preview cache cannot be selected. Cleanup requires an explicit selection and confirmation, deletes only the listed databases, and invalidates their preview caches. Saved review history and evidence are retained. Reopening a deleted preview requires its normal setup and synthetic scenario to run again. No database is deleted automatically on merge.
