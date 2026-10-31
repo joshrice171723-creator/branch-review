@@ -900,7 +900,6 @@ dialog::backdrop {background:#152c2b80}
 #activity-dialog pre{max-height:300px;overflow:auto;font-size:11px}
 @media(prefers-reduced-motion:reduce){#activity-dialog.working [data-status]::before{animation:none}}
 #preview-address{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 16px;background:#fff;border-bottom:1px solid #dce3d9;font:12px/1.5 monospace}#preview-address input{flex:1;min-width:160px;font:inherit;padding:5px 7px}#preview-address button{font:inherit;padding:5px 10px}#preview-url-error:not(:empty){flex-basis:100%;color:#a33}
-.preview-change-hint{margin:0;padding:5px 16px;color:#607166;font-size:11px}
 #preview-area>#change-composer{position:absolute;z-index:20;right:16px;bottom:16px;width:min(360px,calc(100% - 32px));max-height:80%;overflow:auto;padding:18px;background:#fff;border:1px solid #bdcdbf;border-radius:10px;box-shadow:0 8px 30px #102c2426;box-sizing:border-box}
 #change-composer[hidden]{display:none!important}
 #close-change{float:right;margin:0 0 6px 8px;font-size:20px}
