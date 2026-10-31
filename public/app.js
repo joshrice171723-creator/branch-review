@@ -148,10 +148,11 @@ function error(message) {
   $("error").hidden = !message;
   if(message)$("error").scrollIntoView({block:'nearest'});
 }
+const branchTitle=branch=>branch.subject==='fix: address Branch Review findings' && branch.displaySubject ? `${branch.displaySubject} · ${branch.sha.slice(0,7)}` : branch.subject;
 function branchList() {
   const query = $("search").value.toLowerCase();
   const items = visibleBranches().filter((branch) =>
-    `${branch.name} ${branch.subject}`.toLowerCase().includes(query),
+    `${branch.name} ${branch.subject} ${branch.displaySubject || ""}`.toLowerCase().includes(query),
   );
   $("count").textContent = items.length;
   $("branches").replaceChildren(
@@ -161,7 +162,7 @@ function branchList() {
       button.setAttribute("aria-current", String(selected?.ref === branch.ref));
       const title = document.createElement("span");
       title.className = "branch-title";
-      title.textContent = branch.subject+(branch.fixCount?` · ${branch.fixCount} fix${branch.fixCount===1?'':'es'}`:'');
+      title.textContent = branchTitle(branch)+(branch.fixCount?` · ${branch.fixCount} fix${branch.fixCount===1?'':'es'}`:'');
       const meta = document.createElement("span");
       meta.className = "branch-meta";
       const ref = document.createElement("span");
@@ -241,7 +242,7 @@ async function select(branch,reveal=false) {
   $('branch-brief').open = reveal || !currentState.record || ![branch.ref,...branch.aliases].includes(currentState.comparison?.branch.ref);
   if(reveal)$('branch-brief').scrollIntoView({block:'start'});
   branchList();
-  $("title").textContent = branch.subject;
+  $("title").textContent = branchTitle(branch);
   $("branch-name").textContent = branch.name;
   $("start").disabled = true;
   $('comparison-note').textContent='Loading comparison…';$('files').replaceChildren();$('file-count').textContent='—';$('plan-count').textContent='Loading review plan…';
@@ -285,7 +286,7 @@ async function openBranch(branch) {
   if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha && (!branch.fixJob || currentState.record.fixComparison))return;
   if(!await reviewWorkflow.flush())return;
   openingSelection={...branch,starting:true};selected=branch;selectedComparison=null;
-  openingSummary.textContent=`${branch.subject} · ${branch.name} · ${branch.sha.slice(0,7)}`;
+  openingSummary.textContent=`${branchTitle(branch)} · ${branch.name} · ${branch.sha.slice(0,7)}`;
   try{sessionStorage.setItem('branch-review:opening',JSON.stringify(openingSelection));}catch{}
   $('frames').hidden=true;$('frames').replaceChildren();frameKey='';
   $('review-workflow').hidden=true;$('review-branch-status').hidden=true;$('branch-brief').hidden=true;

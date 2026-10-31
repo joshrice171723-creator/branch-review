@@ -103,6 +103,7 @@ export async function defaultBranch(){
   for(const name of ['main','master'])if(await git('rev-parse','--verify','refs/remotes/origin/'+name).then(()=>true,()=>false))return name;
   throw Error('Fetch origin and set its default branch before reviewing this repository.');
 }
+const branchFileLabels = new Map();
 export async function branches() {
   const merged = new Set((await git('for-each-ref', '--merged=refs/remotes/origin/'+await defaultBranch(), '--format=%(refname)', 'refs/heads', 'refs/remotes/origin')).split('\n'));
   const output = await git(
@@ -129,6 +130,15 @@ export async function branches() {
         aliases: [],
       };
     });
+  await Promise.all(inventory.filter(branch=>branch.subject==='fix: address Branch Review findings').map(async branch=>{
+    if(!branchFileLabels.has(branch.sha))branchFileLabels.set(branch.sha,git('diff-tree','--no-commit-id','--first-parent','--name-only','-r','-z',branch.sha).then(output=>{
+      const files=output.split('\0').filter(Boolean);
+      if(!files.length)return '';
+      const first=files[0].split('/').pop();
+      return `Fix: ${first}${files.length>1?` (+${files.length-1} files)`:''}`;
+    }).catch(()=>''));
+    branch.displaySubject=await branchFileLabels.get(branch.sha);
+  }));
   const locals = new Map(inventory.filter(b => !b.remote).map(b => [b.name, b]));
   return inventory.filter(branch => {
     const localBranch = branch.remote && locals.get(branch.name.replace(/^origin\//, ''));
