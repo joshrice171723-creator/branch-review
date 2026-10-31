@@ -17,8 +17,12 @@ export function batchReview({api,getState,getSide,workflow,capture,poll,error}){
   const requests=node('button','Changes requested');requests.id='batch-requests';requests.className='secondary';$('review-branch-status').after(requests);
   const listDialog=node('dialog','');listDialog.id='requests-dialog';listDialog.setAttribute('aria-label','Requested changes');const list=node('div',''),listClose=node('button','Close');listClose.onclick=()=>listDialog.close();listDialog.append(node('h2','Requested changes'),list,listClose);document.body.append(listDialog);
   const send=node('button','Make requested changes');send.id='batch-send';send.className='primary';$('results-action').before(send);
+  const continueReview=node('button','Continue review'),verify=node('button','Verify fixes'),inline=node('section','');continueReview.className='primary';verify.className='secondary';inline.id='summary-requests';$('batch-send').before(continueReview,verify,inline);
+  continueReview.onclick=()=>resume(false);verify.onclick=()=>resume(true);
+  async function resume(retest){const r=getState().record,target=r.manifest.scenarios.find(item=>retest?itemStatus(r,item)==='ready-to-retest':['not-started','in-progress'].includes(itemStatus(r,item)));if(target)await workflow.navigate(target.id);}
+  let inlineKey='';$('results-checks').open=false;
   const skip=node('button','Save and skip this item');skip.type='button';skip.className='secondary';$('item-more').append(skip);skip.onclick=async()=>{try{if(await workflow.flush())await next();}catch(e){error(e.message);}};
-  const openIssues=r=>r.issues.filter(issue=>issue.status!=='resolved');
+  const openIssues=r=>r.issues.filter(issue=>!['resolved','needs-retest'].includes(issue.status));
   async function next(){
     const r=getState().record,current=r.cursor.itemId,index=r.manifest.scenarios.findIndex(i=>i.id===current);
     const todo=item=>!['passed','needs-fixes','blocked','not-applicable'].includes(itemStatus(r,item));
@@ -49,7 +53,7 @@ export function batchReview({api,getState,getSide,workflow,capture,poll,error}){
       if(editing)await api('/api/request-update',{id:pinned.id,issueId:editing.id,actual:text.value,expected:expected.value});
       else await api('/api/issue',{...pinned,actual:text.value,expected:expected.value,screenshot:image});
       try{localStorage.removeItem(draftKey());}catch{}
-      modal.close();await poll();if(editing)showList();else await next();
+      modal.close();await poll();if(!editing)await next();
     }catch(e){notice.textContent=e.message;}finally{saving=false;save.disabled=close.disabled=false;}
   };
   function showList(){
@@ -61,14 +65,25 @@ export function batchReview({api,getState,getSide,workflow,capture,poll,error}){
   requests.onclick=showList;
   $('report-problem').onclick=()=>open();
   $('item-next').onclick=async()=>{if(saving)return;saving=true;try{if(!await workflow.flush())return;await api('/api/item-accept',{id:getState().record.id,itemId:getState().record.cursor.itemId});await poll();await next();}catch(e){error(e.message);}finally{saving=false;}};
-  send.onclick=async()=>{if(saving)return;saving=true;send.disabled=true;try{if(!await workflow.flush())return;const r=getState().record;await api('/api/job',{id:r.id,kind:'fix',batch:true,requestText:fixRequest({...r,manifest:{...r.manifest,scenarios:r.manifest.scenarios.filter(item=>openIssues(r).some(issue=>issue.scenario===item.id))}})});await poll();}catch(e){error(e.message);}finally{saving=false;}};
+  send.onclick=async()=>{if(saving)return;saving=true;send.disabled=true;try{if(!await workflow.flush())return;const r=getState().record;await api('/api/job',{id:r.id,kind:'fix',batch:true,requestText:fixRequest({...r,issues:openIssues(r),manifest:{...r.manifest,scenarios:r.manifest.scenarios.filter(item=>openIssues(r).some(issue=>issue.scenario===item.id))}})});await poll();}catch(e){error(e.message);}finally{saving=false;}};
   return {open:()=>open(),openTarget:selection=>open(null,selection),render(state){
     const r=state.record,enabled=!!r&&state.status==='ready'&&!state.busy&&!state.jobsRunning&&!state.previewVersion&&!isPublished(r),count=r?openIssues(r).length:0;
     requests.hidden=!r||!count;requests.textContent=`${count} change${count===1?'':'s'} requested`;requests.disabled=!enabled;skip.disabled=!enabled;
-    send.hidden=!r||r.cursor?.view!=='results'||!count;send.textContent=`Make these ${count} change${count===1?'':'s'}`;send.disabled=!enabled||saving||!reviewAccountedFor(r);
+    send.hidden=!r||r.cursor?.view!=='results'||!count;send.textContent=count===1?'Make this change':`Make these ${count} changes`;send.disabled=!enabled||saving||!reviewAccountedFor(r);
+    const inSummary=!!r && r.cursor?.view==='results',unfinished=r?r.manifest.scenarios.filter(item=>['not-started','in-progress'].includes(itemStatus(r,item))):[],retests=r?r.manifest.scenarios.filter(item=>itemStatus(r,item)==='ready-to-retest'):[];
+    continueReview.hidden=!inSummary||!unfinished.length;continueReview.disabled=!enabled;continueReview.textContent=`Continue ${unfinished.length} unfinished item${unfinished.length===1?'':'s'}`;
+    verify.hidden=!inSummary||!retests.length;verify.disabled=!enabled;verify.textContent=`Verify ${retests.length} fix${retests.length===1?'':'es'}`;
+    inline.hidden=!inSummary||!count;
+    const nextKey=JSON.stringify([r?.id,r?openIssues(r):[],enabled]);
+    if(nextKey!==inlineKey){inlineKey=nextKey;inline.replaceChildren(node('h3','Requested changes'),...(r?openIssues(r):[]).map(issue=>{
+      const row=node('article',''),title=node('strong',r.manifest.scenarios.find(item=>item.id===issue.scenario)?.title||'Earlier review item'),description=node('p',issue.actual),edit=node('button','Edit'),remove=node('button','Remove');edit.className=remove.className='secondary';edit.disabled=remove.disabled=!enabled;
+      edit.onclick=()=>open(issue);remove.onclick=async()=>{remove.disabled=true;try{await api('/api/request-update',{id:r.id,issueId:issue.id,remove:true});await poll();}catch(e){error(e.message);remove.disabled=false;}};row.append(title,description,edit,remove);return row;
+    }));}
+
     $('report-problem').textContent='Needs a change';$('report-problem').disabled=!enabled;
     $('item-next').textContent='Looks good → Next';$('item-next').disabled=!enabled||saving||!!r?.issues.some(i=>i.scenario===r.cursor.itemId&&i.status!=='resolved'&&i.status!=='needs-retest');
     $('prepare-handoff').hidden=true;$('handoff-panel').hidden=true;
     if(r && r.cursor?.view==='results'&&count){$('results-action').hidden=true;$('results-message').hidden=false;$('results-message').textContent=reviewAccountedFor(r)?'Review your collected requests, then make the changes together.':'Finish reviewing the remaining items before sending these requests.';}else $('results-action').hidden=false;
+    if(inSummary && (unfinished.length||retests.length)){$('results-action').hidden=true;$('results-message').hidden=false;$('results-message').textContent='Continue the unfinished items and verify completed fixes before making another batch of changes.';}
   }};
 }

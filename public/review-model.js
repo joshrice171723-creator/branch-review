@@ -1,5 +1,5 @@
 export const isPublished = record => ["published","verified"].includes(record?.delivery?.stage);
-export const statusLabels = {'not-started':'Not started','in-progress':'In progress',passed:'Passed','ready-to-retest':'Ready to retest','needs-fixes':'Needs fixes',blocked:'Blocked','not-applicable':'Not applicable'};
+export const statusLabels = {'not-started':'Not started','in-progress':'In progress',passed:'Passed','ready-to-retest':'Fix ready to verify','needs-fixes':'Needs fixes',blocked:'Blocked','not-applicable':'Not applicable'};
 export function itemStatus(record, item) {
   const saved = record.items?.[item.id] || {};
   if (record.issues.some(issue => issue.scenario === item.id && !['resolved','needs-retest'].includes(issue.status))) return 'needs-fixes';

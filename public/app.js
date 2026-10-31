@@ -81,7 +81,7 @@ resizablePanels(document.querySelector('main'));
 const pendingChecks=document.createElement('p');pendingChecks.setAttribute('role','status');pendingChecks.hidden=true;pendingChecks.textContent='Your preview is ready. Final checks are running. Review and approval unlock when all checks pass.';$('review-branch-status').before(pendingChecks);
 const openingSummary=document.createElement('p');openingSummary.id='opening-summary';$('phase').before(openingSummary);
 const fixNotice=document.createElement('p');fixNotice.style.cssText='font-size:12px;line-height:1.5;white-space:normal';fixNotice.hidden=true;$('review-branch-status').after(fixNotice);
-const versionHistory=document.createElement('details'),versionHeading=document.createElement('summary'),versionResults=document.createElement('div');versionHeading.textContent='Review history';versionHistory.append(versionHeading,versionResults);versionHistory.hidden=true;fixNotice.after(versionHistory);
+const versionHistory=document.createElement('details'),versionHeading=document.createElement('summary'),versionResults=document.createElement('div');versionHeading.textContent='Review history';versionHistory.append(versionHeading,versionResults);versionHistory.hidden=true;fixNotice.after(versionHistory);$('review-context').append(fixNotice,versionHistory);
 let allBranches = [],
   selected = null, openingSelection = null,
   token = "",

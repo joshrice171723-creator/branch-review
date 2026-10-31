@@ -10,12 +10,13 @@ export function activity({api,getState,navigate,flush,poll}){
   const strip=document.createElement('div');strip.id='work-progress';
   strip.innerHTML='<span class="work-light" aria-hidden="true"></span><div role="status"><strong data-label></strong><span data-detail></span></div><button class="quiet" data-details>View details</button>';
   document.getElementById('preview-area').before(strip);
-  const page=document.createElement('section');page.id='qa-page';page.hidden=true;page.setAttribute('aria-label','QA workspace');
-  page.innerHTML=`<header class="qa-heading"><div><h2>Automated checks</h2><p>Run page and supported appearance checks on this reviewed version. Results supplement your manual review.</p></div><button data-back>Back to review</button></header><div class="qa-layout"><nav data-queue aria-label="Reviews sent to QA"></nav><section id="activity-dialog"><h2 data-title></h2><p data-status role="status"></p><p data-error role="alert"></p><p data-scope></p><div class="tool-actions"><button data-run>Run QA again</button><button data-watch>Watch browser</button><button data-stop>Stop QA</button><button data-open>Open this review</button></div><div class="office-legend"><span class="queued">Queued</span><span class="checking">Checking</span><span class="passed">Passed</span><span class="failed">Failed</span><span class="unverified">Unverified</span></div><div data-boxes class="qa-boxes"></div><section data-evidence hidden></section><section data-delivery><h2>Ready to deliver</h2><p data-delivery-message></p><div data-approval></div><div class="tool-actions" data-delivery-buttons><button data-approve>Approve changes</button></div><details data-delivery-details><summary>Delivery settings and recovery</summary></details></section><details data-technical><summary>Technical details</summary><p>Only the listed checks are covered. Full-app regression and exploratory agent QA are not configured by this runner.</p><section data-jobs></section></details></section></div>`;
+  const page=document.createElement('details');page.id='qa-page';page.hidden=true;page.setAttribute('aria-label','QA workspace');
+  page.innerHTML=`<button data-back hidden>Back to review</button><div class="qa-layout"><nav data-queue aria-label="Reviews sent to QA"></nav><section id="activity-dialog"><h2 data-title></h2><p data-status role="status"></p><p data-error role="alert"></p><p data-scope></p><div class="tool-actions"><button data-run>Run QA again</button><button data-watch>Watch browser</button><button data-stop>Stop QA</button><button data-open>Open this review</button></div><div class="office-legend"><span class="queued">Queued</span><span class="checking">Checking</span><span class="passed">Passed</span><span class="failed">Failed</span><span class="unverified">Unverified</span></div><div data-boxes class="qa-boxes"></div><section data-evidence hidden></section><section data-delivery><h2>Ready to deliver</h2><p data-delivery-message></p><div data-approval></div><div class="tool-actions" data-delivery-buttons><button data-approve>Approve changes</button></div><details data-delivery-details><summary>Delivery settings and recovery</summary></details></section><details data-technical><summary>Technical details</summary><p>Only the listed checks are covered. Full-app regression and exploratory agent QA are not configured by this runner.</p><section data-jobs></section></details></section></div>`;
+  const checksHeading=node('summary','Automated checks');page.prepend(checksHeading);
   document.getElementById('guided-results').append(page);const find=s=>page.querySelector(s);let selectedId=null,savedRecord=null,selectedCheck=null,key='',evidenceKey='',sending=false,loading=false,jobKey='';
   const selected=()=>selectedId && selectedId!==getState().record?.id?savedRecord:getState().record;
   const close=()=>{};
-  const open=async()=>{const r=getState().record;if(r){await navigate(r.cursor?.itemId || r.manifest.scenarios[0].id,'results');page.scrollIntoView({block:'nearest'});}void render();};
+  const open=async()=>{page.open=true;const r=getState().record;if(r){await navigate(r.cursor?.itemId || r.manifest.scenarios[0].id,'results');page.scrollIntoView({block:'nearest'});}void render();};
   find('[data-back]').hidden=true;find('[data-queue]').hidden=true;
   button.onclick=open;strip.querySelector('[data-details]').onclick=open;
   const go=async id=>{await navigate(id);close();};
@@ -26,7 +27,7 @@ export function activity({api,getState,navigate,flush,poll}){
     const state=getState(),record=state.record;if(!record)return;
     selectedId=null;savedRecord=null;
     if(record.qaSubmission && !force){void open();return;}
-    sending=true;find('[data-error]').textContent='';
+    page.open=true;sending=true;find('[data-error]').textContent='';
     try{if(!await flush())return;if(!window.desktop?.startBrowserQa)throw Error('Automated checks require the desktop app.');if(!canApprove(getState().record))throw Error('Finish your review and resolve change requests before running checks.');await window.desktop.startBrowserQa({id:record.id,submit:true});await poll();}
     catch(e){open();find('[data-error]').textContent=e.message;}finally{sending=false;void render();}
   }
@@ -53,10 +54,11 @@ export function activity({api,getState,navigate,flush,poll}){
     strip.querySelector('[data-label]').textContent=record?.qaSubmission?qaState(record).label:progress.label;strip.querySelector('[data-detail]').textContent=progress.detail;
     page.hidden=!record || record.cursor?.view!=='results';
     page.dataset.reviewed=String(!!record && canApprove(record));
+    checksHeading.textContent=record?.qaSubmission?`Automated checks - ${qaState(record).label}`:record && canApprove(record)?'Automated checks - ready to run':'Automated checks - available after review';
     selectedId=null;savedRecord=null;
     if(page.hidden)return;
     const r=selected(),qa=qaState(r),active=r?.id===record?.id,checks=officeChecks(r?{...r,browserQa:qa.run?[qa.run]:[]}:null);
-    find('[data-title]').textContent='Results for this version';find('[data-status]').textContent=qa.run?qa.label:'Not run';find('[data-status]').classList.toggle('working',qa.status==='running');
+    find('[data-title]').textContent='';find('[data-status]').textContent=qa.run?qa.label:'Not run';find('[data-status]').classList.toggle('working',qa.status==='running');
     if(state.error)find('[data-error]').textContent=state.error;
     const pages=qa.run?.actions.filter(a=>a.action==='visit').length || 0,assertions=(qa.run?.actions.length || 0)-pages;
     find('[data-scope]').textContent=qa.run?`${pages} page checks · ${assertions} behavior assertions. These checks do not cover the entire app.`:'Checks open the review pages and verify supported changes. Finish your review and resolve requests to enable Run checks.';

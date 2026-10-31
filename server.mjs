@@ -266,7 +266,7 @@ async function mutate(endpoint, data) {
     if(jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running job before editing the plan.');
     await plans.save(record.identity.changed,data.manifest);await activate();return state.recordId;
   }
-  if(endpoint==='/api/job'){if(data.batch && (!reviewAccountedFor(record) || !record.issues.some(i=>i.status!=='resolved')))throw Error('Finish reviewing every item and collect change requests before starting this batch.');return jobs.start(record,data.kind,data);}
+  if(endpoint==='/api/job'){if(data.batch && (!reviewAccountedFor(record) || !record.issues.some(i=>!['resolved','needs-retest'].includes(i.status))))throw Error('Finish reviewing every item and collect change requests before starting this batch.');return jobs.start(record,data.kind,data);}
   if(endpoint==='/api/fix-commit'){
     if(!jobs.rows.some(job=>job.id===data.jobId && job.reviewId===record.id))throw Error('Choose a fix job from this review.');
     return jobs.commitFix(data.jobId,data.files);

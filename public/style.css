@@ -988,3 +988,11 @@ body.focused .panel-divider {display:none}
 #guided-results #qa-page .qa-box{min-height:0;padding:12px;border-top-width:1px;border-left:4px solid var(--box-color);gap:4px}
 #guided-results:has(#qa-page[data-reviewed="true"]) > #results-action{display:none}
 .main-tools #toolbar-qa{display:none}
+
+#guided-results #qa-page{padding-top:14px;border-top:1px solid #dce3da}
+#qa-page>summary{font-weight:600;cursor:pointer;margin-bottom:14px}
+#summary-requests article{padding:14px 0;border-bottom:1px solid #dce3da;overflow-wrap:anywhere}
+#summary-requests button{width:auto;margin-right:8px}
+#summary-requests h3{font-size:16px;margin:20px 0 0}
+#guided-results>button{margin-bottom:10px}
+#qa-page [data-title]:empty{display:none}
