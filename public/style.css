@@ -676,7 +676,6 @@ textarea {min-height:72px;resize:vertical;font-size:12px}
 
 main {grid-template-columns:230px minmax(360px,1fr) 360px}
 .review {padding:22px 22px 36px}
-.branches:has(#guided-queue:not([hidden])) .branch-list {flex:0 1 180px;min-height:90px}
 #guided-queue {display:flex;flex:1;min-height:180px;flex-direction:column;border-top:1px solid #dce3d9;margin-top:12px;padding:14px 10px 4px}
 .queue-heading {display:flex;justify-content:space-between;align-items:baseline;padding:0 9px 12px;gap:8px}
 .queue-heading h2 {font-size:12px;margin:0}
@@ -775,7 +774,6 @@ dialog::backdrop {background:#152c2b80}
 #tools-dialog input:not([type="checkbox"]),#annotation-dialog input {font:inherit;border:1px solid #ccd7cc;border-radius:6px;padding:9px;background:white;color:#233c31}
 #guided-queue {min-height:330px}
 #item-queue {min-height:80px}
-.branches:has(#guided-queue:not([hidden])) .branch-list {flex-basis:125px;min-height:70px}
 .branches {overflow-y:auto}
 .topbar .edition,.project .divider {display:none}
 .rail-heading {padding:18px 18px 10px}
