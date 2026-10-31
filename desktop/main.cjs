@@ -1,4 +1,4 @@
-const {chooseRepository,availableRepository}=require('./repository.cjs');
+const {chooseRepository,availableRepository,welcomeProject}=require('./repository.cjs');
 const {setupUrl,requireGit}=require('./setup-help.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
@@ -39,6 +39,7 @@ async function launch() {
     if(choice.response!==0){app.quit();return;}
   }
   if(!previousRepository || unavailable){
+    if(!previousRepository && !await welcomeProject({dialog})){app.quit();return;}
     const chosen=await chooseRepository({dialog,exec,detectProject});
     if(!chosen){app.quit();return;}
     const {repository}=chosen;
