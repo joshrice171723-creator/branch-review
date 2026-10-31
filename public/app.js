@@ -8,6 +8,50 @@ import { reviewShortcut, refreshedSelection, selectedReviewState } from './short
 import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
+function resizablePanels(main) {
+  const left=main.querySelector('.panel-divider-left'),right=main.querySelector('.panel-divider-right');
+  if (!left || !right) return;
+  main.classList.add('resizable-layout');
+  const key='branch-review:panel-widths';
+  let saved={};try{saved=JSON.parse(localStorage.getItem(key) || '{}') || {};}catch{}
+  const narrow=()=>window.matchMedia('(max-width: 950px)').matches;
+  const limits=side=>{
+    const width=main.getBoundingClientRect().width;
+    const rail=main.querySelector('.branches').getBoundingClientRect().width;
+    const review=narrow()?0:main.querySelector('.review').getBoundingClientRect().width;
+    return side==='left' ? [160,Math.max(160,width-review-320)] : [260,Math.max(260,width-rail-320)];
+  };
+  function set(side,value) {
+    const [min,max]=limits(side), size=Math.round(Math.max(min,Math.min(max,value)));
+    main.style.setProperty(side==='left'?'--rail-width':'--review-width',`${size}px`);
+    const handle=side==='left'?left:right;
+    handle.setAttribute('aria-valuemin',String(min));handle.setAttribute('aria-valuemax',String(max));handle.setAttribute('aria-valuenow',String(size));handle.setAttribute('aria-valuetext',`${size} pixels`);
+    return size;
+  }
+  function persist(){try{localStorage.setItem(key,JSON.stringify(saved));}catch{}}
+  for(const [handle,side,selector] of [[left,'left','.branches'],[right,'right','.review']]) {
+    if(Number.isFinite(saved[side]))saved[side]=set(side,saved[side]);
+    else {const [min,max]=limits(side);handle.setAttribute('aria-valuemin',String(min));handle.setAttribute('aria-valuemax',String(max));handle.setAttribute('aria-valuenow',String(Math.round(main.querySelector(selector).getBoundingClientRect().width)));}
+    handle.addEventListener('pointerdown',event=>{
+      if(event.button!==0)return;
+      event.preventDefault();handle.setPointerCapture(event.pointerId);handle.classList.add('active');document.body.classList.add('resizing-panels');
+    });
+    handle.addEventListener('pointermove',event=>{
+      if(!handle.hasPointerCapture(event.pointerId))return;
+      const box=main.getBoundingClientRect();saved[side]=set(side,side==='left'?event.clientX-box.left:box.right-event.clientX);
+    });
+    const finish=event=>{if(handle.hasPointerCapture(event.pointerId))handle.releasePointerCapture(event.pointerId);handle.classList.remove('active');document.body.classList.remove('resizing-panels');persist();};
+    handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);handle.addEventListener('lostpointercapture',()=>{handle.classList.remove('active');document.body.classList.remove('resizing-panels');});
+    handle.addEventListener('keydown',event=>{
+      if(!['ArrowLeft','ArrowRight'].includes(event.key))return;
+      event.preventDefault();const direction=event.key==='ArrowRight'?1:-1;const current=main.querySelector(selector).getBoundingClientRect().width;
+      saved[side]=set(side,current+direction*(side==='left'?1:-1)*(event.shiftKey?40:10));persist();
+    });
+  }
+  window.addEventListener('resize',()=>{for(const side of ['left','right'])if(Number.isFinite(saved[side]) && (side==='left'||!narrow()))set(side,saved[side]);});
+}
+
+resizablePanels(document.querySelector('main'));
 const pendingChecks=document.createElement('p');pendingChecks.setAttribute('role','status');pendingChecks.hidden=true;pendingChecks.textContent='Your preview is ready. Final checks are running. Review and approval unlock when all checks pass.';$('review-branch-status').before(pendingChecks);
 const openingSummary=document.createElement('p');openingSummary.id='opening-summary';$('phase').before(openingSummary);
 const fixNotice=document.createElement('p');fixNotice.style.cssText='font-size:12px;line-height:1.5;white-space:normal';fixNotice.hidden=true;$('review-branch-status').after(fixNotice);

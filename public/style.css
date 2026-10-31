@@ -931,3 +931,18 @@ body.qa-open main{display:none}
 .qa-box.checking{animation:work-pulse 1.4s infinite}
 @media(max-width:900px){#qa-page{padding:16px}.qa-layout{grid-template-columns:1fr}.qa-layout nav{display:flex;gap:8px;overflow:auto}.qa-review-row{min-width:190px}.qa-heading{align-items:flex-start}}
 @media(prefers-reduced-motion:reduce){.qa-box.checking,#qa-page [data-status].working::before{animation:none}}
+
+/* Draggable workspace boundaries preserve space for the preview. */
+main.resizable-layout {position:relative;grid-template-columns:var(--rail-width, 230px) minmax(320px, 1fr) var(--review-width, 360px)}
+.panel-divider {position:absolute;z-index:8;top:0;bottom:0;width:10px;transform:translateX(-50%);cursor:col-resize;touch-action:none;outline:none}
+.panel-divider-left {left:var(--rail-width, 230px)}
+.panel-divider-right {left:calc(100% - var(--review-width, 360px))}
+.panel-divider::before {content:"";position:absolute;top:50%;left:3px;width:4px;height:30px;transform:translateY(-50%);border-radius:4px;background:#9bada4}
+.panel-divider::after {content:'';position:absolute;top:0;bottom:0;left:4px;width:2px;background:transparent}
+.panel-divider:hover::after,.panel-divider:focus-visible::after,body.resizing-panels .panel-divider.active::after {background:#527568}
+body.resizing-panels,body.resizing-panels * {cursor:col-resize!important;user-select:none!important}
+body.resizing-panels iframe {pointer-events:none!important}
+body.focused main.resizable-layout {grid-template-columns:minmax(0, 1fr)}
+body.focused .panel-divider {display:none}
+@media(max-width:1250px){main.resizable-layout{grid-template-columns:var(--rail-width, 200px) minmax(320px, 1fr) var(--review-width, 325px)}.panel-divider-left{left:var(--rail-width, 200px)}.panel-divider-right{left:calc(100% - var(--review-width, 325px))}}
+@media(max-width:950px){main.resizable-layout{grid-template-columns:var(--rail-width, 185px) minmax(320px, 1fr)}.panel-divider-left{left:var(--rail-width, 185px)}.panel-divider-right{display:none}.panel-divider-left{bottom:auto;height:calc(100vh - 66px)}}
