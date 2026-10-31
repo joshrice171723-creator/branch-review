@@ -1012,3 +1012,5 @@ body.focused .panel-divider {display:none}
 #projects-dialog .project-open small{overflow-wrap:anywhere;font-size:12px}
 #projects-dialog .project-open span{font-size:12px}#projects-dialog .project-row>button:not(.project-open){margin:8px 8px 0 0}
 #projects-dialog [data-add]{margin-top:18px;background:#244e40;color:white}
+
+.branch-current{display:block;width:max-content;max-width:100%;margin-bottom:6px;padding:3px 7px;border-radius:4px;background:#244d3c;color:#fff;font-size:10px;font-weight:700}

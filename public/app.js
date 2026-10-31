@@ -170,7 +170,11 @@ function error(message) {
 const branchTitle=branch=>branch.subject==='fix: address Branch Review findings' && branch.displaySubject ? `${branch.displaySubject} · ${branch.sha.slice(0,7)}` : branch.subject;
 function branchList() {
   const query = $("search").value.toLowerCase();
-  const items = visibleBranches().filter((branch) =>
+  const reviewedRef=currentState.record?.identity.ref;
+  const current=reviewedRef && (allBranches.find(branch=>branch.ref===reviewedRef) || allBranches.filter(branch=>branch.aliases?.includes(reviewedRef)).filter((_,index,found)=>found.length===1)[0]);
+  const inventory=visibleBranches().filter(branch=>branch!==current);
+  if(current)inventory.unshift(current);
+  const items = inventory.filter((branch) =>
     `${branch.name} ${branch.subject} ${branch.displaySubject || ""}`.toLowerCase().includes(query),
   );
   $("count").textContent = items.length;
@@ -178,18 +182,20 @@ function branchList() {
     ...items.map((branch) => {
       const button = document.createElement("button");
       button.className = "branch";
-      button.setAttribute("aria-current", String(selected?.ref === branch.ref));
+      const isCurrent=branch===current;
+      button.setAttribute("aria-current", String(isCurrent));
       const title = document.createElement("span");
       title.className = "branch-title";
-      title.textContent = branchTitle(branch)+(branch.fixCount?` · ${branch.fixCount} fix${branch.fixCount===1?'':'es'}`:'');
+      title.textContent = (isCurrent && currentState.manifest?.title || branchTitle(branch))+(branch.fixCount?` · ${branch.fixCount} fix${branch.fixCount===1?'':'es'}`:'');
       const meta = document.createElement("span");
       meta.className = "branch-meta";
       const ref = document.createElement("span");
       ref.className = "branch-ref";
       ref.textContent = branch.name;
       const sha = document.createElement("code");
-      sha.textContent = branch.merged ? 'Merged' : branch.sha.slice(0, 7);
+      sha.textContent = branch.merged && !isCurrent ? 'Merged' : branch.sha.slice(0, 7);
       meta.append(ref, sha);
+      if(isCurrent){const badge=document.createElement('span');badge.className='branch-current';badge.textContent=branch.merged?'Current review · Merged':'Current review';button.append(badge);}
       button.append(title, meta);
       const committed = new Date(branch.date);
       if(Number.isFinite(committed.getTime())){
@@ -199,10 +205,11 @@ function branchList() {
       }
       button.title = `${branch.name}\n${branch.sha}`;
       button.disabled=currentState.busy || !!openingSelection?.starting;
-      button.onclick = () => openBranch(branch);
+      button.onclick = () => {if(isCurrent){branchVisibility=false;try{localStorage.setItem('branch-review:branches-visible','false');}catch{}branchVisibilityUI();}else openBranch(branch);};
       return button;
     }),
   );
+  if(reviewedRef && !current && !query){const note=document.createElement('p');note.className='repository-path';note.textContent='Current review: branch is no longer available. Saved review remains open.';$('branches').prepend(note);}
   if (!items.length) {
     const empty = document.createElement('p'); empty.className = 'repository-path'; empty.textContent = query ? 'No matching branches.' : 'No unmerged branches.'; $('branches').append(empty);
   }
@@ -522,7 +529,7 @@ async function poll() {
     const reviewChanged=ready && !!currentState.record && currentState.record.id!==previousReview;
     if(reviewChanged){delete $('branch-brief').dataset.selecting;selected=null;$('baseline').value=currentState.record.comparisonMode?.baseline || 'parent';$('commit-choice').hidden=$('baseline').value!=='commit';commitBranchSha='';}
     if (reviewChanged || previousBusy && !currentState.busy) await loadBranches();
-    if(previousBusy!==currentState.busy)branchList();
+    if(previousBusy!==currentState.busy || previousReview!==currentState.record?.id)branchList();
     batch.render(currentState);
   } catch (e) {
     $("connection").textContent = "REVIEW SERVER DISCONNECTED";
