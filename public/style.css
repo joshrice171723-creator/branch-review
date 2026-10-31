@@ -1014,3 +1014,28 @@ body.focused .panel-divider {display:none}
 #projects-dialog [data-add]{margin-top:18px;background:#244e40;color:white}
 
 .branch-current{display:block;width:max-content;max-width:100%;margin-bottom:6px;padding:3px 7px;border-radius:4px;background:#244d3c;color:#fff;font-size:10px;font-weight:700}
+
+/* Settings */
+#tools-dialog:has(#tools-workspace:not([hidden])){width:min(760px,94vw);padding:28px 32px}
+#tools-dialog:has(#tools-workspace:not([hidden])) > .dialog-heading{padding-bottom:18px;border-bottom:1px solid #dce3da}
+#tools-dialog:has(#tools-workspace:not([hidden])) > .dialog-heading h2{font-size:22px;margin:0}
+#tools-workspace .settings-intro{margin:18px 0 6px;color:#52635b;font-size:14px}
+#tools-workspace .settings-project{margin:0 0 24px;font-size:12px;color:#617268}
+#tools-workspace .settings-section{border-top:1px solid #dce3da;padding:20px 0}
+#tools-workspace .settings-section-heading h3{margin:0;font-size:16px}
+#tools-workspace .settings-section-heading p,#tools-workspace .settings-help{margin:5px 0 16px;color:#566a5e;font-size:12px;line-height:1.5}
+#tools-workspace label{display:block;margin:14px 0 6px;font-size:12px;font-weight:600;color:#31493d}
+#tools-workspace input,#tools-workspace select,#tools-workspace textarea{font-size:13px}
+#tools-workspace .tool-actions{margin:16px 0 10px}
+#tools-workspace .settings-section>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer;list-style:none}
+#tools-workspace .settings-section>summary::-webkit-details-marker{display:none}
+#tools-workspace .settings-section>summary::after{content:'+';font-size:22px;line-height:1;color:#526d5c}
+#tools-workspace .settings-section[open]>summary::after{content:'−'}
+#tools-workspace .settings-section>summary strong{display:block;font-size:15px}
+#tools-workspace .settings-section>summary small{display:block;margin-top:4px;color:#617268;font-size:12px;line-height:1.4}
+#tools-workspace .settings-section-content{padding:14px 0 0}
+#tools-workspace .settings-section-content p{line-height:1.5}
+#tools-workspace .settings-section-content details{margin:14px 0}
+#tools-workspace [role="status"]:empty,#tools-workspace pre:empty{display:none}
+#tools-workspace button:focus-visible,#tools-workspace summary:focus-visible,#tools-workspace input:focus-visible,#tools-workspace textarea:focus-visible,#tools-workspace select:focus-visible{outline:2px solid #356fba;outline-offset:2px}
+@media(max-width:600px){#tools-dialog:has(#tools-workspace:not([hidden])){padding:20px}#tools-workspace .tool-actions>*{flex:1 1 100%}}
