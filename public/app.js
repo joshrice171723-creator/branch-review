@@ -1,3 +1,4 @@
+import {branchHistory} from './branch-history.js';
 import {describeError} from './error-message.js';
 import {framePool} from './frame-pool.js';
 import {onboarding} from './onboarding.js';
@@ -73,10 +74,7 @@ $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('preview-area').append($('change-composer'));
 $('new-change').onclick=()=>reviewTools.requestChange();
 $('toolbar-agent').onclick=()=>activityView.open();
-const historyDialog=document.createElement('dialog');historyDialog.id='history-dialog';historyDialog.setAttribute('aria-label','Review history');
-historyDialog.innerHTML='<header class="dialog-heading"><h2>Review history</h2><button type="button">Close</button></header>';
-document.body.append(historyDialog);historyDialog.querySelector('button').onclick=()=>historyDialog.close();
-$('toolbar-history').onclick=()=>{const details=$('history').closest('details');details.open=true;historyDialog.append(details);historyDialog.showModal();};
+const branchHistoryView=branchHistory({api,getState:()=>currentState,flush:reviewWorkflow.flush,poll,error});
 
 // Move existing controls so their state and handlers stay intact.
 $('plan-advanced-actions').append($('capture-item'));
@@ -339,7 +337,7 @@ function toggle(side) {
   const preview = currentState[side];
   if (preview)
     $("context").textContent =
-      `${currentState.record?.fixComparison?(side==='original'?'Before fix':'After fix'):(side === "original" ? "Original" : "Changed")} · ${preview.sha.slice(0, 7)} · ${currentState.manifest?.title || "Review scenario"}`;
+      `${currentState.record?.fixComparison && !currentState.record?.sameBranch?(side==='original'?'Before fix':'After fix'):(side === "original" ? "Original" : "Changed")} · ${preview.sha.slice(0, 7)} · ${currentState.manifest?.title || "Review scenario"}`;
 }
 function runShortcut(command) {
   if(document.querySelector('dialog[open]') || currentState.status!=='ready' || currentState.busy)return;
@@ -400,7 +398,7 @@ async function poll() {
     fixNotice.hidden=versionHistory.hidden=!fixRecord?.fixComparison;
     if(fixRecord?.fixComparison){
       const findings=fixRecord.issues.filter(issue=>issue.scenario===fixRecord.cursor?.itemId && issue.status!=='resolved');
-      fixNotice.textContent=`Compare before and after this fix. ${findings.some(issue=>issue.status==='needs-retest')?'Ready to retest the latest fix.':'Check the affected behavior below.'}`;
+      fixNotice.textContent=`${fixRecord.sameBranch?'Original stays at the starting point. Changed shows your latest revision.':'Compare before and after this fix.'} ${findings.some(issue=>issue.status==='needs-retest')?'Ready to retest the latest fix.':'Check the affected behavior below.'}`;
       const historyKey=JSON.stringify([fixRecord.id,fixRecord.previousResults,fixRecord.requestHistory]);
       if(versionResults.dataset.key!==historyKey){
       versionResults.dataset.key=historyKey;
@@ -413,7 +411,7 @@ async function poll() {
       }
       }
     }
-    for(const side of ['original','changed'])$(side).firstChild.textContent=currentState.record?.fixComparison?(side==='original'?'Before fix ':'After fix '):(side==='original'?'Original ':'Changed ');
+    for(const side of ['original','changed'])$(side).firstChild.textContent=currentState.record?.fixComparison && !currentState.record?.sameBranch?(side==='original'?'Before fix ':'After fix '):(side==='original'?'Original ':'Changed ');
     if(currentState.record?.fixComparison)openingSummary.textContent='Retesting fixes in the same review';
     if(openingSelection)$('branch-brief').hidden=true;
     const reviewedBranch=allBranches.find(branch=>[branch.ref,...branch.aliases].includes(currentState.record?.identity.ref));
@@ -422,6 +420,9 @@ async function poll() {
     $('review-branch-status').hidden=published || !currentState.record || currentState.record.cursor?.view==='results';
     $('review-branch-status').textContent=currentState.record ? `${published?'Published':reviewedBranch?.merged && reviewedBranch.sha===currentState.record.identity.source?'Merged into main':'Reviewing'} · ${currentState.record.identity.ref.replace(/^refs\/(heads|remotes)\//,'')} · ${currentState.record.identity.changed.slice(0,7)}${published?' — completed review; choose another branch to review new work.':''}`:'';
     if(currentState.record?.reviewTitle)$('review-branch-status').textContent=`${currentState.record.reviewTitle} · Fix review · ${currentState.record.identity.changed.slice(0,7)}`;
+    if(currentState.record?.sameBranch)$('review-branch-status').textContent=`${currentState.record.identity.ref.replace('refs/heads/','')} · ${currentState.record.identity.source.slice(0,7)} · Latest version`;
+    if(currentState.previewVersion){$('review-branch-status').hidden=false;$('review-branch-status').textContent=`Previewing ${currentState.previewVersion.sha.slice(0,7)} · Branch stays at ${currentState.record.identity.source.slice(0,7)} · Use history to return or restore`;$('review-workflow').hidden=true;}
+    branchHistoryView.render(currentState);
     reviewTools.render(currentState);
     void activityView.render();
     renderFocusStatus();

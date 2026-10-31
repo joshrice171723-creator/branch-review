@@ -1,3 +1,4 @@
+import {writableBranch,advanceBranch} from './branch-versions.mjs';
 import {spawn} from 'node:child_process';
 import {readFile,writeFile,mkdir,rename} from 'node:fs/promises';
 import {readRecipe} from './project-settings.mjs';
@@ -22,6 +23,7 @@ export async function configuredChecks(git,sha){
   }
   return checks;
 }
+const fixCommitMessage=job=>'fix: '+(job.requestText || 'address Branch Review findings').replace(/^Requested change:\s*/,'').split('\n')[0].trim().slice(0,120);
 export class ReviewJobs {
   constructor(directory,{git,run,previewRoot,toolchain,repo,prepareNext,prepareFix,changedCwd,codex,provider=()=>({provider:'codex'}),project}){Object.assign(this,{directory,git,run,previewRoot,toolchain,repo,codex,provider,project,prepareNext,prepareFix,changedCwd});this.rows=[];this.processes=new Map();}
   async load(){this.rows=JSON.parse(await readFile(path.join(this.directory,'jobs.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return'[]';throw e;}));for(const row of this.rows){if(row.status==='running'){row.status='interrupted';row.error='App closed before this job reported completion. Inspect its worktree before retrying.';}if(row.kind==='fix' && row.status==='succeeded' && row.resultCommit===row.commit){row.status='failed';row.error='The agent returned without a committed fix. Review its files before committing.';}}await this.save();return this;}
@@ -43,8 +45,8 @@ export class ReviewJobs {
   async fixFiles(id){
     const job=this.rows.find(row=>row.id===id && row.kind==='fix');
     if(!job?.worktree || job.status==='running' || this.rows.some(row=>row.status==='running'))throw Error('Wait for the agent to finish before committing its files.');
-    if(path.resolve(job.worktree)!==path.resolve(this.directory,'fixes',job.id) || job.branch!==`branch-review/fixes-${job.id}`)throw Error('This is not an owned fix checkout.');
-    if(await this.run('git',['branch','--show-current'],{cwd:job.worktree})!==job.branch)throw Error('The fix checkout changed branches.');
+    if(path.resolve(job.worktree)!==path.resolve(this.directory,'fixes',job.id) || (!job.sameBranch && job.branch!==`branch-review/fixes-${job.id}`))throw Error('This is not an owned fix checkout.');
+    if(await this.run('git',['branch','--show-current'],{cwd:job.worktree})!==(job.sameBranch?'':job.branch))throw Error('The fix checkout changed branches.');
     const files=new Set();
     for(const args of [['diff','--name-only','-z','HEAD','--'],['ls-files','--others','--exclude-standard','-z']])for(const file of (await this.run('git',args,{cwd:job.worktree})).split('\0').filter(Boolean))files.add(file);
     return [...files];
@@ -52,9 +54,11 @@ export class ReviewJobs {
   async commitFix(id,files){
     const available=await this.fixFiles(id),job=this.rows.find(row=>row.id===id);
     if(!Array.isArray(files) || !files.length || files.some(file=>typeof file!=='string' || !available.includes(file) || file.startsWith('/') || file.split(/[\\/]/).includes('..')))throw Error('Select existing changed files from this fix checkout.');
+    if(job.sameBranch && await this.run('git',['rev-parse','HEAD'],{cwd:job.worktree})!==job.sourceCommit)throw Error('This proposal already has a commit. Use Apply saved commit to this branch, or inspect its history before committing more files.');
     await this.run('git',['add','--',...files],{cwd:job.worktree});
-    await this.run('git',['commit','--only','-m','fix: address Branch Review findings','--',...files],{cwd:job.worktree});
+    await this.run('git',['commit','--only','-m',fixCommitMessage(job),'--',...files],{cwd:job.worktree});
     job.resultCommit=await this.run('git',['rev-parse','HEAD'],{cwd:job.worktree});job.dirty=!!await this.run('git',['status','--porcelain'],{cwd:job.worktree});
+    if(job.sameBranch)await this.publishFix(job);
     job.status='succeeded';job.error=null;job.committedFiles=files;job.finishedAt=new Date().toISOString();await this.save();return job;
   }
   async startNew(source,requestText){
@@ -143,20 +147,33 @@ export class ReviewJobs {
       await invoke(worktree,prompt);
       const raw=await readFile(output,'utf8');job.plan=validateManifest(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')));return;
     }
-    const branch=`branch-review/fixes-${job.id}`,worktree=path.join(this.directory,'fixes',job.id);
-    await mkdir(path.dirname(worktree),{recursive:true});await this.git('worktree','add','-b',branch,worktree,record.identity.source);
-    job.worktree=worktree;job.branch=branch;await this.save();
+    const sameBranch=!!record.identity.ref,branch=sameBranch?record.identity.ref.replace(/^refs\/heads\//,''):`branch-review/fixes-${job.id}`,worktree=path.join(this.directory,'fixes',job.id);
+    if(sameBranch)await writableBranch(this.git,record.identity.ref,record.identity.source);
+    job.worktree=worktree;job.branch=branch;job.sameBranch=sameBranch;job.sourceCommit=record.identity.source;await this.save();
+    await mkdir(path.dirname(worktree),{recursive:true});await this.git('worktree','add',...(sameBranch?['--detach']:['-b',branch]),worktree,record.identity.source);
     const attachments=record.issues.filter(issue=>issue.status!=='resolved').flatMap(issue=>[issue.screenshot&&/^[a-f0-9-]{36}\.png$/.test(issue.screenshot)?path.join(this.directory,'screenshots',issue.screenshot):null,issue.video&&/^[a-f0-9-]{36}\.webm$/.test(issue.video)?path.join(this.directory,'recordings',issue.video):null].filter(Boolean));
     if(job.attachment){attachments.push(path.join(this.directory,'screenshots',job.attachment.screenshot));job.requestText+=`\nAttached current page: ${job.attachment.location}\nObserved ${job.attachment.side} commit: ${job.attachment.commit}\nInspect the attached screenshot for the requested visual change.`;}
-    const prompt=`Work only in ${worktree} on ${branch}. This is an isolated fix checkout for Branch Review. Preserve unrelated work. Edit and validate the requested fix, but do not stage, commit, merge, publish, push, or message other chats. Branch Review owns Git finalization outside your sandbox. Do not edit AGENTS.md or .branch-review.json; Branch Review generates and stores checklists separately. The human requested this fix run from Branch Review. The reported finding's expected behavior supersedes the old checklist when they disagree.\n\n${job.requestText}\n\nPrevious review manifest (historical context, not the new acceptance criteria):\n${JSON.stringify(record.manifest)}\n\nEvidence files (read-only):\n${attachments.join('\n')}`;
+    const prompt=`Work only in ${worktree} ${sameBranch?'in a detached checkout for branch':'on'} ${branch}. This is an isolated fix checkout for Branch Review. Preserve unrelated work. Edit and validate the requested fix, but do not stage, commit, merge, publish, push, or message other chats. Branch Review owns Git finalization outside your sandbox. Do not edit AGENTS.md or .branch-review.json; Branch Review generates and stores checklists separately. The human requested this fix run from Branch Review. The reported finding's expected behavior supersedes the old checklist when they disagree.\n\n${job.requestText}\n\nPrevious review manifest (historical context, not the new acceptance criteria):\n${JSON.stringify(record.manifest)}\n\nEvidence files (read-only):\n${attachments.join('\n')}`;
     await invoke(worktree,prompt,input.chatId);
     job.result=redact(await readFile(output,'utf8')).slice(-12000);
     await this.finalizeFix(job,record.identity.source);
     if(this.prepareFix && !job.dirty){job.phase='Preparing your review';await this.save();try{await this.prepareFix(job,record);}catch(error){job.previewError=redact(error.message);}job.phase=null;}
   }
+  async publishFix(job){
+    if(await this.git('rev-parse','refs/heads/'+job.branch)===job.resultCommit){job.applied=true;job.applyError=null;return;}
+    try{await advanceBranch(this.git,this.run,'refs/heads/'+job.branch,job.sourceCommit,job.resultCommit);job.applied=true;job.applyError=null;}
+    catch(error){job.applyError=redact(error.message);await this.save();throw Error('Your proposed commit '+job.resultCommit.slice(0,7)+' is saved. '+job.applyError);}
+  }
+  async applyFix(id){
+    const job=this.rows.find(row=>row.id===id && row.kind==='fix' && row.sameBranch);
+    if(!job?.resultCommit || job.status==='running' || this.rows.some(row=>row.status==='running'))throw Error('Choose a finished proposal before applying it.');
+    if(path.resolve(job.worktree)!==path.resolve(this.directory,'fixes',job.id) || await this.run('git',['branch','--show-current'],{cwd:job.worktree})!=='')throw Error('The owned proposal checkout changed. Inspect it before applying.');
+    if(await this.run('git',['rev-parse','HEAD'],{cwd:job.worktree})!==job.resultCommit)throw Error('The proposal checkout changed. Inspect its files before continuing.');
+    await this.publishFix(job);job.status='succeeded';job.error=null;await this.save();return job;
+  }
   async finalizeFix(job,source){
     const cwd=job.worktree;
-    if(path.resolve(cwd)!==path.resolve(this.directory,'fixes',job.id) || job.branch!==`branch-review/fixes-${job.id}` || await this.run('git',['branch','--show-current'],{cwd})!==job.branch)throw Error('The fix checkout changed. Your edits are saved; inspect it before retrying.');
+    if(path.resolve(cwd)!==path.resolve(this.directory,'fixes',job.id) || (!job.sameBranch && job.branch!==`branch-review/fixes-${job.id}`) || await this.run('git',['branch','--show-current'],{cwd})!==(job.sameBranch?'':job.branch))throw Error('The fix checkout changed. Your edits are saved; inspect it before retrying.');
     if(await this.run('git',['rev-parse','HEAD'],{cwd})!==source)throw Error('The agent changed the commit history. Review its commits before continuing.');
     const files=new Set();
     for(const args of [['diff','--name-only','-z','HEAD','--'],['ls-files','--others','--exclude-standard','-z']])for(const file of (await this.run('git',args,{cwd})).split('\0').filter(Boolean))files.add(file);
@@ -166,10 +183,12 @@ export class ReviewJobs {
     try{
       await this.run('git',['diff','--check','HEAD','--',...selected],{cwd});
       await this.run('git',['add','--',...selected],{cwd});
-      await this.run('git',['commit','--only','-m','fix: address Branch Review findings','--',...selected],{cwd});
+      await this.run('git',['commit','--only','-m',fixCommitMessage(job),'--',...selected],{cwd});
     }catch(error){throw Error('Your fix is saved, but Branch Review could not commit it. Use Review files to commit to recover.\n'+error.message);}
     job.resultCommit=await this.run('git',['rev-parse','HEAD'],{cwd});
     if(job.resultCommit===source)throw Error('No new fix commit was created. Review the saved files before retrying.');
     job.committedFiles=selected;job.dirty=!!await this.run('git',['status','--porcelain'],{cwd});
+    await this.save();
+    if(job.sameBranch)await this.publishFix(job);
   }
 }

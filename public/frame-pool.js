@@ -41,7 +41,7 @@ export function framePool(container){
       entry.frame.title=`${index?'Changed':'Original'} ${state.project?.name || 'Application'} review`;
       entry.pane.setAttribute('aria-label',`${side} preview`);entry.pane.style.order=index;
       entry.pane.classList.remove('preloading');entry.pane.inert=false;
-      entry.label.textContent=`${state.record?.fixComparison?(index?'After fix':'Before fix'):(index?'Changed':'Original')} · ${state[side].sha.slice(0,7)}`;
+      entry.label.textContent=`${state.record?.fixComparison && !state.record?.sameBranch?(index?'After fix':'Before fix'):(index?'Changed':'Original')} · ${state[side].sha.slice(0,7)}`;
       entry.frame.onload=()=>onLoad(side);
       if(entry.ready)onLoad(side);
     });

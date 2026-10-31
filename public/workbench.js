@@ -87,11 +87,12 @@ export function workbench({api,getState,getSide,workflow,capture,previewReady,po
         if(row.branch){
           article.append(node('p',`${row.branch}${row.resultCommit?' · '+row.resultCommit.slice(0,7):''}${row.dirty?' · uncommitted edits remain outside the reviewed commit':''}`));
           if(row.committedFiles)article.append(node('p','Committed selected files: '+row.committedFiles.join(', ')));
+          if(row.sameBranch && row.resultCommit && !row.applied && row.status!=='running'){const apply=node('button','Apply saved commit to this branch');apply.onclick=async()=>{try{await api('/api/fix-apply',{jobId:row.id});await refresh();}catch(e){$('tools-status').textContent=e.message;}};article.append(apply);}
           if(row.status!=='running' && (row.dirty || row.status!=='succeeded')){
             const select=node('button','Review files to commit'),selection=node('div','');article.append(select,selection);
             select.onclick=async()=>{try{const files=await api('/api/fix-files?job='+row.id);selection.replaceChildren(node('p','Select only the requested fixes. Unselected edits remain in the isolated checkout.'));
               const boxes=files.map(file=>{const label=node('label',''),box=document.createElement('input');box.type='checkbox';box.value=file;label.className='check';label.append(box,node('span',file));selection.append(label);return box;});
-              const commit=node('button','Commit selected fixes');commit.onclick=async()=>{const files=boxes.filter(box=>box.checked).map(box=>box.value);if(!files.length || !confirm('Commit these files on the isolated fix branch?\n\n'+files.join('\n')))return;try{await api('/api/fix-commit',{id,jobId:row.id,files});await refresh();}catch(e){$('tools-status').textContent=e.message;}};selection.append(commit);
+              const commit=node('button','Commit selected fixes');commit.onclick=async()=>{const files=boxes.filter(box=>box.checked).map(box=>box.value);if(!files.length || !confirm('Commit these selected files for this work branch?\n\n'+files.join('\n')))return;try{await api('/api/fix-commit',{id,jobId:row.id,files});await refresh();}catch(e){$('tools-status').textContent=e.message;}};selection.append(commit);
             }catch(e){$('tools-status').textContent=e.message;}};
           }
           if(row.status==='succeeded' && row.resultCommit!==row.commit){const button=node('button','Review fix');button.onclick=async()=>{try{if(!await workflow.flush())return;await api('/api/start',{ref:'refs/heads/'+row.branch,fixJob:row.id});$('tools-dialog').close();await poll();}catch(e){error(e.message);}};article.append(button);}

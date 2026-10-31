@@ -11,7 +11,7 @@ export function databaseCleanup({run,local,state,records,preparedFix,jobs}) {
     const names=(await readdir(local)).filter(name=>/^preview-(original|changed|standby)-[a-f0-9]{40}-[a-f0-9]{64}\.json$/.test(name));
     return Promise.all(names.map(async name=>({name,data:JSON.parse(await readFile(path.join(local,name),'utf8'))})));
   }
-  const protectedNames=()=>new Set([state.original,state.changed,state.prepared,preparedFix()?.original,preparedFix()?.changed].filter(Boolean).map(x=>x.database).filter(Boolean));
+  const protectedNames=()=>new Set([state.original,state.changed,state.previewVersion?.latestChanged,state.prepared,preparedFix()?.original,preparedFix()?.changed].filter(Boolean).map(x=>x.database).filter(Boolean));
   async function inventory() {
     try { await run(docker,['info','--format','{{.ID}}']); } catch(e) { throw Error('Docker is unavailable. Start Docker Desktop and try again. '+e.message); }
     const cache=await caches().catch(e=>{throw Error('A preview cache cannot be read; cleanup is disabled until it is inspected. '+e.message);});

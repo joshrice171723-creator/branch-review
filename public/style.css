@@ -953,3 +953,12 @@ body.focused .panel-divider {display:none}
 #toggle-branches:hover {background:#eaf1ec;border-color:#537c68}
 #toggle-branches:focus-visible {outline:3px solid #4d7a66;outline-offset:2px}
 #toggle-branches[hidden] {display:none}
+
+#history-dialog .dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+#history-dialog h2{margin:0;font-size:22px}
+#history-dialog button{font:inherit;border:1px solid #cbd8cc;border-radius:6px;padding:9px 14px;background:#f4f7f1;color:#244f42;cursor:pointer}
+#history-dialog button:disabled{opacity:.5;cursor:default}
+#history-dialog .tool-actions{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+#history-dialog .tool-actions button{width:auto;margin:0;flex:0 1 auto}
+.branch-version-list article{padding:16px 0;border-bottom:1px solid #dce3da;overflow-wrap:anywhere}
+.branch-version-list p{margin:6px 0 10px}

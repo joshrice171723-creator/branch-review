@@ -129,7 +129,7 @@ test('plan tooling writes stay in a detached checkout and never dirty the active
 });
 test('fix handoff preserves reviewed text and chooses new or resumed Codex chats',async()=>{
   const {directory,record}=await fixture(),commands=[];
-  const jobs=new ReviewJobs(directory,{git:async()=>'',run:async(_command,args)=>args[0]==='rev-parse'?sha:'',previewRoot:directory,toolchain:directory,codex:'installed.exe'});
+  const jobs=new ReviewJobs(directory,{git:async(command)=>command==='rev-parse'?sha:'',run:async(_command,args)=>args[0]==='rev-parse'?sha:'',previewRoot:directory,toolchain:directory,codex:'installed.exe'});
   jobs.finalizeFix=async(job,source)=>{assert.equal(source,record.identity.source);job.resultCommit=sha;};
   jobs.command=async(job,command,args,cwd,prompt)=>{commands.push({command,args,cwd,prompt});await writeFile(args[args.indexOf('--output-last-message')+1],'Done');};
   const job={id:'first',kind:'fix',requestText:'Reviewed custom scope'};await jobs.execute(job,record,{},directory);
@@ -196,7 +196,7 @@ test('host finalizes sandbox edits in a linked worktree without committing tooli
 
 test('change screenshots are pinned to the observed version and passed as Codex images',async()=>{
  const {directory,record}=await fixture();
- const jobs=new ReviewJobs(directory,{run:async(_file,args)=>args[0]==='rev-parse'?sha:'',changedCwd:()=>directory,git:async()=>'',codex:'fixture.exe'});
+ const jobs=new ReviewJobs(directory,{run:async(_file,args)=>args[0]==='rev-parse'?sha:'',changedCwd:()=>directory,git:async(command)=>command==='rev-parse'?sha:'',codex:'fixture.exe'});
  const png=Buffer.from('89504e470d0a1a0a','hex'),attachment={side:'changed',commit:sha,location:'/tutorials',screenshot:'data:image/png;base64,'+png.toString('base64')};
  await assert.rejects(jobs.start(record,'fix',{attachment:{...attachment,commit:base}}),/reviewed version/);
  await assert.rejects(jobs.start(record,'fix',{attachment:{...attachment,screenshot:'data:image/png;base64,YmFk'}}),/invalid/);

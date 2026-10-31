@@ -1,6 +1,6 @@
 export function changeRequest({api,getState,getSide,workflow,capture,previewReady=()=>true,poll,close}){
   const $=id=>document.getElementById(id),drafts=new Map();
-  let target=null;
+  let target=null;const autoOpened=new Set();
   let reviewId=null,submitting=false,opening=false,latest=null,notice='';
   const draftKey=()=>`branch-review:change:${getState().repository}:${getState().record?.id || 'new'}`;
   const readDraft=()=>{try{return localStorage.getItem(draftKey()) || '';}catch{return '';}};
@@ -11,13 +11,14 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
     if(id!==reviewId){target=null;$('change-composer').hidden=true;reviewId=id;latest=null;notice='';$('change-request').value=drafts.get(id)||readDraft();}
     if(rows)latest=rows.findLast(row=>row.reviewId===id && row.kind==='fix')||null;
     const running=submitting || latest?.status==='running';
-    $('make-changes').disabled=(!!id && state.status!=='ready') || state.busy || state.jobsRunning || running || opening || !$('change-request').value.trim();
-    $('change-request').disabled=running || opening;
+    $('make-changes').disabled=(!!id && state.status!=='ready') || state.busy || state.jobsRunning || !!state.previewVersion || running || opening || !$('change-request').value.trim();
+    $('change-request').disabled=running || opening || !!state.previewVersion;
     $('checklist-advanced').hidden=!id;
     $('change-context').textContent=target?`Selected: ${target.label} · ${target.location}`:id?`${getSide()==='original'?'Original':'Changed'} · ${workflow.getContext(getSide()).location || 'Waiting for page…'} · screenshot included when sent`:'No preview open yet.';
-    $('change-explanation').textContent=`${provider()} makes a separate branch${id?'':' from the remote default branch'}. You review before publishing.`;
+    $('change-explanation').textContent=id?`${provider()} saves a new commit on this branch. Use history to preview or restore earlier versions.`:`${provider()} creates a work branch from the remote default branch. You review before publishing.`;
     $('change-status').textContent=notice || (latest?.previewReady && !previewReady()?'Loading the changed page…':'') || latest?.phase || (running?`${provider()} is making your changes…`:latest?.status==='succeeded'?'Your changes are ready to review.':latest && ['failed','interrupted','cancelled'].includes(latest.status)?`Changes need attention: ${latest.error || 'The run did not finish. Open Agent fixes for details.'}`:'');
     $('review-changes').hidden=latest?.status!=='succeeded' || !latest.resultCommit || latest.resultCommit===latest.commit || !!latest.dirty;
+    if(rows && latest?.sameBranch && latest.status==='succeeded' && latest.applied && !state.previewVersion && !state.busy && !state.jobsRunning && !autoOpened.has(latest.id)){autoOpened.add(latest.id);queueMicrotask(()=>$('review-changes').onclick());}
     $('review-changes').disabled=opening || state.busy || running || !previewReady();
   }
   $('change-request').oninput=()=>{drafts.set(reviewId,$('change-request').value);storeDraft($('change-request').value);notice='';render();};
@@ -53,7 +54,7 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
     try{
       if(id && !await workflow.flush())throw Error('Save your review notes before opening changes.');
       if(getState().record?.id!==id)throw Error('The active review changed. Open the changes from their original review.');
-      await api('/api/start',{ref:'refs/heads/'+job.branch,fixJob:job.id});close();await poll();
+      await api('/api/start',{ref:'refs/heads/'+job.branch,fixJob:job.id});close();await poll();if(job.sameBranch)document.getElementById('changed').click();
     }catch(error){notice=error.message;}
     finally{opening=false;render();}
   };

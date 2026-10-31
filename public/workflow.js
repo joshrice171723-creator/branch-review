@@ -170,7 +170,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   function render(state) {
     $('repository-path').textContent = state.repository;
     $('repository-path').title = state.repository;
-    const r=state.record, enabled=state.status==='ready' && !!r && !state.busy;
+    const r=state.record, enabled=state.status==='ready' && !!r && !state.busy && !state.previewVersion;
     guide.render(state);
     const published=isPublished(r);
     $('published-report').hidden=!published;

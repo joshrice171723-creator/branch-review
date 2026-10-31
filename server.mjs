@@ -1,3 +1,4 @@
+import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaState,qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
@@ -50,6 +51,7 @@ async function manifestFor(sha) {
   if(!plan)throw Error('Reopen this branch to generate its checklist from the current changes.');
   return plan;
 }
+function branchPlan(plan){return {...plan,scenarios:plan.scenarios.map(item=>({...item,instructions:item.instructions?.replaceAll('Before fix','Original').replaceAll('After fix','Changed'),description:item.description?.replace('Before:','Previous revision:').replace('After:','Latest revision:')}))};}
 async function warmFix(job,prior){
   preparedFix=null;
   if(state.status!=='ready' || state.recordId!==prior.id || !state.changed || job.dirty)return;
@@ -62,13 +64,13 @@ async function warmFix(job,prior){
   const runtime=Object.keys(slots).find(side=>side!==state.original?.runtime && side!==state.changed.runtime);
   if(!runtime)return;
   const combined=await candidateComparison(git,selected,integration);
-  combined.base=prior.identity.changed;combined.baseline='commit';combined.baselineCommit=prior.identity.changed;combined.fixReview={previousId:prior.id,files};
-  combined.plan=mergeFixPlan(prior.manifest,plan,files);
+  combined.base=job.sameBranch?(prior.branchBaseline || reviewRoot(prior,store.records).identity.base):prior.identity.changed;combined.baseline='commit';combined.baselineCommit=combined.base;combined.fixReview={previousId:prior.id,files};
+  combined.plan=mergeFixPlan(prior.manifest,plan,files);if(job.sameBranch)combined.plan=branchPlan(combined.plan);
   const changed=await prepare(runtime,integration.sha,combined.files);
   await plans.save(integration.sha,combined.plan);await plans.save(digest({before:prior.identity.changed,after:integration.sha}),combined.plan);
   if(state.recordId!==prior.id)return;
   const item=combined.plan.scenarios.find(item=>item.path===job.attachment?.location) || combined.plan.scenarios.find(item=>item.id===prior.cursor?.itemId) || combined.plan.scenarios[0];
-  preparedFix={ref,priorId:prior.id,item,selected,integration,combined,original:{...state.changed,side:'original'},changed:{...changed,side:'changed',proxy:slots[runtime].proxy}};
+  preparedFix={ref,priorId:prior.id,item,selected,integration,combined,original:{...(job.sameBranch?state.original:state.changed),side:'original'},changed:{...changed,side:'changed',proxy:slots[runtime].proxy}};
   job.previewReady=true;
 }
 async function readyFix(ref,priorId){
@@ -87,8 +89,10 @@ async function readyFix(ref,priorId){
   preparedFix=null;return null;
 }
 async function startCandidate(ref, previousReviewId, expectedCommit) {
+  delete state.previewVersion;
   if(project.error)throw Error(project.error);
   if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
+  previousReviewId ||= store.records.findLast(record=>record.identity.ref===ref)?.id;
   const checking=readyFix(ref,previousReviewId);
   const sourceCheck=expectedCommit?git('rev-parse',ref).then(sha=>{if(sha!==expectedCommit)throw Error('Choose an unchanged, committed fix job before retesting.');}):Promise.resolve();
   const pending=preparedFix;
@@ -106,16 +110,17 @@ async function startCandidate(ref, previousReviewId, expectedCommit) {
   const combined=warmed?.combined || await candidateComparison(git,selected,integration);
   const prior=previousReviewId?store.get(previousReviewId):null;
   const fixFiles=prior?(await git('diff','--name-only','-z',prior.identity.changed,integration.sha,'--')).split('\0').filter(Boolean):[];
-  const narrow=prior && prior.integration?.main===integration.main && frontendOnly(fixFiles) && fixFiles.every(file=>prior.manifest.scenarios.some(item=>item.files?.includes(file)));
-  if(prior){combined.base=prior.identity.changed;combined.baseline='commit';combined.baselineCommit=prior.identity.changed;combined.fixReview={previousId:prior.id,files:fixFiles};}
-  if(!combined.files.length)throw Error('This branch has no application changes left to review against the remote default branch. Its old checklist is no longer part of the code.');
+  const sameBranch=prior?.identity.ref===ref;
+  if(prior){combined.base=sameBranch?(prior.branchBaseline || reviewRoot(prior,store.records).identity.base):prior.identity.changed;combined.baseline='commit';combined.baselineCommit=combined.base;combined.fixReview={previousId:prior.id,files:fixFiles};}
+  if(!combined.files.length && !sameBranch)throw Error('This branch has no application changes left to review against the remote default branch. Its old checklist is no longer part of the code.');
   const planKey=prior?digest({before:prior.identity.changed,after:integration.sha}):integration.sha;
   if(!warmed)state.manifest=prior?{...prior.manifest,scenarios:[...prior.manifest.scenarios].sort((a,b)=>Number(b.id===prior.cursor?.itemId)-Number(a.id===prior.cursor?.itemId))}:combined.plan;
   if(warmed){Object.assign(state,{comparison:combined,integration,original:warmed.original,changed:warmed.changed});}
   else combined.plan=await prepareTogether(
-    async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior});if(state.status==='error')throw Error(state.error);},
+    async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior && !sameBranch});if(state.status==='error')throw Error(state.error);},
     async()=>{
       let plan=await plans.get(planKey);
+      if(!plan && prior && !fixFiles.length)plan=structuredClone(prior.manifest);
       if(!plan && prior){
         plan=await appearanceFixPlan(git,prior,integration.sha,fixFiles,integration.main) || await colorFixPlan(git,prior,integration.sha,fixFiles,integration.main);
         if(plan)progress('Checklist ready from the appearance diff');
@@ -126,24 +131,20 @@ async function startCandidate(ref, previousReviewId, expectedCommit) {
         progress('Generating checklist while previews prepare');
         plan=await jobs.generatePlan(prior?prior.identity.changed:integration.main,integration.sha,prior?fixFiles:combined.files,prior?.manifest || combined.plan);
       }
-      if(prior)plan=mergeFixPlan(prior.manifest,{...plan,scenarios:plan.scenarios.filter(item=>item.files?.some(file=>fixFiles.includes(file)))},fixFiles);
+      if(prior && fixFiles.length && combined.files.length)plan=mergeFixPlan(prior.manifest,{...plan,scenarios:plan.scenarios.filter(item=>item.files?.some(file=>fixFiles.includes(file)))},fixFiles);
+      if(sameBranch)plan=branchPlan(plan);
       await plans.save(planKey,plan);await plans.save(integration.sha,plan);return plan;
     }
   );
   state.status='ready';progress('Checklist and previews are ready');
   await activate(previousReviewId);
-  if(prior){
+  if(prior && !store.get(state.recordId).sameBranch && state.recordId!==prior.id){
     const record=store.get(state.recordId);
     const request=jobs.rows.findLast(row=>row.kind==='fix' && row.status==='succeeded' && row.reviewId===prior.id && row.resultCommit===selected.branch.sha);
     focusRetest(record,prior,fixFiles,request?.attachment?.location);
+    if(sameBranch){record.branchBaseline=combined.base;record.sameBranch=true;record.manifest=branchPlan(record.manifest);}
+    record.checks={};record.items={};record.approval=null;
     const root=reviewRoot(prior,store.records);record.reviewRootId=root.id;record.reviewTitle=root.title;
-    if(narrow){
-      const colorOnly=await Promise.all(fixFiles.map(async file=>{
-        const before=await git('show',`${prior.identity.changed}:${file}`),after=await git('show',`${integration.sha}:${file}`);
-        return before.replace(/#[0-9a-fA-F]{3,8}\b/g,'#COLOR')===after.replace(/#[0-9a-fA-F]{3,8}\b/g,'#COLOR');
-      }));
-      if(colorOnly.every(Boolean))carryUnchangedChecks(record,prior,fixFiles);
-    }
     await store.persist();
   }
   preparedFix=null;
@@ -158,6 +159,7 @@ async function activate(previousReviewId) {
   await writeFile(path.join(local,'review.json'),JSON.stringify({comparison:state.comparison,original:state.original,changed:state.changed,integration:state.integration},null,2));
 }
 async function active(id, checkFresh = false) {
+  if(state.previewVersion)throw Error('You are previewing an earlier version. Return to the latest version before changing review results.');
   if (state.status !== 'ready' || id !== state.recordId) throw new Error('Open this exact review before changing its results.');
   const record = store.get(id);
   if (checkFresh) {
@@ -176,6 +178,27 @@ async function body(req) { let buffer=''; for await(const chunk of req) { buffer
 const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>readRecipe(local),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
 async function mutate(endpoint, data) {
   if(qaRunning() && !['/api/browser-qa-result','/api/check','/api/item','/api/cursor','/api/issue'].includes(endpoint))throw Error('Stop browser QA before changing its review, settings or runtime.');
+  if(['/api/version-preview','/api/version-latest','/api/version-restore'].includes(endpoint)){
+    if(jobs.rows.some(row=>row.status==='running'))throw Error('Wait for the running job before changing versions.');
+    if(state.status!=='ready' || state.recordId!==data.id)throw Error('Open this branch before changing versions.');
+    const record=store.get(data.id);
+    if(endpoint==='/api/version-latest'){if(state.previewVersion){state.changed=state.previewVersion.latestChanged;delete state.previewVersion;}return;}
+    const history=await branchVersions(git,record);
+    if(!history.versions.some(row=>row.sha===data.sha))throw Error('Choose a version from this branch history.');
+    if(endpoint==='/api/version-restore'){
+      const commit=await restoreVersion(git,run,record,data.sha,data.expected,data.confirmation);
+      await store.event(record,'branch-version-restored',{from:history.tip,version:data.sha,commit});
+      await startCandidate(record.identity.ref,record.id,commit);return;
+    }
+    if(history.tip!==record.identity.source)throw Error('This branch changed outside Branch Review. Reopen it before previewing history.');
+    const latestChanged=state.previewVersion?.latestChanged || state.changed;
+    const runtime=Object.keys(slots).find(side=>side!==state.original.runtime && side!==latestChanged.runtime);
+    preparedFix=null;
+    const files=(await git('diff','--name-only','-z',record.identity.base,data.sha,'--')).split('\0').filter(Boolean);
+    const preview=await prepare(runtime,data.sha,files);
+    state.previewVersion={sha:data.sha,latestChanged};state.changed={...preview,side:'changed',proxy:slots[runtime].proxy};return;
+  }
+  if(endpoint==='/api/fix-apply'){return jobs.applyFix(data.jobId);}
   if(endpoint==='/api/new-change'){
     if(state.recordId)throw Error('Use Make changes in the open review to keep its history together.');
     if(jobs.rows.some(job=>job.status==='running'))throw Error('Wait for the running job to finish.');
@@ -211,7 +234,8 @@ async function mutate(endpoint, data) {
   if(endpoint==='/api/tools-settings'){if(typeof data.autoPlan!=='boolean')throw new Error('Choose whether to generate plans automatically.');const next={autoPlan:data.autoPlan};await writeFile(path.join(local,'tools-settings.json'),JSON.stringify(next));toolsSettings=next;return next;}
   if (endpoint === '/api/start') {
     let prior,expectedCommit;
-    const fixJob=data.fixJob || jobs.rows.findLast(row=>row.branch && data.ref==='refs/heads/'+row.branch && row.status==='succeeded')?.id;
+    const tip=await git('rev-parse',data.ref);
+    const fixJob=data.fixJob || jobs.rows.findLast(row=>row.branch && data.ref==='refs/heads/'+row.branch && row.status==='succeeded' && row.resultCommit===tip)?.id;
     if(fixJob){
       const job=jobs.rows.find(row=>row.id===fixJob && row.kind==='fix' && row.status==='succeeded');
       if(!job || data.ref!=='refs/heads/'+job.branch)throw new Error('Choose an unchanged, committed fix job before retesting.');
@@ -220,7 +244,7 @@ async function mutate(endpoint, data) {
     }
     await startCandidate(data.ref,prior?.id,expectedCommit);return;
   }
-  if (endpoint === '/api/stop') return stopReview();
+  if (endpoint === '/api/stop') {delete state.previewVersion;return stopReview();}
   if (endpoint === '/api/fetch') return git('fetch','origin');
   if (endpoint === '/api/retest') { const prior=store.get(data.id); await startCandidate(prior.identity.ref,prior.id); return; }
   if (endpoint === '/api/release-settings') {
@@ -308,6 +332,8 @@ actions.add('/api/database-cleanup');actions.add('/api/database-start');
 actions.add('/api/onboarding');
 actions.add('/api/job-cancel');
 actions.add('/api/new-change');
+for(const endpoint of ['/api/version-preview','/api/version-latest','/api/version-restore','/api/fix-apply'])actions.add(endpoint);
+longActions.add('/api/version-restore');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
 const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
   try {
@@ -346,6 +372,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
       selected.plan=await plans.get(selected.branch.sha) || selected.plan;
       return json(res,200,selected);
     }
+    if(req.method==='GET' && url.pathname==='/api/versions')return json(res,200,await branchVersions(git,store.get(url.searchParams.get('id'))));
     if(req.method==='GET' && url.pathname==='/api/commits')return json(res,200,await commitHistory(git,url.searchParams.get('sha')));
     if(req.method==='GET' && url.pathname==='/api/changes')return json(res,200,await changedFiles(git,url.searchParams.get('base'),url.searchParams.get('changed')));
     if(req.method==='GET' && url.pathname==='/api/diff')return json(res,200,await fileDiff(git,url.searchParams.get('base'),url.searchParams.get('changed'),url.searchParams.get('file')));
@@ -362,7 +389,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/branch-history.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312 http://127.0.0.1:4313; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));

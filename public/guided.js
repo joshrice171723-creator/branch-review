@@ -83,7 +83,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     const blob=new Blob([$('handoff-text').value],{type:'text/markdown'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='branch-review-fixes.md';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
   function render(state) {
-    const r=state.record,enabled=state.status==='ready' && r && !state.busy && !pending;
+    const r=state.record,enabled=state.status==='ready' && r && !state.busy && !state.previewVersion && !pending;
     const published=isPublished(r);
     $('guided-queue').hidden=!r || published;
     if(!r)return;
