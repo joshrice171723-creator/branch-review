@@ -342,7 +342,22 @@ $('view-diff').onclick=()=>openDiff();
 $('review-code').onclick=()=>{const r=currentState.record;if(r)void openDiff(undefined,{base:r.identity.base,branch:{sha:r.identity.changed,name:r.identity.ref.replace(/^refs\/(heads|remotes)\//,'')}});};
 $('download-plan').onclick=()=>{if(!selectedComparison)return;const url=URL.createObjectURL(new Blob([JSON.stringify(selectedComparison.plan,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='review-checklist.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 $('close-diff').onclick=()=>{diffGeneration++;$('diff-dialog').close();};
-function renderAddress(){$('preview-address').textContent=['original','changed'].filter(side=>$('layout-mode').value==='side-by-side' || side===active).map(side=>`${side==='original'?'Original':'Changed'}: ${reviewWorkflow.getContext(side).location ? 'http://127.0.0.1:'+currentState[side]?.proxy+reviewWorkflow.getContext(side).location : 'Waiting for page…'}`).join('   |   ');}
+function renderAddress(){
+  const input=$('preview-url'),preview=currentState[active],location=reviewWorkflow.getContext(active).location;
+  $('preview-address-label').textContent=active==='original'?'Original:':'Changed:';
+  input.disabled=$('preview-go').disabled=!preview || !$(`frame-${active}`);
+  if(document.activeElement!==input)input.value=preview && location?`http://127.0.0.1:${preview.proxy}${location}`:'';
+}
+$('preview-address').onsubmit=event=>{
+  event.preventDefault();const preview=currentState[active],frame=$(`frame-${active}`),input=$('preview-url'),message=$('preview-url-error');
+  if(!preview || !frame)return;
+  try{
+    const origin=`http://127.0.0.1:${preview.proxy}`,value=input.value.trim();
+    const url=new URL(value,origin);
+    if(url.origin!==origin || url.username || url.password)throw Error('Enter a path or URL for the selected preview.');
+    message.textContent='';frame.src=url.href;input.blur();
+  }catch(e){message.textContent=e.message || 'Enter a valid preview address.';}
+};
 function toggle(side) {
   active = side;
   renderAddress();
