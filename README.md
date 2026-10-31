@@ -29,7 +29,7 @@ Windows users: download the installer from the [public beta release](https://git
    Right-clicking the affected area opens the same request modal. The current page, version and cropped preview screenshot accompany the request. Drafts stay with their review. The separate **Review checklist** toolbar control edits testing instructions.
 6. Request more changes on the same local work branch. Codex edits a detached, isolated checkout; Branch Review commits the requested files and advances that branch without creating another branch. The latest Changed preview opens automatically. Original stays at the review's starting baseline, and each new version needs fresh checks. A clean checked-out branch fast-forwards safely; unsaved files or external branch changes preserve the proposal and block applying it. Agent fixes offers **Apply saved commit to this branch** after the blockage is resolved.
 7. Use the history icon for **Branch versions**. **Preview** shows earlier files without moving the branch or editing results. **Return to latest version** resumes the current review. **Restore as new commit** restores all tracked files to the selected version, appends a commit to the same branch, and keeps intermediate commits. Saved review reports and evidence remain available below the version list. Nothing is automatically pushed. History shows up to 200 first-parent commits plus the branch starting point; existing legacy fix branches are preserved.
-8. Finish the guided review, then choose **Send to QA**. Testing runs in the background. Open the flask-shaped **QA** icon to inspect results, approve a passed version, merge/push, and publish. Protected repositories can use **Workspace > Delivery > Create pull request**, with an authenticated GitHub CLI.
+8. Finish the guided review, then approve the exact version from its summary before choosing merge/push or publish. Protected repositories can use **Workspace > Delivery > Create pull request**, with an authenticated GitHub CLI.
 
 ## Any project's setup
 
@@ -45,15 +45,11 @@ Generic previews use separate ports, retain recent healthy versions, reuse depen
 
 Native/mobile apps and headless tools need an appropriate web harness to use the embedded preview. Configurable project support does not imply automatic knowledge of every build system.
 
-## Activity and browser QA
+## Review and delivery
 
-The compact strip above the preview shows work and readiness. The **QA** navigation icon opens a full-page workspace with results and delivery controls. Logs stay under Technical details. **Watch browser** brings the current QA browser forward; it never steals focus automatically.
+The progress strip reports preview and agent activity. Review the changed behavior, collect requests, and verify the resulting revision. A completed manual review can be approved directly from its summary. The former automatic browser QA runner is no longer part of review or approval; it cannot be started from the app or API. Historical results and screenshot evidence remain saved.
 
-Opening a branch does not start QA. Complete your guided review and resolve findings, then choose **Send to QA**. You remain in Review while testing runs. The QA icon opens a separate page; Back to review preserves your preview. Its badge counts passed, current submitted reviews awaiting delivery. Superseded versions and old automatic runs do not count. The runner opens checklist routes and checks simple changed CSS properties on the active affected screen. Missing selectors remain unverified. Failed checks become findings with screenshots. Use **Run QA again** to retry deliberately.
-
-The QA boxes show waiting, checking, passed, failed or unverified states. Select a box for evidence. The page states its coverage: page checks prove screens render, not that every requirement passes. The current run pins its preview; switching projects or replacing the runtime requires completing or stopping QA. You can return to the existing review without stopping it.
-
-Evidence is ordered and pinned to the reviewed commit. Missing or interrupted results cannot become passes. Browser results do not approve manual items. General autonomous behavior discovery and generic hosted QA are not implemented. Muse hosted QA remains part of the optional Meta Clinic integration.
+Approval remains tied to the exact reviewed commit. Changed branches, moved default branches, preview health, explicit merge/publish confirmation, and deployment receipts retain their existing protections. Project-configured checks remain available under advanced tools. Hosted Meta Clinic release verification is separate from the removed local browser runner.
 
 ## Delivery
 

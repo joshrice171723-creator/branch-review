@@ -1,7 +1,7 @@
 import {reviewAccountedFor} from './public/batch-review.js';
 import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
-import {qaState,qaReviews} from './public/qa-model.js';
+import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
 import {npmEntry} from './web-project.mjs';
 import http from 'node:http';
@@ -18,8 +18,7 @@ import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
 import {providerId,probeProvider} from './providers.mjs';
 import {readRecipe,saveRecipe} from './project-settings.mjs';
-import {beginBrowserQa,browserQaResult} from './browser-qa.mjs';
-import {automaticBrowserChecks} from './automatic-qa.mjs';
+import {browserQaResult} from './browser-qa.mjs';
 import {readDelivery,saveDelivery,deployProject,createReviewPr} from './project-delivery.mjs';
 import { MuseQa } from './muse-qa.mjs';
 import { changedFiles, fileDiff, commitHistory } from './changes.mjs';
@@ -253,14 +252,13 @@ async function mutate(endpoint, data) {
     await access(data.keyPath); await access(data.recoveryDirectory); await writeFile(path.join(local,'release.json'),JSON.stringify({keyPath:data.keyPath,recoveryDirectory:data.recoveryDirectory})); return;
   }
   const record = await active(data.id, ['/api/approve','/api/ship','/api/publish','/api/candidate','/api/browser-qa','/api/project-deploy','/api/pull-request'].includes(endpoint));
-  if(['/api/approve','/api/ship','/api/publish','/api/project-deploy','/api/pull-request'].includes(endpoint) && !qaState(record).ready)throw Error('Send this version to QA and resolve its checks before approving or delivering it.');
   if(endpoint==='/api/pull-request')return createReviewPr(record,{delivery,git,run,store,local,repo,defaultBranch});
   if(endpoint==='/api/project-deploy')return deployProject(record,{local,cwd:state.changed.directory,run,git,store,defaultBranch,confirmation:data.confirmation});
   if(endpoint==='/api/project-deploy-retry'){
     if(record.projectDeployment?.status!=='needs-inspection'||typeof data.note!=='string'||data.note.trim().length<10)throw Error('Describe your inspection of the failed deployment first.');
     await store.event(record,'project-deployment-retry',{previous:record.projectDeployment,note:data.note.slice(0,2000)});delete record.projectDeployment;await store.persist();return;
   }
-  if(endpoint==='/api/browser-qa')return beginBrowserQa(store,record,data.automatic===true || data.submit===true?await automaticBrowserChecks(git,record):data.steps,data.automatic===true || data.submit===true,data.submit===true);
+  if(endpoint==='/api/browser-qa')throw Error('Automatic browser QA has been removed. Complete the manual review before approving this version.');
   if(endpoint==='/api/browser-qa-result')return browserQaResult(store,local,record,data);
   if(endpoint==='/api/plan'){
     if(jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running job before editing the plan.');

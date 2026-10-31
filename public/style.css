@@ -986,7 +986,7 @@ body.focused .panel-divider {display:none}
 #guided-results #qa-page #activity-dialog{padding:0;border:0;background:transparent}
 #guided-results #qa-page .qa-boxes{display:grid;grid-template-columns:1fr;gap:8px}
 #guided-results #qa-page .qa-box{min-height:0;padding:12px;border-top-width:1px;border-left:4px solid var(--box-color);gap:4px}
-#guided-results:has(#qa-page[data-reviewed="true"]) > #results-action{display:none}
+
 .main-tools #toolbar-qa{display:none}
 
 #guided-results #qa-page{padding-top:14px;border-top:1px solid #dce3da}
@@ -996,3 +996,5 @@ body.focused .panel-divider {display:none}
 #summary-requests h3{font-size:16px;margin:20px 0 0}
 #guided-results>button{margin-bottom:10px}
 #qa-page [data-title]:empty{display:none}
+
+#review-delivery{margin-top:24px;border-top:1px solid #dce3da;padding-top:16px}#review-delivery .tool-actions{display:flex;gap:8px;flex-wrap:wrap}#review-delivery [data-settings]>details>summary{display:none}
