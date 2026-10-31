@@ -8,6 +8,7 @@
     "test": "node --test test/*.test.mjs",
     "test:live": "node test/live.mjs",
     "desktop": "electron .",
+    "dev": "node desktop/dev.cjs",
     "package:desktop": "node desktop/package.mjs",
     "installer": "electron-builder --config desktop/installer.json --win nsis --x64 --publish never"
   },

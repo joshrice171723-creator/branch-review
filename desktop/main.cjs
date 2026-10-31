@@ -9,6 +9,12 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const exec = promisify(execFile);
 const origin = 'http://127.0.0.1:4310';
+if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') {
+  const devRoot = path.resolve(__dirname, '..', '.local-dev');
+  app.setPath('userData', path.join(devRoot, 'desktop'));
+  process.env.BRANCH_REVIEW_HOME = path.join(devRoot, 'workspace');
+  delete process.env.META_CLINIC_REPO;
+}
 let window, closing = false, home;
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
@@ -20,6 +26,7 @@ async function launch() {
   const root = path.dirname(__dirname);
   const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
+  if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') await mkdir(path.dirname(settingsPath), {recursive:true});
   const settings = JSON.parse(await readFile(settingsPath, 'utf8').catch(() => '{}'));
   home = process.env.BRANCH_REVIEW_HOME || settings.home || (app.isPackaged ? path.join(app.getPath('userData'), 'workspace') : path.join(root, '.local'));
   await mkdir(home, { recursive: true });
@@ -61,6 +68,19 @@ async function launch() {
   window = new BrowserWindow({ title: 'Branch Review', icon:path.join(__dirname,'icon.ico'), width, height, minWidth: 1000, minHeight: 700,
     backgroundColor: '#f6f7f5', show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true } });
+  if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') {
+    window.setTitle('Branch Review — Development');
+    window.webContents.on('before-input-event', async (event, input) => {
+      if (input.type !== 'keyDown' || !(input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r'))) return;
+      event.preventDefault();
+      const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
+      if (!state || state.busy || state.jobsRunning || state.qaRunning) {
+        await dialog.showMessageBox(window, {message:'Wait for the current operation to finish before refreshing.'}); return;
+      }
+      const choice = await dialog.showMessageBox(window, {type:'question',buttons:['Keep working','Refresh'],defaultId:0,cancelId:0,message:'Refresh the development window?',detail:'Save any unsaved form edits first. Saved reviews remain available.'});
+      if (choice.response === 1) window.webContents.reload();
+    });
+  }
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('console-message', details => {
     if (details.level === 'error') void appendFile(path.join(home, 'renderer-errors.log'), `${new Date().toISOString()} ${details.message.slice(0,2000)}\n`);

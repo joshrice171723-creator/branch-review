@@ -84,6 +84,10 @@ Reports include outcomes, findings, screenshots, approval and delivery history. 
 
 ## Development
 
+Run `npm run dev` from this repository to open the Electron app directly from source; no installer or packaging is needed. Development uses its own `.local-dev` settings and review data, so choose a trusted project on first launch. It shares ports 4310–4313 with the installed app: close the other Branch Review window before starting it. The development window is labeled **Branch Review — Development**.
+
+For changes under `public/`, save your work and press F5 or Ctrl+R in the development window; confirm after saving any form edits. Server, desktop, or dependency changes require closing and reopening `npm run dev`. Refresh does not restart the server or automatically reload unsaved changes. Reviews and evidence created in development stay separate from the installed app. Make an installer only for distribution or when updating the installed copy.
+
 `npm test` includes disposable Git repositories, actual custom-preview processes, provider protocol tests and browser-evidence validation. `npm run package:desktop` builds Windows x64. `npm start` provides the web UI; desktop capture and browser runs require Electron.
 
 Meta Clinic's `npm run test:live` and `node test/qa-live.mjs` need their matching prepared preview pair. `npm run installer` creates the unsigned Windows x64 installer. The Windows installer workflow is configured for a fresh hosted runner, but account billing currently blocks it from starting. Signing and automatic updates remain separate distribution work. See [distribution evidence](DISTRIBUTION_AUDIT.md).
