@@ -8,9 +8,20 @@ export function workbench({api,getState,getSide,workflow,capture,previewReady,po
   const changes=changeRequest({api,getState,getSide,workflow,capture,previewReady,poll,close:()=>{}});
   const providerName=()=>getState().agent?.provider==='claude'?'Claude Code':'Codex';
   let settingsKey='';
-  $('agent-save').onclick=async()=>{try{const value=await api('/api/agent-settings',{provider:$('agent-provider').value,executable:$('agent-executable').value.trim()});$('agent-status').textContent=value.result.message;await poll();}catch(e){$('agent-status').textContent=e.message;}};
-  $('agent-provider').onchange=()=>{$('agent-executable').value='';$('codex-chat').value='';$('agent-status').textContent='Save this provider before starting a job. Existing jobs keep their original provider.';};
-  $('agent-probe').onclick=async()=>{try{$('agent-status').textContent='Checking CLI connection...';$('agent-status').textContent=(await api('/api/agent-probe',{})).result.message;}catch(e){$('agent-status').textContent=e.message;}};
+  let agentConnectionKey='',agentConnectionText='';
+  const selectedAgentName=()=>$('agent-provider').value==='claude'?'Claude Code CLI':'Codex CLI';
+  const selectedAgentKey=()=>JSON.stringify({provider:$('agent-provider').value,executable:$('agent-executable').value.trim()});
+  function showAgentConnection(message){$('agent-status').textContent=`${selectedAgentName()} · ${message}`;}
+  function connectionMessage(result){
+    if(result.status==='ready')return `Connected${result.version?` · ${result.version}`:''}`;
+    if(result.status==='sign-in')return `Sign-in required. ${result.message}`;
+    if(result.status==='missing')return `CLI not found. ${result.message}`;
+    if(result.status==='upgrade')return result.message;
+    return result.message || 'Could not connect. Check the installation and advanced executable path.';
+  }
+  $('agent-save').onclick=async()=>{const key=selectedAgentKey();showAgentConnection('Checking connection…');try{const value=await api('/api/agent-settings',{provider:$('agent-provider').value,executable:$('agent-executable').value.trim()});agentConnectionKey=key;agentConnectionText=connectionMessage(value.result);showAgentConnection(agentConnectionText);await poll();}catch(e){showAgentConnection(e.message);}};
+  $('agent-provider').onchange=()=>{$('agent-executable').value='';$('codex-chat').value='';showAgentConnection('Save to check this agent. Existing jobs keep their original provider.');};
+  $('agent-executable').oninput=()=>showAgentConnection('Save to check this path.');
   $('published-tools').innerHTML='<p id="published-status"></p><button id="published-start">Verify build and start checklist</button><button id="published-office" hidden>Open Office</button><section id="published-checklist" hidden><h3 id="published-item-title"></h3><p id="published-item-description"></p><button id="published-open">Open published screen</button><div id="published-checks"></div><label for="published-note">Published observations</label><textarea id="published-note" maxlength="4000"></textarea><div class="tool-actions"><button id="published-save">Save note</button><button id="published-previous">Previous</button><button id="published-next">Next</button></div><p>After all checks pass, record the final published result in Merge and publish.</p></section>';
   let releaseKey='';
   async function releaseAction(data){try{await api('/api/published-review',{id:current().id,...data});await poll();renderRelease();return true;}catch(e){$('tools-status').textContent=e.message;return false;}}
@@ -109,7 +120,7 @@ export function workbench({api,getState,getSide,workflow,capture,previewReady,po
   setInterval(()=>{const id=current()?.id;if(!getState().busy && id)void api(`/api/update?id=${id}`).then(value=>{if(current()?.id!==id)return;if(value.changed){$('updated-branch').hidden=false;$('updated-branch').textContent=`Updated branch ${value.latest.slice(0,7)} · Review changes`;}else $('updated-branch').hidden=true;}).catch(()=>{});},30000);
   $('updated-branch').onclick=()=>{update=null;open('updates');};
   return{open,requestChange:changes.open,render(state){changes.render();$('toolbar-review').disabled=!!state.busy;$('toolbar-agent').disabled=!state.record || !!state.busy;$('review-tools').disabled=!!state.busy;$('capture-item').disabled=!state.record || state.status!=='ready' || state.busy;
-    const key=JSON.stringify(state.agent);if(key!==settingsKey){settingsKey=key;$('agent-provider').value=state.agent?.provider || 'codex';$('agent-executable').value=state.agent?.executable || '';$('codex-chat').value='';}
+    const key=JSON.stringify(state.agent);if(key!==settingsKey){settingsKey=key;$('agent-provider').value=state.agent?.provider || 'codex';$('agent-executable').value=state.agent?.executable || '';$('codex-chat').value='';if(agentConnectionKey===selectedAgentKey())showAgentConnection(agentConnectionText);else showAgentConnection('Connection not checked.');}
     $('agent-save').disabled=!!state.jobsRunning || !!state.busy;
     $('project-adapter').textContent=state.project?.error || `${state.project?.name || 'Project'} · ${state.project?.kind || 'Meta Clinic'} preview adapter`;
     $('generate-plan').textContent=`Generate with ${providerName()}`;$('open-codex-handoff').textContent=`Send to ${providerName()}`;

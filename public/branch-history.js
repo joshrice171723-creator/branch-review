@@ -7,7 +7,7 @@ export function branchHistory({api,getState,flush,poll,error}){
   const context=document.createElement('p'),notice=document.createElement('p'),list=document.createElement('div');
   notice.setAttribute('role','status');list.className='branch-version-list';
   const latest=document.createElement('button');latest.textContent='Return to latest version';latest.className='secondary';
-  dialog.append(header,context,latest,notice,list);document.body.append(dialog);
+  dialog.append(header,context,latest,notice,list,document.getElementById('history').closest('details'));document.body.append(dialog);
   let loading=false,history=null;
   async function load(){
     const state=getState();latest.hidden=!state.previewVersion;

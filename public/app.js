@@ -102,8 +102,8 @@ $('toolbar-agent').onclick=()=>reviewTools.open('updates');
 const evidenceMenu=document.createElement('button');evidenceMenu.textContent='Evidence tools';evidenceMenu.className='secondary';evidenceMenu.onclick=()=>reviewTools.open('evidence');$('item-more').append(evidenceMenu);
 const branchHistoryView=branchHistory({api,getState:()=>currentState,flush:reviewWorkflow.flush,poll,error});
 
-// Move existing controls so their state and handlers stay intact.
-for(const id of ['history','health-status','files'])$('workspace-details').append($(id).closest('details'));
+// Keep review history in Versions and diagnostics/changed files with the review.
+// Settings should not become the only route to controls users need while reviewing.
 $('results-options').append($('export-review'),$('delivery-heading').closest('details'));
 $('results-action').before($('approval-section'));
 $('results-checks').append($('resume-review'));
