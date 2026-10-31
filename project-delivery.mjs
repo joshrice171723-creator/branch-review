@@ -5,9 +5,17 @@ import {projectCommand} from './web-project.mjs';
 
 export function validateDelivery(value){
   if(!value || !Array.isArray(value.command)||!value.command.length||value.command.some(arg=>typeof arg!=='string'||arg.includes('\0')||arg.length>4000))throw Error('Enter a deployment executable and arguments.');
+  if(typeof value.buildUrl!=='string')throw Error('Enter a build receipt URL.');
   const url=new URL(value.buildUrl);
   if(url.username||url.password||!(url.protocol==='https:'||url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname)))throw Error('Build receipt must use HTTPS or local HTTP, without credentials.');
-  return {command:value.command,buildUrl:url.href};
+  let targetUrl=null;
+  if(value.targetUrl){
+    if(typeof value.targetUrl!=='string')throw Error('Enter a published app URL.');
+    const target=new URL(value.targetUrl);
+    if(target.username||target.password||!(target.protocol==='https:'||target.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(target.hostname)))throw Error('Published app URL must use HTTPS or local HTTP, without credentials.');
+    targetUrl=target.href;
+  }
+  return {command:value.command,buildUrl:url.href,targetUrl};
 }
 export async function readDelivery(local){return readFile(path.join(local,'project-delivery.json'),'utf8').then(text=>validateDelivery(JSON.parse(text))).catch(e=>{if(e.code==='ENOENT')return null;throw e;});}
 export async function saveDelivery(local,value){const config=validateDelivery(value),file=path.join(local,'project-delivery.json');await writeFile(file+'.tmp',JSON.stringify(config,null,2));await rename(file+'.tmp',file);return config;}
@@ -27,8 +35,8 @@ export async function deployProject(record,{local,cwd,run,git,store,defaultBranc
     const response=await fetcher(config.buildUrl,{cache:'no-store',signal:AbortSignal.timeout(15000)});
     if(!response.ok)throw Error('Deployment command finished, but its build receipt could not be read.');
     const receipt=await response.json();if(receipt.revision!==sha || receipt.dirty)throw Error('Deployment receipt does not identify the exact clean reviewed commit.');
-    record.projectDeployment.status='published';record.projectDeployment.verifiedAt=new Date().toISOString();record.projectDeployment.buildUrl=config.buildUrl;
-    await store.event(record,'project-deployed',{commit:sha,buildUrl:config.buildUrl});
+    record.projectDeployment.status='published';record.projectDeployment.verifiedAt=new Date().toISOString();record.projectDeployment.buildUrl=config.buildUrl;record.projectDeployment.targetUrl=config.targetUrl;
+    await store.event(record,'project-deployed',{commit:sha,buildUrl:config.buildUrl,targetUrl:config.targetUrl});
   }catch(error){record.projectDeployment.status='needs-inspection';record.projectDeployment.error=error.message;await store.persist();throw error;}
   return record.projectDeployment;
 }

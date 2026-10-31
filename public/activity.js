@@ -5,7 +5,7 @@ export function activity({api,getState,navigate,flush,poll}){
   strip.innerHTML='<span class="work-light" aria-hidden="true"></span><div role="status"><strong data-label></strong><span data-detail></span></div>';
   document.getElementById('preview-area').before(strip);
   const delivery=document.createElement('section');delivery.id='review-delivery';
-  delivery.innerHTML='<h3>Review approval</h3><div data-approval></div><div class="tool-actions" data-actions hidden></div><details><summary>Optional publishing and recovery</summary><div data-publishing></div><div data-settings></div></details>';
+  delivery.innerHTML='<h3>Review approval</h3><div data-approval></div><div class="tool-actions" data-actions hidden></div><details><summary>Optional publishing and recovery</summary><div data-publishing></div><p id="project-deploy-feedback" role="status"></p><div data-settings></div></details>';
   document.getElementById('guided-results').append(delivery);
   const approval=document.getElementById('approval-section');delivery.querySelector('[data-approval]').append(approval);
   delivery.querySelector('[data-actions]').append(document.getElementById('ship'));
@@ -24,6 +24,7 @@ export function activity({api,getState,navigate,flush,poll}){
     delivery.hidden=!r||!canApprove(r)||isPublished(r);delivery.dataset.merged=String(r?.delivery?.stage==='pushed');
     delivery.querySelector('h3').textContent=r?.delivery?.stage==='pushed'?'Merged to main':'Review approval';
     setup.hidden=state.publishTarget===null;document.getElementById('candidate').hidden=!r || r.integration?.sha===r.identity.changed || r.delivery?.stage==='pushed';
-    const deploy=document.getElementById('project-deploy');deploy.hidden=state.publishTarget!==null;deploy.disabled=!r?.approval||r?.delivery?.stage!=='pushed'||state.busy;
+    const deploy=document.getElementById('project-deploy');deploy.hidden=state.publishTarget!==null||!state.projectDelivery?.configured||!!r?.projectDeployment;deploy.disabled=!r?.approval||r?.delivery?.stage!=='pushed'||state.busy;
+    const feedback=document.getElementById('project-deploy-feedback'),deployment=r?.projectDeployment;if(feedback)feedback.textContent=deployment?`Project deployment: ${deployment.status}${deployment.error?` · ${deployment.error}`:''}`:'';
   }};
 }
