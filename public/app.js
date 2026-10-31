@@ -10,6 +10,30 @@ import { reviewShortcut, refreshedSelection, selectedReviewState } from './short
 import {workbench} from './workbench.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
+function dismissOverlays() {
+  let pressedBackdrop=null;
+  const outside=(dialog,event)=>{
+    const box=dialog.getBoundingClientRect();
+    return event.clientX<box.left || event.clientX>box.right || event.clientY<box.top || event.clientY>box.bottom;
+  };
+  const closeMenus=target=>{
+    for(const menu of document.querySelectorAll('.comparison-menu[open]'))if(!target || !menu.contains(target))menu.open=false;
+  };
+  document.addEventListener('pointerdown',event=>{
+    closeMenus(event.target);
+    const dialog=event.target.closest?.('dialog[open]');
+    pressedBackdrop=event.button===0 && dialog && event.target===dialog && outside(dialog,event)?dialog:null;
+  });
+  document.addEventListener('pointerup',event=>{
+    const dialog=pressedBackdrop;pressedBackdrop=null;
+    if(dialog?.open && event.target===dialog && outside(dialog,event))dialog.close();
+  });
+  document.addEventListener('pointercancel',()=>{pressedBackdrop=null;});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMenus();});
+  // Preview frames own their pointer events, so detect focus moving into a frame.
+  window.addEventListener('blur',()=>setTimeout(()=>{if(document.activeElement?.tagName==='IFRAME')closeMenus();},0));
+}
+dismissOverlays();
 function resizablePanels(main) {
   const left=main.querySelector('.panel-divider-left'),right=main.querySelector('.panel-divider-right');
   if (!left || !right) return;
