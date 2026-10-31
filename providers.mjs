@@ -45,8 +45,8 @@ export async function probeProvider(provider,override){
     try{
       const result=await invoke(provider==='claude'?['auth','status']:['login','status']);
       if(provider==='claude' && !JSON.parse(result.stdout).loggedIn)throw Error('Sign in required');
-      return {provider,status:'ready',version,message:`${providerNames[provider]} is installed and signed in. A job may still encounter account or usage limits.`};
-    }catch{return {provider,status:'sign-in',version,message:`Run ${provider==='claude'?'claude auth login':'codex login'} in your terminal, complete sign-in, then test the connection again.`};}
+      return {provider,status:'ready',version,path:file,message:`${providerNames[provider]} is installed and signed in. A job may still encounter account or usage limits.`};
+    }catch{return {provider,status:'sign-in',version,path:file,message:`Run ${provider==='claude'?'claude auth login':'codex login'} in your terminal, complete sign-in, then test the connection again.`};}
   }catch{return {provider,status:'unavailable',message:`Could not run ${providerNames[provider]}. Check its executable path and installation.`};}
 }
 export async function codexConnections(file,cwd){

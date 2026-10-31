@@ -8,9 +8,9 @@ export function workbench({api,getState,getSide,workflow,capture,previewReady,po
   const changes=changeRequest({api,getState,getSide,workflow,capture,previewReady,poll,close:()=>{}});
   const providerName=()=>getState().agent?.provider==='claude'?'Claude Code':'Codex';
   let settingsKey='';
-  let agentConnectionKey='',agentConnectionText='';
+  let agentConnectionKey='',agentConnectionText='',autoAgentPath='';
   const selectedAgentName=()=>$('agent-provider').value==='claude'?'Claude Code CLI':'Codex CLI';
-  const selectedAgentKey=()=>JSON.stringify({provider:$('agent-provider').value,executable:$('agent-executable').value.trim()});
+  const selectedAgentKey=()=>JSON.stringify({provider:$('agent-provider').value,executable:$('agent-executable').value.trim()===autoAgentPath?'':$('agent-executable').value.trim()});
   function showAgentConnection(message){$('agent-status').textContent=`${selectedAgentName()} · ${message}`;}
   function connectionMessage(result){
     if(result.status==='ready')return `Connected${result.version?` · ${result.version}`:''}`;
@@ -19,9 +19,9 @@ export function workbench({api,getState,getSide,workflow,capture,previewReady,po
     if(result.status==='upgrade')return result.message;
     return result.message || 'Could not connect. Check the installation and advanced executable path.';
   }
-  $('agent-save').onclick=async()=>{const key=selectedAgentKey();showAgentConnection('Checking connection…');try{const value=await api('/api/agent-settings',{provider:$('agent-provider').value,executable:$('agent-executable').value.trim()});agentConnectionKey=key;agentConnectionText=connectionMessage(value.result);showAgentConnection(agentConnectionText);await poll();}catch(e){showAgentConnection(e.message);}};
-  $('agent-provider').onchange=()=>{$('agent-executable').value='';$('codex-chat').value='';showAgentConnection('Save to check this agent. Existing jobs keep their original provider.');};
-  $('agent-executable').oninput=()=>showAgentConnection('Save to check this path.');
+  $('agent-save').onclick=async()=>{const key=selectedAgentKey();showAgentConnection('Checking connection…');try{const value=await api('/api/agent-settings',{provider:$('agent-provider').value,executable:$('agent-executable').value.trim()===autoAgentPath?'':$('agent-executable').value.trim()});if(value.result.path && !$('agent-executable').value.trim()){autoAgentPath=value.result.path;$('agent-executable').value=autoAgentPath;}agentConnectionKey=key;agentConnectionText=connectionMessage(value.result);showAgentConnection(agentConnectionText);await poll();}catch(e){showAgentConnection(e.message);}};
+  $('agent-provider').onchange=()=>{autoAgentPath='';$('agent-executable').value='';$('codex-chat').value='';showAgentConnection('Save to check this agent. Existing jobs keep their original provider.');};
+  $('agent-executable').oninput=()=>{autoAgentPath='';showAgentConnection('Save to check this path.');};
   $('published-tools').innerHTML='<p id="published-status"></p><button id="published-start">Verify build and start checklist</button><button id="published-office" hidden>Open Office</button><section id="published-checklist" hidden><h3 id="published-item-title"></h3><p id="published-item-description"></p><button id="published-open">Open published screen</button><div id="published-checks"></div><label for="published-note">Published observations</label><textarea id="published-note" maxlength="4000"></textarea><div class="tool-actions"><button id="published-save">Save note</button><button id="published-previous">Previous</button><button id="published-next">Next</button></div><p>After all checks pass, record the final published result in Merge and publish.</p></section>';
   let releaseKey='';
   async function releaseAction(data){try{await api('/api/published-review',{id:current().id,...data});await poll();renderRelease();return true;}catch(e){$('tools-status').textContent=e.message;return false;}}
@@ -46,7 +46,11 @@ export function workbench({api,getState,getSide,workflow,capture,previewReady,po
   }
   function loadEditor(){draft=structuredClone(current().manifest);editorRecord=current().id;index=0;$('plan-summary-edit').value=draft.summary || '';showItem();$('plan-editor').hidden=true;}
   function open(section='plan'){
-    if(!current() && section!=='plan')section='workspace';if(current() && (editorRecord!==current().id || !draft))loadEditor();changes.render();$('tools-dialog').showModal();tab(section);renderRelease();void refresh();
+    if(!current() && section!=='plan')section='workspace';if(current() && (editorRecord!==current().id || !draft))loadEditor();changes.render();$('tools-dialog').showModal();tab(section);renderRelease();void refresh();if(section==='workspace')void checkAgentConnection();
+  }
+  async function checkAgentConnection(){
+    const agent=getState().agent || {},provider=agent.provider || 'codex';
+    try{const value=await api('/api/agent-probe',{});if($('agent-provider').value!==provider || $('agent-executable').value.trim() && $('agent-executable').value.trim()!==autoAgentPath)return;autoAgentPath=agent.executable?'':value.result.path || '';if(autoAgentPath)$('agent-executable').value=autoAgentPath;agentConnectionKey=selectedAgentKey();agentConnectionText=connectionMessage(value.result);showAgentConnection(agentConnectionText);}catch(e){showAgentConnection(e.message);}
   }
   function tab(section){$('database-cleanup').hidden=true;$('tools-title').textContent={plan:'Review checklist',updates:'Agent fixes',evidence:'Evidence',checks:'Checks',release:'Published review',workspace:'Settings'}[section];$('restore-data').hidden=getState().project?.kind!=='meta-clinic';$('restore-data').previousElementSibling.textContent=getState().project?.kind==='meta-clinic'?"Restore the active version's scenario data when you need a repeatable starting point.":'Use Reset item to return to its starting screen. Project data setup is configured in Workspace.';for(const name of ['plan','updates','evidence','checks','release','workspace']){$('tools-'+name).hidden=name!==section;$('tab-'+name).setAttribute('aria-pressed',String(name===section));}}
   $('database-cleanup').hidden=true;
