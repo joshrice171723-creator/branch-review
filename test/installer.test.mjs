@@ -37,3 +37,10 @@ test('finds a newly installed Git without requiring an app restart',async()=>{
   const exec=async command=>{if(command!==file)throw Error('missing');return {stdout:'git'};};
   assert.equal(await setup.gitAvailable({exec,env}),true);assert.equal(env.PATH.split(path.delimiter)[0],path.dirname(file));
 });
+
+test('Windows workflow uploads only files inside its workspace',async()=>{
+  const workflow=await readFile(new URL('../.github/workflows/windows-installer.yml',import.meta.url),'utf8');
+  assert.match(workflow,/Copy-Item -LiteralPath \$installer\.FullName -Destination artifacts/);
+  assert.match(workflow,/artifacts\/\*Setup\.exe/);
+  assert.doesNotMatch(workflow,/path:\s*\|\s*\.\.\/installers/);
+});

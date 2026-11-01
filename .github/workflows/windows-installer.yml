@@ -37,10 +37,12 @@ jobs:
           } finally {
             Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
           }
-          Get-FileHash $installer.FullName -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($installer.Name)" } | Set-Content ../installers/SHA256SUMS.txt
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item -LiteralPath $installer.FullName -Destination artifacts
+          Get-FileHash $installer.FullName -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($installer.Name)" } | Set-Content artifacts/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Branch-Review-Windows-x64
           path: |
-            ../installers/*Setup.exe
-            ../installers/SHA256SUMS.txt
+            artifacts/*Setup.exe
+            artifacts/SHA256SUMS.txt
