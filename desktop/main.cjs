@@ -1,5 +1,6 @@
 const {chooseRepository,availableRepository}=require('./repository.cjs');
 const {setupUrl,requireGit}=require('./setup-help.cjs');
+const {askProjectAgent}=require('./welcome-agent.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
 const { execFile } = require('node:child_process');
@@ -28,20 +29,27 @@ async function firstProject(detectProject) {
   const page=pathToFileURL(path.join(__dirname,'welcome.html')).href;
   welcome.webContents.on('will-navigate',(event,url)=>{if(url!==page)event.preventDefault();});
   return new Promise((resolve,reject)=>{
-    let finished=false;
-    const finish=value=>{if(finished)return;finished=true;ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');resolve(value);};
+    let finished=false,foundProject=null;
+    const finish=value=>{if(finished)return;finished=true;ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');resolve(value);};
     welcome.on('closed',()=>finish(null));
     const trustedWelcome=event=>{if(event.sender!==welcome.webContents || event.senderFrame!==welcome.webContents.mainFrame || event.senderFrame.url!==page)throw Error('Only the welcome screen can select a project.');};
     ipcMain.handle('welcome:probe',async(event,provider)=>{trustedWelcome(event);return probeProvider(provider);});
-    ipcMain.handle('welcome:choose',async (event,provider)=>{
+    ipcMain.handle('welcome:chat',async(event,provider,messages)=>{
+      trustedWelcome(event);foundProject=null;const agent=await probeProvider(provider);if(agent.status!=='ready')throw Error(agent.message);
+      const reply=await askProjectAgent(provider,messages);
+      if(finished || welcome.isDestroyed())throw Error('The welcome screen was closed.');
+      if(reply.projectPath){try{const root=(await exec('git',['rev-parse','--show-toplevel'],{cwd:reply.projectPath,windowsHide:true,timeout:10000})).stdout.trim();foundProject=root;return {message:reply.message,project:{name:path.basename(root),path:root}};}catch{reply.message+=' I could not verify that folder as a Git project. Please provide another location.';}}
+      return {message:reply.message,project:null};
+    });
+    ipcMain.handle('welcome:choose',async (event,provider,found)=>{
       trustedWelcome(event);const agent=await probeProvider(provider);if(agent.status!=='ready')throw Error(agent.message);
       if(!await requireGit({exec,dialog,openExternal:url=>shell.openExternal(url)}))return;
-      const chosen=await chooseRepository({dialog,window:welcome,exec,detectProject});if(!chosen)return;
+      let chosen;if(found){if(!foundProject || found!==foundProject || !await availableRepository(foundProject,exec))throw Error('That project is no longer available. Ask the agent to find it again.');chosen={repository:foundProject,projectInfo:await detectProject(foundProject)};}else chosen=await chooseRepository({dialog,window:welcome,exec,detectProject});if(!chosen)return;
       const trust=await dialog.showMessageBox(welcome,{buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});
       if(trust.response!==0)return;
       welcome.hide();finish({...chosen,provider});
     });
-    welcome.loadFile(path.join(__dirname,'welcome.html')).catch(error=>{ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');reject(error);});
+    welcome.loadFile(path.join(__dirname,'welcome.html')).catch(error=>{ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');reject(error);});
   });
 }
 async function launch() {
