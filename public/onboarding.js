@@ -8,18 +8,21 @@ export function onboarding({api,settings,refresh}){
   agentLabel.append(agentSelect);dialog.insertBefore(agentLabel,$('onboarding-checks'));
   const fetchButton=document.createElement('button');fetchButton.textContent='Fetch remote branches';fetchButton.id='onboarding-fetch';$('onboarding-settings').parentElement.insertBefore(fetchButton,$('onboarding-retry'));
   let selectedProvider='codex';
-  const help=document.createElement('details'),label=document.createElement('summary'),instructions=document.createElement('p');
-  label.textContent='Installing prerequisites';instructions.textContent='Install Git and the runtime your project uses (Node.js with npm for automatic web previews). Choose Codex or Claude in Settings, install its CLI, then run codex login or claude auth login in a terminal. Reopen Branch Review after installing tools. Your own provider account is required.';
-  help.append(label,instructions);
-  for(const [key,title] of Object.entries({git:'Get Git',node:'Get Node.js',codex:'Set up Codex',claude:'Set up Claude'})){const button=document.createElement('button');button.textContent=title;button.disabled=!globalThis.desktop?.openSetupHelp;button.onclick=()=>globalThis.desktop.openSetupHelp(key).catch(error=>{$('onboarding-status').textContent=error.message;});help.append(button);}
-  dialog.append(help);
+  const help=document.createElement('div');help.hidden=true;help.className='tool-actions';dialog.append(help);
+  function showMissingHelp(rows){
+    const missing=rows.filter(row=>!row.ok),links=[];
+    if(missing.some(row=>row.name==='Git'))links.push(['git','Get Git']);
+    if(missing.some(row=>row.name==='Preview setup' && /install node\.js/i.test(row.message)))links.push(['node','Get Node.js']);
+    if(missing.some(row=>row.name===(selectedProvider==='claude'?'Claude connection':'Codex connection')))links.push([selectedProvider,selectedProvider==='claude'?'Set up Claude':'Set up Codex']);
+    help.replaceChildren(...links.map(([key,title])=>{const button=document.createElement('button');button.textContent=title;button.disabled=!globalThis.desktop?.openSetupHelp;button.onclick=()=>globalThis.desktop.openSetupHelp(key).catch(error=>{$('onboarding-status').textContent=error.message;});return button;}));help.hidden=!links.length;
+  }
   async function check(){
     agentSelect.disabled=true;fetchButton.disabled=true;$('onboarding-done').disabled=true;$('onboarding-retry').disabled=true;$('onboarding-status').textContent='Checking your project and coding agent…';
     try{
       const rows=await api('/api/diagnostics');
-      $('onboarding-checks').replaceChildren(...rows.map(row=>{const item=document.createElement('li'),title=document.createElement('strong'),text=document.createElement('span');title.textContent=`${row.ok?'✓':'!'} ${row.name}`;text.textContent=row.message;item.append(title,text);return item;}));
+      showMissingHelp(rows);$('onboarding-checks').replaceChildren(...rows.map(row=>{const item=document.createElement('li'),title=document.createElement('strong'),text=document.createElement('span');title.textContent=`${row.ok?'✓':'!'} ${row.name}`;text.textContent=row.message;item.append(title,text);return item;}));
       const ready=rows.every(row=>row.ok);$('onboarding-done').disabled=!ready;$('onboarding-status').textContent=ready?'Ready. Choose a branch to review, or Make changes to start something new.':'Complete the items marked !, then check again.';
-    }catch(error){$('onboarding-status').textContent=error.message;}finally{$('onboarding-retry').disabled=false;agentSelect.disabled=false;fetchButton.disabled=false;}
+    }catch(error){help.hidden=true;$('onboarding-status').textContent=error.message;}finally{$('onboarding-retry').disabled=false;agentSelect.disabled=false;fetchButton.disabled=false;}
   }
   async function open(){const info=await api('/api/onboarding');selectedProvider=info.agent?.provider || 'codex';agentSelect.value=selectedProvider;$('onboarding-project').textContent=info.project.name+' · '+info.repository;if(!dialog.open)dialog.showModal();await check();}
   agentSelect.onchange=async()=>{agentSelect.disabled=true;$('onboarding-done').disabled=true;try{await api('/api/agent-settings',{provider:agentSelect.value});selectedProvider=agentSelect.value;await check();}catch(error){agentSelect.value=selectedProvider;$('onboarding-status').textContent=error.message;}finally{agentSelect.disabled=false;}};
