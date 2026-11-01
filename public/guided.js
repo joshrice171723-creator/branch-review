@@ -1,7 +1,7 @@
 import {itemStatus,statusLabels,reviewCounts,isComplete,nextItem,fixRequest,canApprove,matchesItem,isPublished} from './review-model.js';
 const $ = id => document.getElementById(id);
 const el = (tag,text,className) => { const node=document.createElement(tag);node.textContent=text;if(className)node.className=className;return node; };
-export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>false}) {
+export function guided({api,getState,poll,error,onSelect}) {
   let key='', queueKey='', timer, pending=false, advancing=false, dirty=false, version=0, savePromise=Promise.resolve(true);
   let recordId='', itemId='', savedItemKey='';
   let fixMode=false;
@@ -37,8 +37,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     pending=true;render(getState());
     try {
       if(!await flush())return;
-      const r=getState().record, old=r.manifest.scenarios.find(item=>item.id===itemId), target=r.manifest.scenarios.find(item=>item.id===next);
-      if(view==='item' && target && needsNavigation(target) && !confirm('Changing items will reload the preview. Save any unsaved preview edits first. Continue?'))return;
+      const r=getState().record, target=r.manifest.scenarios.find(item=>item.id===next);
       await api('/api/cursor',{id:r.id,itemId:next,view});
       if(view==='item' && target && !matchesItem(r,target,$('item-search').value,$('item-filter').value || 'all')){$('item-search').value='';$('item-filter').value='all';fixMode=false;}
       await poll();if(view==='item')onSelect(next);$(view==='item'?'guided-item':'guided-results').scrollIntoView({block:'start'});
