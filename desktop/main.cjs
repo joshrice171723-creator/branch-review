@@ -1,4 +1,4 @@
-const {chooseRepository,availableRepository,welcomeProject}=require('./repository.cjs');
+const {chooseRepository,availableRepository}=require('./repository.cjs');
 const {setupUrl,requireGit}=require('./setup-help.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
@@ -15,14 +15,36 @@ if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') {
   process.env.BRANCH_REVIEW_HOME ||= path.join(devRoot, 'workspace');
   delete process.env.META_CLINIC_REPO;
 }
-let window, closing = false, home;
+let window, welcomeWindow, closing = false, home;
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (window) { window.show(); window.focus(); } });
   app.whenReady().then(launch).catch(error => { dialog.showErrorBox('Branch Review could not start', error.message); app.exit(1); });
 }
+async function firstProject(detectProject) {
+  const {probeProvider}=await import(pathToFileURL(path.join(path.dirname(__dirname),'providers.mjs')).href);
+  const welcome=new BrowserWindow({title:'Branch Review',width:1000,height:720,minWidth:600,minHeight:500,backgroundColor:'#f6f7f4',webPreferences:{preload:path.join(__dirname,'welcome-preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}});
+  welcomeWindow=welcome;welcome.setMenuBarVisibility(false);welcome.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  const page=pathToFileURL(path.join(__dirname,'welcome.html')).href;
+  welcome.webContents.on('will-navigate',(event,url)=>{if(url!==page)event.preventDefault();});
+  return new Promise((resolve,reject)=>{
+    let finished=false;
+    const finish=value=>{if(finished)return;finished=true;ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');resolve(value);};
+    welcome.on('closed',()=>finish(null));
+    const trustedWelcome=event=>{if(event.sender!==welcome.webContents || event.senderFrame!==welcome.webContents.mainFrame || event.senderFrame.url!==page)throw Error('Only the welcome screen can select a project.');};
+    ipcMain.handle('welcome:probe',async(event,provider)=>{trustedWelcome(event);return probeProvider(provider);});
+    ipcMain.handle('welcome:choose',async (event,provider)=>{
+      trustedWelcome(event);const agent=await probeProvider(provider);if(agent.status!=='ready')throw Error(agent.message);
+      if(!await requireGit({exec,dialog,openExternal:url=>shell.openExternal(url)}))return;
+      const chosen=await chooseRepository({dialog,window:welcome,exec,detectProject});if(!chosen)return;
+      const trust=await dialog.showMessageBox(welcome,{buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});
+      if(trust.response!==0)return;
+      welcome.hide();finish({...chosen,provider});
+    });
+    welcome.loadFile(path.join(__dirname,'welcome.html')).catch(error=>{ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');reject(error);});
+  });
+}
 async function launch() {
-  if(!await requireGit({exec,dialog,openExternal:url=>shell.openExternal(url)})){app.quit();return;}
   const root = path.dirname(__dirname);
   const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
@@ -33,18 +55,18 @@ async function launch() {
   process.env.BRANCH_REVIEW_HOME = home;
   const configured=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
   const previousRepository=process.env.META_CLINIC_REPO || configured.repository;
+  if(previousRepository && !await requireGit({exec,dialog,openExternal:url=>shell.openExternal(url)})){app.quit();return;}
   const unavailable=previousRepository && !await availableRepository(previousRepository,exec);
   if(unavailable){
     const choice=await dialog.showMessageBox({type:'warning',buttons:['Choose a project','Close'],cancelId:1,message:'Your last project is unavailable.',detail:`${previousRepository}\n\nIt may have moved or its drive may be disconnected. Choose a project to continue. Existing reviews stay saved.`});
     if(choice.response!==0){app.quit();return;}
   }
   if(!previousRepository || unavailable){
-    if(!previousRepository && !await welcomeProject({dialog})){app.quit();return;}
-    const chosen=await chooseRepository({dialog,exec,detectProject});
+    const chosen=previousRepository ? await chooseRepository({dialog,exec,detectProject}) : await firstProject(detectProject);
     if(!chosen){app.quit();return;}
     const {repository}=chosen;
-    const trust=await dialog.showMessageBox({buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});
-    if(trust.response!==0){app.quit();return;}
+    if(!previousRepository && chosen.provider){const file=path.join(home,'agent-settings.json'),saved=JSON.parse(await readFile(file,'utf8').catch(error=>{if(error.code==='ENOENT')return '{}';throw error;}));await writeFile(file,JSON.stringify({...saved,provider:chosen.provider}));}
+    if(previousRepository){const trust=await dialog.showMessageBox({buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});if(trust.response!==0){app.quit();return;}}
     if(unavailable){
       const key=path.resolve(repository).toLowerCase();
       home=settings.projects?.[key] || path.join(app.getPath('userData'),'projects',createHash('sha256').update(key).digest('hex').slice(0,16));
@@ -69,6 +91,7 @@ async function launch() {
   window = new BrowserWindow({ title: 'Branch Review', icon:path.join(__dirname,'icon.ico'), width, height, minWidth: 1000, minHeight: 700,
     backgroundColor: '#f6f7f5', show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true } });
+  if(welcomeWindow && !welcomeWindow.isDestroyed()){welcomeWindow.close();welcomeWindow=null;}
   if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') {
     window.setTitle('Branch Review — Development');
     window.webContents.on('before-input-event', async (event, input) => {
