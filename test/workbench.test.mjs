@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {workbench} from '../public/workbench.js';
 
 test('Office opens only after exact published-build verification succeeds',async t=>{
-  const elements=new Proxy({}, {get(target,id){return target[id] ||= {hidden:false,disabled:false};}});
+  const elements=new Proxy({}, {get(target,id){return target[id] ||= {hidden:false,disabled:false,querySelector:()=>null};}});
   globalThis.document={getElementById:id=>elements[id]};
   const opened=[],calls=[];
   globalThis.window={desktop:{openPublished:async url=>opened.push(url)}};

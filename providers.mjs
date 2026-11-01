@@ -12,6 +12,7 @@ export async function executable(provider,override,env=process.env){
   providerId(provider);
   if(override || env['BRANCH_REVIEW_'+provider.toUpperCase()])return override || env['BRANCH_REVIEW_'+provider.toUpperCase()];
   const directories=(env.PATH || '').split(path.delimiter).filter(Boolean);
+  if(provider==='codex' && env.LOCALAPPDATA)directories.push(path.join(env.LOCALAPPDATA,'Programs','OpenAI','Codex','bin'));
   if(provider==='claude' && (env.USERPROFILE || env.HOME))directories.push(path.join(env.USERPROFILE || env.HOME,'.local','bin'));
   for(const directory of directories){
     for(const candidate of [path.join(directory,process.platform==='win32'?provider+'.exe':provider),path.join(directory,'node_modules',provider==='claude'?'@anthropic-ai/claude-code/bin/claude.exe':'@openai/codex/bin/codex.js'),...(provider==='claude'?[path.join(directory,'node_modules/@anthropic-ai/claude-code/cli.js')]:[])]){

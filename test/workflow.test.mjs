@@ -6,7 +6,8 @@ import { defaultManifest } from '../reviews.mjs';
 
 function harness(t, options = {}) {
   class Element {
-    value = ''; children = []; hidden = false; disabled = false; dataset = {};
+    value = ''; children = []; hidden = false; disabled = false; dataset = {}; descendants = {};
+    querySelector(selector) { return this.descendants[selector] ||= new Element(); }
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
     get firstChild() { return this.children[0]; }
@@ -19,7 +20,7 @@ function harness(t, options = {}) {
   }
   const elements = new Proxy({}, {get(target, key) { return target[key] ||= new Element(); }});
   const saved = new Map(), calls = [];
-  globalThis.document = {getElementById: id => elements[id], createElement: () => new Element()};
+  globalThis.document = {body:new Element(),getElementById: id => elements[id], createElement: () => new Element()};
   globalThis.window = {desktop:{capture:options.capture || (async()=> 'data:image/png;base64,example')}};
   globalThis.localStorage = {getItem:key=>saved.get(key), setItem:(key,value)=>saved.set(key,value), removeItem:key=>saved.delete(key)};
   t.after(()=>{delete globalThis.document;delete globalThis.window;delete globalThis.localStorage;delete globalThis.confirm;});
@@ -245,7 +246,7 @@ test('primary approve saves once then exposes merge and publish without another 
   release();await first;
   assert.equal(h.calls.filter(c=>c.path==='/api/approve').length,1);
   assert.equal(r.approval.reviewer,'Josh');assert.equal(e['approval-section'].hidden,true);
-  assert.equal(e['results-action'].textContent,'Merge and publish');
+  assert.equal(e['results-action'].textContent,'Merge and push to main');
   assert.equal(h.calls.some(c=>c.path==='/api/ship'||c.path==='/api/publish'),false);
 });
 
@@ -262,7 +263,7 @@ test('latest fix opens a retest panel and requires completed checks before expli
  r.fixComparison={before:'aaaaaaa',after:'bbbbbbb'};r.cursor={itemId:item.id,view:'item'};
  r.issues=[{id:'latest',status:'needs-retest',expected:'Restore rust',actual:'Pink',side:'changed',commit:'aaaaaaa',scenario:item.id,consoleErrors:[]}];
  h.view.render(h.state);
- assert.equal(e['guided-item'].hidden,false);assert.equal(e['guided-results'].hidden,true);assert.equal(e['item-status'].textContent,'Ready to retest');assert.equal(e['latest-fix-expected'].textContent,'Restore rust');assert.equal(e['verify-fix'].disabled,true);
+ assert.equal(e['guided-item'].hidden,false);assert.equal(e['guided-results'].hidden,true);assert.equal(e['item-status'].textContent,'Fix ready to verify');assert.equal(e['latest-fix-expected'].textContent,'Restore rust');assert.equal(e['verify-fix'].disabled,true);
  await e['verify-fix'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,0);
  item.steps.forEach((_,i)=>r.checks[`${item.id}:${i}`]=true);h.view.render(h.state);assert.equal(e['verify-fix'].disabled,false);
  await e['verify-fix'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,1);assert.equal(h.calls.find(c=>c.path==='/api/resolve').data.issueId,'latest');

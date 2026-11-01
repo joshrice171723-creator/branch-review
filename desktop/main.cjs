@@ -1,6 +1,6 @@
 const {chooseRepository,availableRepository}=require('./repository.cjs');
-const {setupUrl,requireGit}=require('./setup-help.cjs');
-const {askProjectAgent}=require('./welcome-agent.cjs');
+const {setupUrl,gitAvailable,requireGit}=require('./setup-help.cjs');
+const {askProjectAgent,suggestPreviewRecipe}=require('./welcome-agent.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
 const { execFile } = require('node:child_process');
@@ -30,10 +30,12 @@ async function firstProject(detectProject) {
   welcome.webContents.on('will-navigate',(event,url)=>{if(url!==page)event.preventDefault();});
   return new Promise((resolve,reject)=>{
     let finished=false,foundProject=null;
-    const finish=value=>{if(finished)return;finished=true;ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');resolve(value);};
+    const finish=value=>{if(finished)return;finished=true;ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');ipcMain.removeHandler('welcome:help');ipcMain.removeHandler('welcome:git');resolve(value);};
     welcome.on('closed',()=>finish(null));
     const trustedWelcome=event=>{if(event.sender!==welcome.webContents || event.senderFrame!==welcome.webContents.mainFrame || event.senderFrame.url!==page)throw Error('Only the welcome screen can select a project.');};
     ipcMain.handle('welcome:probe',async(event,provider)=>{trustedWelcome(event);return probeProvider(provider);});
+    ipcMain.handle('welcome:git',async event=>{trustedWelcome(event);return gitAvailable({exec});});
+    ipcMain.handle('welcome:help',async(event,provider)=>{trustedWelcome(event);if(!['git','codex','claude'].includes(provider))throw Error('Choose a coding agent.');await shell.openExternal(setupUrl(provider));});
     ipcMain.handle('welcome:chat',async(event,provider,messages)=>{
       trustedWelcome(event);foundProject=null;const agent=await probeProvider(provider);if(agent.status!=='ready')throw Error(agent.message);
       const reply=await askProjectAgent(provider,messages);
@@ -45,11 +47,13 @@ async function firstProject(detectProject) {
       trustedWelcome(event);const agent=await probeProvider(provider);if(agent.status!=='ready')throw Error(agent.message);
       if(!await requireGit({exec,dialog,openExternal:url=>shell.openExternal(url)}))return;
       let chosen;if(found){if(!foundProject || found!==foundProject || !await availableRepository(foundProject,exec))throw Error('That project is no longer available. Ask the agent to find it again.');chosen={repository:foundProject,projectInfo:await detectProject(foundProject)};}else chosen=await chooseRepository({dialog,window:welcome,exec,detectProject});if(!chosen)return;
-      const trust=await dialog.showMessageBox(welcome,{buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});
+      const trust=await dialog.showMessageBox(welcome,{buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'The agent may use your project instructions to set up a preview. Only open projects you trust.'});
       if(trust.response!==0)return;
-      welcome.hide();finish({...chosen,provider});
+      let suggestedRecipe=null;
+      if(chosen.projectInfo.needsSetup){try{const {validateRecipe}=await import(pathToFileURL(path.join(path.dirname(__dirname),'project-settings.mjs')).href);const suggestion=await suggestPreviewRecipe(provider,chosen.repository);if(suggestion)suggestedRecipe=validateRecipe(suggestion);}catch{}}
+      welcome.hide();finish({...chosen,provider,suggestedRecipe});
     });
-    welcome.loadFile(path.join(__dirname,'welcome.html')).catch(error=>{ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');reject(error);});
+    welcome.loadFile(path.join(__dirname,'welcome.html')).catch(error=>{ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');ipcMain.removeHandler('welcome:help');ipcMain.removeHandler('welcome:git');reject(error);});
   });
 }
 async function launch() {
@@ -73,6 +77,7 @@ async function launch() {
     const chosen=previousRepository ? await chooseRepository({dialog,exec,detectProject}) : await firstProject(detectProject);
     if(!chosen){app.quit();return;}
     const {repository}=chosen;
+    if(chosen.suggestedRecipe){const {readRecipe,saveRecipe}=await import(pathToFileURL(path.join(root,'project-settings.mjs')).href);if(!await readRecipe(home))await saveRecipe(home,chosen.suggestedRecipe);}
     if(!previousRepository && chosen.provider){const file=path.join(home,'agent-settings.json'),saved=JSON.parse(await readFile(file,'utf8').catch(error=>{if(error.code==='ENOENT')return '{}';throw error;}));await writeFile(file,JSON.stringify({...saved,provider:chosen.provider}));}
     if(previousRepository){const trust=await dialog.showMessageBox({buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});if(trust.response!==0){app.quit();return;}}
     if(unavailable){

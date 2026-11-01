@@ -7,14 +7,14 @@ The installer includes the desktop runtime. It does not include your project, ac
 ## First project
 
 1. Install [Git for Windows](https://git-scm.com/downloads/win). Clone your project with your usual Git client and ensure it has an `origin` remote and a commit.
-2. Install the runtime your project requires. Automatic npm Vite/Next previews need [Node.js with npm](https://nodejs.org/en/download), a root package-lock.json and the project's supported Node version. Other stacks use custom commands in Settings.
+2. Install the runtime your project requires. Simple static HTML projects use the built-in preview. Automatic npm Vite/Next previews need [Node.js with npm](https://nodejs.org/en/download), a root package-lock.json and the project's supported Node version. For other stacks, Branch Review can ask the selected agent to suggest preview commands; projects with unclear setup still need additional configuration.
 3. Install either [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/setup), then sign in with `codex login` or `claude auth login`. You use your own provider account and usage allowance. Claude requires version 2.1.259 or later for the restricted job flags used here.
-4. Reopen Branch Review after installing tools so it receives your updated PATH. Choose your Git folder, then follow Set up your project. Select your coding agent in the guide; Settings also provides an optional executable path when automatic discovery cannot find it.
+4. Open Branch Review, choose your coding agent, and describe your project in the chat. The agent can find a local Git project by name; if there are several matches, it asks which one you want. Confirm the project to open it. You can also choose a folder directly.
 5. Fix flagged setup items and select Check again. The guide can fetch remote branches. Choose Start reviewing, then a branch. If you have no branch yet, choose Make changes and describe what you want; the agent creates an isolated branch from the latest remote default branch. Compare Original and Changed before approving anything.
 
 If Git identity is missing, set your own `git config user.name` and `git config user.email` inside your project. If origin/default branch is missing, configure your real remote, fetch it and run `git remote set-head origin -a`. Branch Review does not create or guess an account identity or remote.
 
-For custom services, configure preview commands and isolated databases in Settings. Publishing requires your own deployment configuration. Native/mobile projects require a web harness for the embedded preview.
+Projects with custom services, credentials, or databases may still require manual preview configuration. Publishing requires your own deployment configuration. Native/mobile projects require a web harness for the embedded preview.
 
 If a project folder moves or a drive is disconnected, startup offers another project without deleting previous reviews. Activity → Stop job ends an active agent/check process and retains its files for inspection; it cannot interrupt Git finalization. Simple Vite source/CSS edits and Next CSS/assets reuse a healthy preview. Dependency and configuration changes restart it.
 

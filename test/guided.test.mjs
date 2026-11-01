@@ -63,7 +63,7 @@ test('results recommend only the next valid delivery action',async()=>{
   assert.equal(deliveryStep(r).action,'candidate');r.integration={sha:r.identity.changed};
   assert.equal(deliveryStep(r).action,'reviewer');r.approval={commit:r.identity.changed};assert.equal(deliveryStep(r).action,'ship');
   r.delivery={stage:'push-unconfirmed'};assert.match(deliveryStep(r).label,/Reconcile/);
-  r.delivery.stage='pushed';assert.equal(deliveryStep(r).action,'release-settings');assert.equal(deliveryStep(r,true).action,'publish');
+  r.delivery.stage='pushed';assert.equal(deliveryStep(r).action,null);assert.equal(deliveryStep(r,true).action,null);
   r.delivery.stage='deployment-needs-inspection';assert.equal(deliveryStep(r).action,'release-note');
   r.delivery.stage='published';assert.equal(deliveryStep(r).action,'release-note');r.delivery.stage='verified';assert.equal(deliveryStep(r).action,null);
 });

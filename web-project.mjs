@@ -1,8 +1,9 @@
 import {readFile,access,writeFile,mkdir,realpath} from 'node:fs/promises';
-import {readRecipe,expandRecipe} from './project-settings.mjs';
+import {readRecipe,expandRecipe,validateRecipe} from './project-settings.mjs';
 import {spawn,spawnSync} from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 const exists=file=>access(file).then(()=>true,()=>false);
 export function hotReloadable(kind,files){
@@ -16,6 +17,8 @@ export async function detectProject(directory){
   const pkg=JSON.parse(await readFile(path.join(directory,'package.json'),'utf8').catch(()=> '{}'));
   const dependencies={...pkg.dependencies,...pkg.devDependencies};
   const kind=dependencies.vite?'vite':dependencies.next?'next':null;
+  const serverFiles=['server.js','server.mjs','server.cjs','server.ts','app.py','main.py','manage.py','index.php','Gemfile','requirements.txt','pyproject.toml','go.mod','Cargo.toml','Dockerfile','docker-compose.yml','docker-compose.yaml','compose.yml','compose.yaml','composer.json','pom.xml','build.gradle'];
+  if(!kind && !Object.keys(dependencies).length && !Object.keys(pkg.scripts || {}).length && await exists(path.join(directory,'index.html')) && !(await Promise.all(serverFiles.map(file=>exists(path.join(directory,file))))).some(Boolean))return {kind:'static',name:pkg.name || path.basename(directory)};
   if(!kind || pkg.packageManager && !pkg.packageManager.startsWith('npm@') || !await exists(path.join(directory,'package-lock.json')))return {kind:'custom',name:pkg.name || path.basename(directory),needsSetup:true};
   return {kind,name:pkg.name || path.basename(directory)};
 }
@@ -28,6 +31,7 @@ export async function npmEntry(env=process.env){
 export async function projectCommand(args,env=process.env){
   const [file,...rest]=args;
   if(file==='node')return {file:process.execPath,args:rest};
+  if(file==='branch-review-static')return {file:process.execPath,args:[fileURLToPath(new URL('./static-preview.mjs',import.meta.url)),...rest]};
   if(file==='npm')return {file:process.execPath,args:[await npmEntry(env),...rest]};
   if(['pnpm','yarn'].includes(file)){
     for(const directory of (env.PATH || '').split(path.delimiter).filter(Boolean)){
@@ -79,6 +83,7 @@ export class WebPreviews{
     if(project.kind==='meta-clinic')throw Error('This branch changed project type. Reopen the repository.');
     const recipe=await readRecipe(this.local);
     if(recipe)return this.custom(side,sha,cwd,recipe);
+    if(project.kind==='static')return this.custom(side,sha,cwd,validateRecipe({start:['branch-review-static','{root}','{port}']}));
     if(project.needsSetup)throw Error('Set up this project in More tools → Workspace. Enter its setup and start commands.');
     const lock=await readFile(path.join(cwd,'package-lock.json'),'utf8'),key=side+'-dependencies';
     this[key] ||= await readFile(path.join(this.local,key+'.lock'),'utf8').catch(()=>null);

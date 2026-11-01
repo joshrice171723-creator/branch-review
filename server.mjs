@@ -212,6 +212,17 @@ async function mutate(endpoint, data) {
     if(rows.some(row=>!row.ok))throw Error('Finish setup before continuing: '+rows.filter(row=>!row.ok).map(row=>row.name).join(', '));
     await writeFile(path.join(local,'onboarding.json'),JSON.stringify({repository:repo,completedAt:new Date().toISOString()}));return {ready:true};
   }
+  if(endpoint==='/api/suggest-preview'){
+    if(typeof data.description!=='string' || !data.description.trim() || data.description.length>4000)throw Error('Describe your project in a few words.');
+    if(jobs.rows.some(job=>job.status==='running') || state.original || state.changed)throw Error('Stop previews and wait for running jobs before changing setup.');
+    if(await readRecipe(local))return {configured:true};
+    const agent=selectedAgent(),connection=await probeProvider(agent.provider,agent.executable);if(connection.status!=='ready')throw Error(connection.message);
+    const {suggestPreviewRecipe}=await import('./desktop/welcome-agent.cjs');
+    const recipe=await suggestPreviewRecipe(agent.provider,repo,data.description,agent.executable);
+    if(!recipe)return {configured:false};
+    if(!await readRecipe(local))await saveRecipe(local,recipe);
+    return {configured:true};
+  }
   if(endpoint==='/api/project-settings'){
     if(jobs.rows.some(job=>job.status==='running'))throw Error('Wait for running jobs before changing setup.');
     if(state.original || state.changed)throw Error('Stop previews before changing project setup. Your reviews remain saved.');
@@ -358,7 +369,7 @@ actions.add('/api/tools-settings');
 actions.add('/api/fix-commit');
 actions.add('/api/retry-muse');
 actions.add('/api/agent-settings');actions.add('/api/agent-probe');
-actions.add('/api/project-settings');
+actions.add('/api/project-settings');actions.add('/api/suggest-preview');
 actions.add('/api/browser-qa');actions.add('/api/browser-qa-result');
 for(const endpoint of ['/api/project-delivery','/api/project-deploy','/api/project-deploy-retry','/api/pull-request'])actions.add(endpoint);
 actions.add('/api/database-cleanup');actions.add('/api/database-start');
@@ -375,7 +386,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await readRecipe(local).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await consolidateFixBranches(groupedBranches(await branches(),jobs.rows,store.records),git));
     if(req.method==='GET' && url.pathname==='/api/qa-review')return json(res,200,store.get(url.searchParams.get('id')));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
@@ -436,7 +447,8 @@ for(const [runtime,slot] of Object.entries(slots)) { const proxy=previewProxy('c
   return {status:'idle'};
 },origin);proxy.on('error',error=>{console.error(error.message);process.exit(1);});proxy.listen(slot.proxy,'127.0.0.1'); }
 server.on('error',error=>{console.error(error.message);process.exit(1);});
-server.listen(port,'127.0.0.1',()=>console.log(`Branch Review: ${origin}`));
+await new Promise(resolve=>server.listen(port,'127.0.0.1',resolve));
+console.log(`Branch Review: ${origin}`);
 let checkingMuse=false;
 setInterval(async()=>{
   if(busy || checkingMuse)return;checkingMuse=true;

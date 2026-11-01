@@ -38,6 +38,7 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
     try {
       if(!await flush())return;
       const r=getState().record, old=r.manifest.scenarios.find(item=>item.id===itemId), target=r.manifest.scenarios.find(item=>item.id===next);
+      if(view==='item' && target && needsNavigation(target) && !confirm('Changing items will reload the preview. Save any unsaved preview edits first. Continue?'))return;
       await api('/api/cursor',{id:r.id,itemId:next,view});
       if(view==='item' && target && !matchesItem(r,target,$('item-search').value,$('item-filter').value || 'all')){$('item-search').value='';$('item-filter').value='all';fixMode=false;}
       await poll();if(view==='item')onSelect(next);$(view==='item'?'guided-item':'guided-results').scrollIntoView({block:'start'});
@@ -46,8 +47,9 @@ export function guided({api,getState,poll,error,onSelect,needsNavigation=()=>fal
   }
   function following(r) {
     const items=r.manifest.scenarios,index=items.findIndex(i=>i.id===itemId);
-    const unreviewed=i=>!['passed','needs-fixes','blocked','not-applicable'].includes(itemStatus(r,i));
-    return items.slice(index+1).find(unreviewed)?.id || items.slice(0,index).find(unreviewed)?.id;
+    const ordered=[...items.slice(index+1),...items.slice(0,index)];
+    if(fixMode){const next=ordered.find(i=>matchesItem(r,i,'','attention'));if(next)return next.id;fixMode=false;$('item-filter').value='all';}
+    return ordered.find(i=>!['passed','needs-fixes','blocked','not-applicable'].includes(itemStatus(r,i)))?.id;
   }
   async function advance(leave=false) {
     if(advancing || pending)return;
