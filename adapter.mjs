@@ -8,6 +8,7 @@ import {createHash} from 'node:crypto';
 import {detectProject,WebPreviews} from './web-project.mjs';
 import {frontendOnly} from './fix-review.mjs';
 import {previewHealth} from './health.mjs';
+import {recoverPreviewPorts} from './preview-ports.mjs';
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
 export const local = process.env.BRANCH_REVIEW_HOME || path.join(root, ".local");
@@ -32,6 +33,10 @@ export const slots = {
   changed: { web: 3420, api: 3421, postgres: 54542, proxy: 4312 },
   standby: { web: 3430, api: 3431, postgres: 54543, proxy: 4313 },
 };
+for(const side of Object.keys(slots)){
+  const saved=JSON.parse(await readFile(path.join(local,`ports-${side}.json`),'utf8').catch(error=>{if(error.code==='ENOENT')return 'null';throw error;}));
+  if(saved && ['api','web','postgres'].every(role=>Number.isInteger(saved[role]) && saved[role]>1024 && saved[role]<65536))for(const role of ['api','web','postgres'])slots[side][role]=saved[role];
+}
 export const state = {
   status: "idle",
   phase: "Choose a branch to begin",
@@ -173,7 +178,7 @@ function environment(side, sha) {
     APP_DEVELOPMENT_LOGIN: "1",
     QA_BUILD_URL: `http://127.0.0.1:${slot.web}/build.json`,
     BRANCH_REVIEW_REVISION: sha,
-    APPLY_POSTGRES_CONTAINER: `apply-review-${side}`,
+    APPLY_POSTGRES_CONTAINER: `apply-review-${side}${slot.postgres===({original:54541,changed:54542,standby:54543})[side]?'':`-${slot.postgres}`}`,
     PGPORT: String(slot.postgres),
     APPLY_DEVELOPMENT_DATABASE: `apply_review_${side}_${sha.slice(0, 12)}_development`,
     APPLY_WEB_PORT: String(slot.web),
@@ -253,17 +258,23 @@ export async function prepare(side, sha, files=state.comparison.files) {
     if(project.error)throw Error(project.error);
     return webPreviews.prepare(side,sha,cwd,()=>run('git',['checkout','--detach',sha],{cwd}));
   }
+  await clearDeadPidRecords(cwd);
+  if(await recoverPreviewPorts(cwd,slots[side])){
+    await writeFile(path.join(local,`ports-${side}.json`),JSON.stringify(slots[side]));
+    progress(`${side} · recovered occupied preview ports; unrelated servers were preserved`);
+  }
   const recipeHash=createHash('sha256').update(await readFile(path.join(root,scenarioRecipe(files)))).digest('hex');
   const cacheFile=path.join(local,`preview-${side}-${sha}-${recipeHash}.json`);
   const cached=JSON.parse(await readFile(cacheFile,'utf8').catch(()=> 'null'));
-  if(current===sha && cached){
+  const samePorts=cache=>cache && ['api','web','postgres'].every(role=>cache[role]===slots[side][role]);
+  if(current===sha && samePorts(cached)){
     const ready=await Promise.all([slots[side].api,slots[side].web].map((port,index)=>fetch(`http://127.0.0.1:${port}/${index?'login':'up'}`,{signal:AbortSignal.timeout(2000)}).then(r=>r.ok,()=>false)));
     if(ready.every(Boolean)){progress(`${side} · reused running preview`);return cached;}
   }
   const oldCache=JSON.parse(await readFile(path.join(local,`preview-${side}-${current}-${recipeHash}.json`),'utf8').catch(()=> 'null'));
   const delta=current!==sha?(await git('diff','--name-only','-z',current,sha,'--')).split('\0').filter(Boolean):[];
   // A new commit can contain exactly the code already running (for example blue -> pink -> blue).
-  if(oldCache && (!delta.length || frontendOnly(delta))){
+  if(samePorts(oldCache) && (!delta.length || frontendOnly(delta))){
     const healthy=async preview=>Object.values((await previewHealth({status:'ready',original:preview,changed:preview})).sides).every(result=>result.ok);
     if(await healthy(oldCache)){
       await run('git',['checkout','--detach',sha],{cwd});
