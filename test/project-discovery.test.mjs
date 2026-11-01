@@ -4,6 +4,7 @@ import {mkdtemp,mkdir,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import discovery from '../desktop/project-discovery.cjs';
+import {execFileSync} from 'node:child_process';
 
 test('finds matching projects by name, retains duplicates, and ignores dependency checkouts',async()=>{
   const root=await mkdtemp(path.join(os.tmpdir(),'branch-review-discovery-test-'));
@@ -34,4 +35,19 @@ test('searches additional project locations without searching dependencies',asyn
   const root=await mkdtemp(path.join(os.tmpdir(),'branch-review-roots-'));
   try{const home=path.join(root,'home'),disk=path.join(root,'other-disk'),repo=path.join(disk,'work','northern-star');await mkdir(home,{recursive:true});await mkdir(path.join(repo,'.git'),{recursive:true});assert.deepEqual(await discovery.findProjectCandidates(home,[{role:'user',text:'Open Northern Star'}],{additionalRoots:[disk]}),[repo]);}
   finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('identifies a main checkout and its linked worktree without exposing remote credentials',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'branch-review-related-'));
+  try{
+    const repo=path.join(root,'project'),linked=path.join(root,'linked');await mkdir(repo);
+    const git=(...args)=>execFileSync('git',args,{cwd:repo,stdio:'pipe'});
+    git('init');git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','--allow-empty','-m','initial');
+    git('remote','add','origin','https://user:password@example.invalid/team/project.git');
+    git('worktree','add','--detach',linked);
+    const result=await discovery.describeProjectCandidates([repo,linked]);
+    assert.equal(result[0].checkout,'main');assert.equal(result[1].checkout,'worktree');
+    assert.equal(result[0].relatedWorktrees,1);assert.equal(result[0].relatedCopies,2);
+    assert.ok(!JSON.stringify(result).includes('password'));
+  }finally{await rm(root,{recursive:true,force:true});}
 });

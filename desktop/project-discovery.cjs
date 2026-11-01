@@ -1,6 +1,7 @@
 const {readdir}=require('node:fs/promises');
 const {execFile}=require('node:child_process');
 const {promisify}=require('node:util');
+const {createHash}=require('node:crypto');
 const os=require('node:os'),path=require('node:path');
 const ignored=new Set(['node_modules','.git','.hg','.svn','vendor','dist','build','.next','__pycache__','cache','caches','system volume information','$recycle.bin','windows','program files','program files (x86)']);
 const stop=new Set(['please','project','projects','bring','open','find','load','working','worked','using','review','branch','application','app','into','here','that','this','with','from','folder','want','could','would','like','my','the','for','and','one','it','me','to','go','an','on','at','of','in','up','be','we','us','as','am','is']);
@@ -27,4 +28,19 @@ async function findProjectCandidates(home,messages,options={}){
   }
   return found.sort((a,b)=>b.score-a.score||a.path.localeCompare(b.path)).slice(0,25).map(item=>item.path);
 }
-module.exports={findProjectCandidates};
+async function describeProjectCandidates(candidates){
+  const run=promisify(execFile);
+  const projects=await Promise.all(candidates.map(async folder=>{
+    try{
+      const opts={cwd:folder,windowsHide:true,timeout:5000,maxBuffer:16384};
+      const info=(await run('git',['rev-parse','--path-format=absolute','--git-common-dir','--show-toplevel'],opts)).stdout.trim().split(/\r?\n/);
+      const common=path.resolve(info[0]),root=path.resolve(info[1]);
+      const remote=await run('git',['config','--get','remote.origin.url'],opts).then(r=>r.stdout.trim(),()=>null);
+      // Compare remotes without sending their URLs or credentials to the agent.
+      const repository=remote?createHash('sha256').update(remote.replace(/\/\/[^/@]+@/,'//').replace(/\.git\/?$/i,'').toLowerCase()).digest('hex'):null;
+      return {path:root,checkout:path.resolve(root,'.git').toLowerCase()===common.toLowerCase()?'main':'worktree',common:common.toLowerCase(),repository};
+    }catch{return {path:folder,checkout:'unknown',common:null,repository:null};}
+  }));
+  return projects.map(p=>({path:p.path,checkout:p.checkout,relatedWorktrees:p.common?projects.filter(other=>other.common===p.common && other.checkout==='worktree').length:0,relatedCopies:p.repository?projects.filter(other=>other.repository===p.repository).length:0}));
+}
+module.exports={findProjectCandidates,describeProjectCandidates};
