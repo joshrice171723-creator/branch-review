@@ -17,7 +17,7 @@
         <span class="divider">/</span> Review workspace
       </div>
       <div class="header-actions">
-          <button id="updated-branch" class="secondary" hidden></button><nav class="main-tools" aria-label="Review tools"><button id="toolbar-history" class="toolbar-icon labeled-tool" aria-label="Versions" data-tooltip="Versions" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v6l4 2"/></svg>Versions</button><button id="review-tools" class="toolbar-icon labeled-tool" aria-label="Settings" data-tooltip="Settings" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>Settings</button></nav>
+          <button id="updated-branch" class="secondary" hidden></button><nav class="main-tools" aria-label="Review tools"><button id="theme-toggle" class="toolbar-icon" type="button" aria-label="Switch to dark mode" title="Switch to dark mode"><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg></button><button id="toolbar-history" class="toolbar-icon labeled-tool" aria-label="Versions" data-tooltip="Versions" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v6l4 2"/></svg>Versions</button><button id="review-tools" class="toolbar-icon labeled-tool" aria-label="Settings" data-tooltip="Settings" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>Settings</button></nav>
       </div>
     </header>
     <main>
@@ -270,7 +270,7 @@
       <nav class="tools-tabs" aria-label="Review tools"><button id="tab-plan">Review checklist</button><button id="tab-updates">Updates &amp; fixes</button><button id="tab-evidence">Evidence</button><button id="tab-checks">Checks</button><button id="tab-release">Published review</button><button id="tab-workspace">Workspace</button></nav>
       <p id="tools-status" role="status" aria-live="polite"></p>
       <section id="tools-workspace" hidden><p class="settings-intro">Project settings.</p><p id="project-adapter" class="settings-project"></p>
-        <section class="settings-section"><h3>Appearance</h3><p>Changes Branch Review only, not your project preview.</p><label for="theme-style">Theme</label><select id="theme-style"><option value="classic">Classic light</option><option value="dark">Dark</option></select><label for="theme-accent">Accent color</label><input id="theme-accent" type="color"><button id="theme-reset" type="button">Reset colors</button><p id="theme-status" role="status">Saved automatically on this device.</p></section><section class="settings-section settings-agent">
+        <section class="settings-section settings-agent">
           <div class="settings-section-heading"><h3>Coding agent</h3><p>Select the command line agent for this project.</p></div>
           <label for="agent-provider">Coding agent</label><select id="agent-provider"><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option></select>
           <p id="agent-status" role="status">Connection not checked.</p>
