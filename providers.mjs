@@ -1,11 +1,12 @@
+import {probeMuse,consumeMuseEvent,museArgs} from './muse-provider.mjs';
 import {access,readdir,stat} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 const exec=promisify(execFile);
-export const providerNames={codex:'Codex',claude:'Claude Code'};
+export const providerNames={codex:'Codex',claude:'Claude Code',muse:'Muse'};
 export function providerId(value='codex'){
-  if(!Object.hasOwn(providerNames,value))throw Error('Choose Codex or Claude Code.');
+  if(!Object.hasOwn(providerNames,value))throw Error('Choose Codex, Claude Code, or Muse.');
   return value;
 }
 export async function executable(provider,override,env=process.env){
@@ -15,7 +16,7 @@ export async function executable(provider,override,env=process.env){
   if(provider==='codex' && env.LOCALAPPDATA)directories.push(path.join(env.LOCALAPPDATA,'Programs','OpenAI','Codex','bin'));
   if(provider==='claude' && (env.USERPROFILE || env.HOME))directories.push(path.join(env.USERPROFILE || env.HOME,'.local','bin'));
   for(const directory of directories){
-    for(const candidate of [path.join(directory,process.platform==='win32'?provider+'.exe':provider),path.join(directory,'node_modules',provider==='claude'?'@anthropic-ai/claude-code/bin/claude.exe':'@openai/codex/bin/codex.js'),...(provider==='claude'?[path.join(directory,'node_modules/@anthropic-ai/claude-code/cli.js')]:[])]){
+    for(const candidate of [path.join(directory,process.platform==='win32'?provider+'.exe':provider),...(provider==='muse'?[]:[path.join(directory,'node_modules',provider==='claude'?'@anthropic-ai/claude-code/bin/claude.exe':'@openai/codex/bin/codex.js')]),...(provider==='claude'?[path.join(directory,'node_modules/@anthropic-ai/claude-code/cli.js')]:[])]){
       if(await access(candidate).then(()=>true,()=>false))return candidate;
     }
   }
@@ -39,6 +40,7 @@ export async function probeProvider(provider,override){
   const invoke=async args=>{const command=launchCommand(file,args);return exec(command.file,command.args,{windowsHide:true,timeout:15000,maxBuffer:16000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});};
   try{
     const version=(await invoke(['--version'])).stdout.trim();
+    if(provider==='muse')return {provider,version,path:file,...await probeMuse(file)};
     if(provider==='claude'){
       const match=version.match(/(\d+)\.(\d+)\.(\d+)/);
       if(!match || Number(match[1])<2 || (Number(match[1])===2 && (Number(match[2])<1 || Number(match[2])===1 && Number(match[3])<259)))return {provider,status:'upgrade',version,message:'Update Claude Code to 2.1.259 or later for restricted, unattended jobs.'};
@@ -60,10 +62,12 @@ export function agentArgs(provider,{kind,cwd,output,chatId,connections=[],images
   providerId(provider);
   if(provider==='codex' && connections.some(name=>! /^[A-Za-z0-9_-]+$/.test(name)))throw Error('Rename Codex connectors containing punctuation before running isolated jobs.');
   if(provider==='codex')return ['-a','never','-C',cwd,'--disable','plugins','--disable','apps','--disable','hooks',...connections.flatMap(name=>['-c',`mcp_servers.${name}.enabled=false`]),'exec','--sandbox',kind==='plan'?'read-only':'workspace-write',...(chatId?['resume',chatId]:[]),...(kind==='plan'?['--ephemeral']:[]),...images.flatMap(file=>['--image',file]),'--json','--color','never','--output-last-message',output,'-'];
+  if(provider==='muse')return museArgs({kind,cwd,output,chatId,images});
   // Restricted file tools keep Claude inside the owned checkout. Host checks run separately.
   return ['-p','--restricted','--safe-mode','--permission-prompts','none','--permission-mode',kind==='plan'?'dontAsk':'acceptEdits','--tools',kind==='plan'?'Read,Glob,Grep':'Read,Glob,Grep,Edit,Write','--allowedTools','Read,Glob,Grep','--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--output-format','stream-json','--verbose',...(chatId?['--resume',chatId]:[]),...(kind==='plan'?['--no-session-persistence']:[])];
 }
 export function consumeAgentEvent(job,event){
+  if(job.provider==='muse'){consumeMuseEvent(job,event);return;}
   if((job.provider || 'codex')==='codex'){
     if(event.type==='thread.started')job.chatId=event.thread_id;
     if(event.type==='turn.failed')job.agentError=event.error?.message || 'Codex could not complete the request.';

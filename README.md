@@ -95,3 +95,9 @@ Meta Clinic's `npm run test:live` and `node test/qa-live.mjs` need their matchin
 In Settings, choose **Inspect databases** under Preview databases. Branch Review lists matching databases in its Meta Clinic preview containers, their sizes, known commits and review titles. Start a stopped preview container from the list to inspect it; starting it leaves the container running. Docker must be available. Missing containers do not establish whether an earlier Docker engine or disk still contains data.
 
 Active or prepared databases, databases with connections, and databases without a matching local preview cache cannot be selected. Cleanup requires an explicit selection and confirmation, deletes only the listed databases, and invalidates their preview caches. Saved review history and evidence are retained. Reopening a deleted preview requires its normal setup and synthetic scenario to run again. No database is deleted automatically on merge.
+
+### Muse Code (experimental)
+
+Select Muse CLI in Welcome or Settings. Install the native `muse` CLI on the same operating system as Branch Review and run `muse login` once. Windows uses native Muse, never WSL. Linux discovers Muse on PATH. `no_allowance` reports signed in — no allowance; ambiguous usage remains unverified unless a bounded, tool-disabled model smoke check emits a successful terminal event. Checking a usable connection can make a model request.
+
+Muse uses JSONL events, file prompts, the shared job cancellation path, and restricted file tools (shell disabled; plan jobs also disable writes). Run project validation separately through Checks. Billing failures show: Muse is signed in, but billing/allowance is not resolved. The successful real-model path is NOT live-verified: the observed account failed with HTTP 402 billing_error. The test fixtures preserve selected fields from that real run with identifiers removed; success fixtures are synthetic.

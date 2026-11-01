@@ -5,7 +5,7 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
   const draftKey=()=>`branch-review:change:${getState().repository}:${getState().record?.id || 'new'}`;
   const readDraft=()=>{try{return localStorage.getItem(draftKey()) || '';}catch{return '';}};
   const storeDraft=value=>{try{if(value)localStorage.setItem(draftKey(),value);else localStorage.removeItem(draftKey());}catch{}};
-  const provider=()=>getState().agent?.provider==='claude'?'Claude Code':'Codex';
+  const provider=()=>getState().agent?.provider==='muse'?'Muse':getState().agent?.provider==='claude'?'Claude Code':'Codex';
   function render(rows){
     const state=getState(),id=state.record?.id;
     if(id!==reviewId){target=null;$('change-composer').hidden=true;reviewId=id;latest=null;notice='';$('change-request').value=drafts.get(id)||readDraft();}

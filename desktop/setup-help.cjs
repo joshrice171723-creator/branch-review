@@ -1,5 +1,5 @@
 const path=require('node:path');
-const links=Object.freeze({git:'https://git-scm.com/downloads/win',node:'https://nodejs.org/en/download',codex:'https://developers.openai.com/codex/cli/',claude:'https://code.claude.com/docs/en/setup'});
+const links=Object.freeze({git:'https://git-scm.com/downloads/win',node:'https://nodejs.org/en/download',codex:'https://developers.openai.com/codex/cli/',claude:'https://code.claude.com/docs/en/setup',muse:'https://dev.meta.ai/docs/muse-code'});
 function setupUrl(key){if(!Object.hasOwn(links,key))throw Error('Unknown setup help page.');return links[key];}
 async function gitAvailable({exec,env=process.env}){
   const options={windowsHide:true,timeout:10000};

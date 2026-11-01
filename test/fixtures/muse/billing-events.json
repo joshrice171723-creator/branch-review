@@ -1,0 +1,4 @@
+[
+  {"schema_version":1,"payload_type":"task.lifecycle.status","payload":{"event":{"kind":"status","message":"failed meta model stream attempt 1/10"}}},
+  {"schema_version":1,"payload_type":"run.terminal.failed","payload":{"kind":"run_terminal","reason":"API error 402: Billing verification failed. Billing Issue. (billing_error)","terminal":"failed","text":""}}
+]

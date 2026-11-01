@@ -35,7 +35,7 @@ async function firstProject(detectProject) {
     const trustedWelcome=event=>{if(event.sender!==welcome.webContents || event.senderFrame!==welcome.webContents.mainFrame || event.senderFrame.url!==page)throw Error('Only the welcome screen can select a project.');};
     ipcMain.handle('welcome:probe',async(event,provider)=>{trustedWelcome(event);return probeProvider(provider);});
     ipcMain.handle('welcome:git',async event=>{trustedWelcome(event);return gitAvailable({exec});});
-    ipcMain.handle('welcome:help',async(event,provider)=>{trustedWelcome(event);if(!['git','codex','claude'].includes(provider))throw Error('Choose a coding agent.');await shell.openExternal(setupUrl(provider));});
+    ipcMain.handle('welcome:help',async(event,provider)=>{trustedWelcome(event);if(!['git','codex','claude','muse'].includes(provider))throw Error('Choose a coding agent.');await shell.openExternal(setupUrl(provider));});
     ipcMain.handle('welcome:chat',async(event,provider,messages)=>{
       trustedWelcome(event);foundProject=null;const agent=await probeProvider(provider);if(agent.status!=='ready')throw Error(agent.message);
       const reply=await askProjectAgent(provider,messages);
