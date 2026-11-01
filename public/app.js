@@ -471,6 +471,7 @@ async function poll() {
     void activityView.render();
     renderFocusStatus();
     const ready = currentState.status === "ready";
+    $('new-change').hidden=!ready || !currentState.record;
     const previewReady=ready || currentState.status==='preview-ready';
     pendingChecks.hidden=currentState.status!=='preview-ready';
     if(currentState.status==='preview-ready')$('change-composer').hidden=true;
