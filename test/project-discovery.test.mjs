@@ -23,3 +23,15 @@ test('agent preview suggestions keep standard static servers local and do not sa
   assert.deepEqual(safeSuggestedRecipe({start:['python','-m','http.server','{port}','--bind','127.0.0.1','--bind=0.0.0.0']}).start,['python','-m','http.server','{port}','--bind','127.0.0.1']);
   assert.equal(safeSuggestedRecipe({start:['node','server.js'],env:{API_KEY:'secret'}}),null);
 });
+
+test('finds short and non-English project names',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'branch-review-names-'));
+  try{const repo=path.join(root,'项目');await mkdir(path.join(repo,'.git'),{recursive:true});assert.deepEqual(await discovery.findProjectCandidates(root,[{role:'user',text:'Open 项目'}]),[repo]);}
+  finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('searches additional project locations without searching dependencies',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'branch-review-roots-'));
+  try{const home=path.join(root,'home'),disk=path.join(root,'other-disk'),repo=path.join(disk,'work','northern-star');await mkdir(home,{recursive:true});await mkdir(path.join(repo,'.git'),{recursive:true});assert.deepEqual(await discovery.findProjectCandidates(home,[{role:'user',text:'Open Northern Star'}],{additionalRoots:[disk]}),[repo]);}
+  finally{await rm(root,{recursive:true,force:true});}
+});
