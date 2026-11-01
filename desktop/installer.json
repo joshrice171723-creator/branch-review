@@ -3,9 +3,46 @@
   "productName": "Branch Review",
   "asar": false,
   "npmRebuild": false,
-  "directories": {"output": "../installers"},
-  "files": ["*.mjs", "*.rb", "public/**/*", "desktop/main.cjs", "desktop/welcome.html", "desktop/welcome.js", "desktop/welcome-preload.cjs", "desktop/welcome-agent.cjs", "desktop/project-discovery.cjs", "desktop/preload.cjs", "desktop/repository.cjs", "desktop/setup-help.cjs", "desktop/browser-qa.cjs", "desktop/icon.ico", "package.json"],
-  "win": {"target": "nsis", "icon":"desktop/icon.ico", "signExecutable": false, "artifactName": "Branch-Review-${version}-Windows-x64-Payload.${ext}"},
-  "nsis": {"oneClick": false, "perMachine": false, "allowElevation": false, "allowToChangeInstallationDirectory": false, "deleteAppDataOnUninstall": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": true},
-  "publish": null
+  "directories": {
+    "output": "../installers"
+  },
+  "files": [
+    "*.mjs",
+    "*.rb",
+    "public/**/*",
+    "desktop/main.cjs",
+    "desktop/welcome.html",
+    "desktop/welcome.js",
+    "desktop/welcome-preload.cjs",
+    "desktop/welcome-agent.cjs",
+    "desktop/project-discovery.cjs",
+    "desktop/preload.cjs",
+    "desktop/repository.cjs",
+    "desktop/setup-help.cjs",
+    "desktop/browser-qa.cjs",
+    "desktop/icon.ico",
+    "package.json"
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": "desktop/icon.ico",
+    "signExecutable": false,
+    "artifactName": "Branch-Review-${version}-Windows-x64-Payload.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowElevation": false,
+    "allowToChangeInstallationDirectory": false,
+    "deleteAppDataOnUninstall": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "runAfterFinish": true
+  },
+  "publish": null,
+  "linux": {
+    "target": "AppImage",
+    "category": "Development",
+    "artifactName": "Branch-Review-${version}-Linux-x64.${ext}"
+  }
 }

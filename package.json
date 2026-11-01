@@ -10,7 +10,8 @@
     "desktop": "electron .",
     "dev": "node desktop/dev.cjs",
     "package:desktop": "node desktop/package.mjs",
-    "installer": "node desktop/build-installer.cjs"
+    "installer": "node desktop/build-installer.cjs",
+    "appimage": "electron-builder --config desktop/installer.json --linux AppImage --x64 --publish never"
   },
   "engines": {
     "node": ">=24"
