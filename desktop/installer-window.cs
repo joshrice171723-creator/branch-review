@@ -12,6 +12,7 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 
 class InstallerWindow : Window {
+  Grid overlay;
   readonly Scene scene = new Scene();
   readonly Button action = new Button();
   readonly TextBlock status = new TextBlock();
@@ -19,11 +20,12 @@ class InstallerWindow : Window {
   readonly DispatcherTimer timer = new DispatcherTimer();
   readonly Stopwatch clock = Stopwatch.StartNew();
   bool installing, complete, launchAttempted;
+  readonly bool preview;
   double completedAt;
 
   [STAThread] static int Main(string[] args) {
     if (args.Any(a => a.Equals("/S", StringComparison.OrdinalIgnoreCase))) { try { return Install(args); } catch { return 1; } }
-    var app = new Application(); app.Run(new InstallerWindow()); return 0;
+    var app = new Application(); app.Run(new InstallerWindow(args.Contains("--preview-animation"))); return 0;
   }
   static int Install(string[] args) {
     string dir = Path.Combine(Path.GetTempPath(), "branch-review-setup-" + Guid.NewGuid().ToString("N"));
@@ -36,11 +38,12 @@ class InstallerWindow : Window {
       using (Process child = Process.Start(new ProcessStartInfo(payload, command) { UseShellExecute = false, CreateNoWindow = true })) { child.WaitForExit(); return child.ExitCode; }
     } finally { try { Directory.Delete(dir, true); } catch { } }
   }
-  InstallerWindow() {
+  InstallerWindow(bool previewAnimation) {
+    preview = previewAnimation;
     Title = "Install Branch Review"; Width = 860; Height = 670; MinWidth = 680; MinHeight = 570;
     WindowStartupLocation = WindowStartupLocation.CenterScreen; Background = Brushes.Black;
     var grid = new Grid(); Content = grid; grid.Children.Add(scene);
-    var overlay = new Grid { Margin = new Thickness(44, 36, 44, 30) }; grid.Children.Add(overlay);
+    overlay = new Grid { Margin = new Thickness(44, 36, 44, 30) }; grid.Children.Add(overlay);
     overlay.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
     overlay.RowDefinitions.Add(new RowDefinition());
     overlay.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -51,7 +54,8 @@ class InstallerWindow : Window {
     status.Text = "Your workspace is ready to install."; status.TextAlignment = TextAlignment.Center; status.Foreground = Brush("#C7C0E4"); status.FontSize = 13; status.TextWrapping = TextWrapping.Wrap; status.Margin = new Thickness(0, 0, 0, 20); bottom.Children.Add(status);
     progress.Height = 4; progress.IsIndeterminate = true; progress.Visibility = Visibility.Collapsed; progress.Margin = new Thickness(0, 0, 0, 16); bottom.Children.Add(progress);
     action.Content = "Install Branch Review"; action.Height = 46; action.Background = Brush("#F3EAFF"); action.Foreground = Brush("#28194C"); action.BorderThickness = new Thickness(0); action.FontWeight = FontWeights.SemiBold; action.Cursor = System.Windows.Input.Cursors.Hand; action.Click += BeginInstall; bottom.Children.Add(action);
-    timer.Interval = TimeSpan.FromMilliseconds(33); timer.Tick += Tick; timer.Start();
+    if (preview) { action.Content = "Preview opening animation"; status.Text = "Animation preview - nothing will be installed."; }
+    timer.Interval = TimeSpan.FromMilliseconds(16); timer.Tick += Tick; timer.Start();
     Closing += (sender, e) => { if (installing && !complete) e.Cancel = true; };
   }
   static SolidColorBrush Brush(string value) { return (SolidColorBrush)new BrushConverter().ConvertFromString(value); }
@@ -72,19 +76,21 @@ class InstallerWindow : Window {
     return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Branch Review", "Branch Review.exe");
   }
   async void BeginInstall(object sender, RoutedEventArgs e) {
-    installing = true; action.Visibility = Visibility.Collapsed; progress.Visibility = Visibility.Visible; status.Text = "Installing Branch Review…";
+    installing = true; action.Visibility = Visibility.Collapsed; progress.Visibility = Visibility.Visible; status.Text = preview ? "Previewing the animation…" : "Installing Branch Review…";
     try {
-      int code = await Task.Run(() => Install(new string[] { "/S" }));
+      int code;
+      if (preview) { await Task.Delay(1600); code = 0; } else code = await Task.Run(() => Install(new string[] { "/S" }));
       if (code != 0) throw new Exception("The installer returned error " + code + ".");
-      complete = true; progress.Visibility = Visibility.Collapsed; completedAt = clock.Elapsed.TotalSeconds; status.Text = "Installed. Opening Branch Review…";
+      complete = true; progress.Visibility = Visibility.Collapsed; completedAt = clock.Elapsed.TotalSeconds; status.Text = preview ? "Opening animation…" : "Installed. Opening Branch Review…";
     } catch (Exception error) {
       installing = false; progress.Visibility = Visibility.Collapsed; status.Text = "Installation didn't finish. " + error.Message; action.Content = "Try again"; action.Visibility = Visibility.Visible;
     }
   }
   void Tick(object sender, EventArgs e) {
-    scene.Time = clock.Elapsed.TotalSeconds; scene.Open = complete ? Math.Min(1, (scene.Time - completedAt) / 1.5) : 0; scene.InvalidateVisual();
+    scene.Time = clock.Elapsed.TotalSeconds; scene.Open = complete ? Math.Min(1, (scene.Time - completedAt) / 4.2) : 0; overlay.Opacity = launchAttempted ? 1 : 1 - Math.Min(1, scene.Open * 3); scene.InvalidateVisual();
     if (complete && !launchAttempted && scene.Open >= 1) {
       launchAttempted = true;
+      if (preview) { complete = false; installing = false; launchAttempted = false; action.Visibility = Visibility.Visible; status.Text = "Animation preview - nothing was installed."; return; }
       try { Process.Start(InstalledApp()); Close(); }
       catch (Exception error) { installing = false; status.Text = "Installed, but couldn't open the app. " + error.Message; action.Content = "Close"; action.Visibility = Visibility.Visible; action.Click -= BeginInstall; action.Click += (s, a) => Close(); }
     }
@@ -93,27 +99,62 @@ class InstallerWindow : Window {
 
 class Scene : FrameworkElement {
   public double Time, Open;
+  double angle, lastTime;
   static SolidColorBrush B(string color) { return (SolidColorBrush)new BrushConverter().ConvertFromString(color); }
-  Point P(double x, double y, double z, double angle, double scale, double cx, double cy) {
+  Point P(double x,double y,double z,double s,double cx,double cy) {
     double xr=x*Math.Cos(angle)+z*Math.Sin(angle), zr=-x*Math.Sin(angle)+z*Math.Cos(angle);
-    return new Point(cx+xr*scale,cy+(y+zr*.27)*scale);
+    double perspective=5.5/(5.5-zr*.3);
+    return new Point(cx+xr*s*perspective,cy+(y+zr*.35)*s*perspective);
   }
-  void Polygon(DrawingContext dc, Brush fill, Pen pen, Point[] points) {
-    var shape=new StreamGeometry(); using(var g=shape.Open()){g.BeginFigure(points[0],true,true);g.PolyLineTo(points.Skip(1).ToArray(),true,false);} shape.Freeze(); dc.DrawGeometry(fill,pen,shape);
+  void Poly(DrawingContext dc,Brush fill,Pen pen,params Point[] points) {
+    var shape=new StreamGeometry();using(var g=shape.Open()){g.BeginFigure(points[0],true,true);g.PolyLineTo(points.Skip(1).ToArray(),true,false);}shape.Freeze();dc.DrawGeometry(fill,pen,shape);
+  }
+  void Glow(DrawingContext dc,Point center,double rx,double ry,Color color) {
+    var brush=new RadialGradientBrush(color,Colors.Transparent);dc.DrawEllipse(brush,null,center,rx,ry);
   }
   protected override void OnRender(DrawingContext dc) {
-    double w=ActualWidth,h=ActualHeight,cx=w/2,cy=h*.43,scale=Math.Min(w,h)*.19;
-    var background=new RadialGradientBrush(Color.FromRgb(46,29,116),Color.FromRgb(8,9,31)); background.Center=new Point(.5,.37);background.GradientOrigin=new Point(.5,.37);background.RadiusX=.8;background.RadiusY=.8;dc.DrawRectangle(background,null,new Rect(0,0,w,h));
-    for(int i=0;i<34;i++){double x=((i*197)%997)/997.0*w,y=((i*349)%907)/907.0*h;dc.DrawEllipse(B(i%3==0?"#7C77A9":"#48416B"),null,new Point(x,y),i%7==0?1.3:.6,i%7==0?1.3:.6);}
-    var halo=new RadialGradientBrush(Color.FromArgb((byte)(90+Open*90),179,81,255),Colors.Transparent);dc.DrawEllipse(halo,null,new Point(cx,cy+scale*.6),scale*2.1,scale*1.6);
-    double a=Time*.55, s=scale*.75; var edge=new Pen(B("#B98CE1"),1);
-    var faces=new[] {new[]{-1.0,1.0,1.0,1.0},new[]{-1.0,-1.0,1.0,-1.0},new[]{-1.0,-1.0,-1.0,1.0},new[]{1.0,-1.0,1.0,1.0}};
-    foreach(var f in faces.OrderBy(v=>((-v[0]*Math.Sin(a)+v[1]*Math.Cos(a))+(-v[2]*Math.Sin(a)+v[3]*Math.Cos(a)))/2)) {
-      var points=new[]{P(f[0],-.6,f[1],a,s,cx,cy),P(f[2],-.6,f[3],a,s,cx,cy),P(f[2],.8,f[3],a,s,cx,cy),P(f[0],.8,f[1],a,s,cx,cy)};
-      Polygon(dc,B("#705B2FA6"),edge,points);
+    double dt=Math.Min(.05,Time-lastTime);lastTime=Time;
+    angle+=dt*.38*(1-Math.Min(1,Open*4));
+    double phase=Math.Min(1,Open/.6),ease=phase*phase*(3-2*phase),zoom=Math.Max(0,(Open-.45)/.55),w=ActualWidth,h=ActualHeight,cx=w/2,cy=h*.42+Math.Sin(Time*.9)*4,s=Math.Min(w,h)*.18;
+    dc.DrawRectangle(B("#09091D"),null,new Rect(0,0,w,h));
+    Glow(dc,new Point(cx,cy-70),w*.6,h*.7,Color.FromArgb(110,66,40,165));
+    Glow(dc,new Point(cx,cy+s*1.45),s*2.2,s*.38,Color.FromArgb(110,101,44,191));
+    Glow(dc,new Point(cx,cy+s*1.5),s*1.5,s*.2,Color.FromArgb(210,3,2,15));
+    for(int i=0;i<36;i++){double x=((i*197)%997)/997.0*w,y=((i*349)%907)/907.0*h;double alpha=.25+.2*Math.Sin(Time*.6+i);dc.PushOpacity(alpha);dc.DrawEllipse(Brushes.White,null,new Point(x,y),i%7==0?1.2:.6,i%7==0?1.2:.6);dc.Pop();}
+    Point focal=new Point(cx,cy-s*.45);
+    double magnification=1+zoom*zoom*18;
+    dc.PushTransform(new ScaleTransform(magnification,magnification,focal.X,focal.Y));
+    var edge=new Pen(B("#806D4CB2"),.7);
+    var faces=new[]{new[]{-1.0,1.0,1.0,1.0},new[]{-1.0,-1.0,1.0,-1.0},new[]{-1.0,-1.0,-1.0,1.0},new[]{1.0,-1.0,1.0,1.0}};
+    Poly(dc,B("#201236"),null,P(-1,-.65,-1,s,cx,cy),P(1,-.65,-1,s,cx,cy),P(1,-.65,1,s,cx,cy),P(-1,-.65,1,s,cx,cy));
+    foreach(var f in faces.OrderBy(v=>(-v[0]*Math.Sin(angle)+v[1]*Math.Cos(angle)-v[2]*Math.Sin(angle)+v[3]*Math.Cos(angle))/2)) {
+      double depth=(-f[0]*Math.Sin(angle)+f[1]*Math.Cos(angle)-f[2]*Math.Sin(angle)+f[3]*Math.Cos(angle))/2;
+      byte light=(byte)(80+Math.Max(0,depth)*50);
+      var material=new LinearGradientBrush(Color.FromRgb((byte)(light+24),(byte)(light*.5),(byte)(light+75)),Color.FromRgb(40,21,77),new Point(0,0),new Point(1,1));
+      Poly(dc,material,edge,P(f[0],-.62,f[1],s,cx,cy),P(f[2],-.62,f[3],s,cx,cy),P(f[2],.85,f[3],s,cx,cy),P(f[0],.85,f[1],s,cx,cy));
     }
-    double lid=Open*1.25; var lidPoints=new[]{P(-1,-.6,-1,a,s,cx,cy),P(1,-.6,-1,a,s,cx,cy),P(1,-.6-2*Math.Sin(lid),-1+2*Math.Cos(lid),a,s,cx,cy),P(-1,-.6-2*Math.Sin(lid),-1+2*Math.Cos(lid),a,s,cx,cy)};
-    Polygon(dc,B("#A97DE0"),edge,lidPoints);
-    if(Open>0){var light=new RadialGradientBrush(Color.FromArgb((byte)(Open*210),255,220,255),Colors.Transparent);dc.DrawEllipse(light,null,new Point(cx,cy-s*.55),s*(.5+Open*2),s*(.5+Open*2));}
+    double lid=ease*.32, lift=ease*2.8;
+    Point backL=P(-1,-.72-lift,-1,s,cx,cy),backR=P(1,-.72-lift,-1,s,cx,cy),frontR=P(1,-.72-lift-2*Math.Sin(lid),-1+2*Math.Cos(lid),s,cx,cy),frontL=P(-1,-.72-lift-2*Math.Sin(lid),-1+2*Math.Cos(lid),s,cx,cy);
+    var sheen=new LinearGradientBrush(B("#C298ED").Color,B("#64408F").Color,new Point(0,0),new Point(1,1));
+    Poly(dc,B("#4C296F"),edge,frontL,frontR,new Point(frontR.X,frontR.Y+9),new Point(frontL.X,frontL.Y+9));
+    Poly(dc,sheen,new Pen(B("#C6A1E4"),.7),backL,backR,frontR,frontL);
+    Point seam=P(0,-.65,1,s,cx,cy);
+    Glow(dc,seam,s*.8,s*.09,Color.FromArgb((byte)(100+ease*100),229,145,255));
+    double pulse=.85+.15*Math.Sin(Time*2.4);
+    Glow(dc,seam,s*1.1,s*.25,Color.FromArgb((byte)(85*pulse),217,126,255));
+    if(ease>0){
+      Point core=P(0,-.45,0,s,cx,cy);
+      dc.PushOpacity(Math.Min(1,ease*2));
+      Poly(dc,new LinearGradientBrush(Color.FromArgb(0,208,164,255),Color.FromArgb(130,238,182,255),90),null,new Point(core.X-s*1.5,core.Y-s*2.8),new Point(core.X+s*1.5,core.Y-s*2.8),new Point(core.X+s*.5,core.Y),new Point(core.X-s*.5,core.Y));
+      Glow(dc,core,s*2.4*pulse,s*2.4*pulse,Color.FromArgb(180,164,65,255));
+      Glow(dc,core,s*1.1*pulse,s*1.1*pulse,Color.FromArgb(230,237,143,255));
+      Glow(dc,core,s*.42,s*.42,Color.FromArgb(255,250,205,255));
+      Glow(dc,core,s*.14,s*.14,Colors.White);
+      for(int i=0;i<15;i++){double t=(Time*.25+i*.069)%1;Point spark=new Point(core.X+Math.Sin(i*7.1+t)*s*t,core.Y-t*s*2);Glow(dc,spark,5,5,Color.FromArgb((byte)(210*(1-t)),247,214,255));}
+      dc.Pop();
+    }
+    dc.Pop();
+    double wash=Math.Max(0,(zoom-.35)/.65);
+    dc.DrawRectangle(new SolidColorBrush(Color.FromArgb((byte)(255*wash*wash),251,241,255)),null,new Rect(0,0,w,h));
   }
 }
