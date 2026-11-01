@@ -1039,3 +1039,23 @@ body.focused .panel-divider {display:none}
 #tools-workspace [role="status"]:empty,#tools-workspace pre:empty{display:none}
 #tools-workspace button:focus-visible,#tools-workspace summary:focus-visible,#tools-workspace input:focus-visible,#tools-workspace textarea:focus-visible,#tools-workspace select:focus-visible{outline:2px solid #356fba;outline-offset:2px}
 @media(max-width:600px){#tools-dialog:has(#tools-workspace:not([hidden])){padding:20px}#tools-workspace .tool-actions>*{flex:1 1 100%}}
+
+/* Shell colors never affect the embedded project. */
+:root{--accent:#244e40;--accent-ink:#fff}
+#theme-accent{display:block;width:72px;height:42px;padding:4px;cursor:pointer}
+body .primary,body button.primary,body .mark{background:var(--accent);color:var(--accent-ink)}
+body :is(button,input,select,textarea):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+html[data-theme="tesseract"]{color-scheme:dark;--ink:#eee9ff}
+html[data-theme="tesseract"] body{background:#09091d;color:#eee9ff}
+html[data-theme="tesseract"] :is(.topbar,aside,dialog,.settings-section,.dialog-heading,.tools-tabs,select,input,textarea,button,#preview-address){background-color:#18152f;color:#eee9ff;border-color:#393052}
+html[data-theme="tesseract"] :is(p,label,summary,h1,h2,h3,.brand,.project,.small,.settings-help,.settings-project,.settings-intro){color:inherit}
+html[data-theme="tesseract"] button:hover:not(:disabled){background:#33264e}
+html[data-theme="tesseract"] :is(a,.quiet){color:var(--accent)}
+html[data-theme="tesseract"] .primary,html[data-theme="tesseract"] .mark{background:var(--accent);color:var(--accent-ink)}
+html[data-theme="tesseract"] dialog{box-shadow:0 20px 90px #050411aa}
+html[data-theme="tesseract"] dialog::backdrop{background:#060416b8}
+html[data-theme="tesseract"] :is(.workspace,.preview-toolbar,.review,.segmented,footer,.empty-mark,.branch,.badge,#review-notice){background-color:#18152f;color:#eee9ff;border-color:#393052}
+html[data-theme="tesseract"] .empty{background:radial-gradient(ellipse at 50% 35%,#362265 0%,#100d25 65%);color:#eee9ff}
+html[data-theme="tesseract"] .empty h2{color:#eee9ff}
+html[data-theme="tesseract"] :is(.muted,.branch small,.branch time,.eyebrow){color:#bdb3d4}
+html[data-theme="tesseract"] .branch.selected,html[data-theme="tesseract"] .segmented button.active{background:#382954;color:#f2eaff}
