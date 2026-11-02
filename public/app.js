@@ -101,6 +101,9 @@ $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
 const evidenceMenu=document.createElement('button');evidenceMenu.textContent='Evidence tools';evidenceMenu.className='secondary';evidenceMenu.onclick=()=>reviewTools.open('evidence');$('item-more').append(evidenceMenu);
 const checksMenu=document.createElement('button');checksMenu.textContent='Checks';checksMenu.className='secondary';checksMenu.onclick=()=>reviewTools.open('checks');$('item-more').append(checksMenu);
+$('item-more').prepend($('item-background'));
+$('item-more').append($('files').closest('details'),$('diagnostic-log').closest('details'));
+$('review-context').append($('review-branch-status'));
 const publishedChecks=document.createElement('button');publishedChecks.textContent='Verify published version';publishedChecks.className='secondary';publishedChecks.onclick=()=>reviewTools.open('release');$('published-findings').after(publishedChecks);
 const branchHistoryView=branchHistory({api,getState:()=>currentState,flush:reviewWorkflow.flush,poll,error});
 

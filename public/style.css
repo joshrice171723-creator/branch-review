@@ -1072,12 +1072,13 @@ html[data-theme="dark"] .main-tools #theme-toggle:hover{background:#414750;borde
 /* Tools open in context; the review stays the primary workflow. */
 #tools-dialog .tools-tabs{display:none}
 #agent-progress{padding:16px;margin:12px 0;border:1px solid #c7d0db;border-radius:8px}
-#agent-progress h3{margin:0 0 8px;font-size:16px}
+#agent-progress summary{font-size:14px;font-weight:600;cursor:pointer}
+.review-expectation h3{font-size:13px;margin:16px 0 8px}
+.review-expectation p{margin:0 0 16px}
+#item-more #item-background{margin:12px 0}
 #agent-progress-detail{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
 #agent-progress-files{overflow-wrap:anywhere}
 .review #change-composer{position:static;inset:auto;width:auto;max-width:none;margin:12px 0;padding:16px;box-shadow:none}
 .review #change-composer textarea{width:100%;box-sizing:border-box;min-height:130px}
 
 .review:has(#change-composer:not([hidden])) #review-workflow{display:none}
-
-#guided-item:has(#latest-fix:not([hidden])) :is(#item-description,#item-instructions){display:none}

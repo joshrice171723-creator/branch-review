@@ -115,12 +115,12 @@ export function guided({api,getState,poll,error,onSelect}) {
     $('review-fixes').textContent=`Review fixes (${counts['ready-to-retest']+counts['needs-fixes']+counts.blocked})`;
     $('review-fixes').disabled=!enabled || !(counts['ready-to-retest']+counts['needs-fixes']+counts.blocked);
     $('item-reason-wrap').hidden=!$('item-outcome').value;
+    $('item-number').hidden=items.length<2;$('item-previous').hidden=items.length<2;
     $('item-number').textContent=`ITEM ${index+1} OF ${items.length}`;
-    $('item-title').textContent=current.title;$('item-description').textContent=current.description || r.manifest.summary || 'Compare this behavior in Original and Changed.';
+    $('item-title').textContent=current.title.startsWith('Verify reported fix on ')?'Check the update':current.title;$('item-description').textContent=current.description || r.manifest.summary || 'Compare this behavior in Original and Changed.';
     $('item-instructions').textContent=current.instructions || 'Follow each check below in the live preview.';
     $('item-expected').textContent=current.expected || current.steps.join(' ');
-    const retests=r.issues.filter(issue=>issue.scenario===current.id && issue.status==='needs-retest');
-    $('latest-fix').hidden=!retests.length;
+    $('latest-fix').hidden=true;
     $('latest-fix-expected').textContent=current.expected || current.steps.join(' ');
     $('verify-fix').hidden=true;
     $('verify-fix').disabled=!enabled || currentStatus!=='ready-to-retest' || !current.steps.every((_,i)=>r.checks[`${current.id}:${i}`]);

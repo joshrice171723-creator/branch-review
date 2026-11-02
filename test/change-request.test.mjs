@@ -57,11 +57,16 @@ test('agent result stays visible for explicit review and failure retains recover
  const h=harness(t),e=h.elements;
  h.view.render([{id:'job',reviewId:'one',kind:'fix',status:'succeeded',sameBranch:true,applied:true,branch:'demo',commit:'old',resultCommit:'new',result:'Changed the headline.',committedFiles:['Home.tsx']}]);
  assert.equal(e['agent-progress'].hidden,false);
+ assert.equal(e['agent-progress-details'].open,false);
+ e['agent-progress-details'].open=true;
+ h.view.render([{id:'job',reviewId:'one',kind:'fix',status:'succeeded',commit:'old',resultCommit:'new',result:'Changed the headline.',committedFiles:['Home.tsx']}]);
+ assert.equal(e['agent-progress-details'].open,true);
  assert.equal(e['agent-progress-review'].hidden,false);
  assert.equal(e['agent-progress-detail'].textContent,'Changed the headline.');
  assert.match(e['agent-progress-files'].textContent,/Home.tsx/);
  assert.equal(h.calls.length,0);
  h.view.render([{id:'job',reviewId:'one',kind:'fix',status:'failed',error:'CLI disconnected'}]);
  assert.equal(e['agent-progress-recovery'].hidden,false);
+ assert.equal(e['agent-progress-details'].open,true);
  assert.equal(e['agent-progress-review'].hidden,true);
 });

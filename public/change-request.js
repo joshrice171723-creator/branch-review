@@ -1,7 +1,7 @@
 export function changeRequest({api,getState,getSide,workflow,capture,previewReady=()=>true,poll,close}){
   const $=id=>document.getElementById(id),drafts=new Map();
   let target=null;
-  let reviewId=null,submitting=false,opening=false,latest=null,notice='';
+  let reviewId=null,submitting=false,opening=false,latest=null,notice='',activityKey='';
   const draftKey=()=>`branch-review:change:${getState().repository}:${getState().record?.id || 'new'}`;
   const readDraft=()=>{try{return localStorage.getItem(draftKey()) || '';}catch{return '';}};
   const storeDraft=value=>{try{if(value)localStorage.setItem(draftKey(),value);else localStorage.removeItem(draftKey());}catch{}};
@@ -20,6 +20,8 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
     $('review-changes').hidden=latest?.status!=='succeeded' || !latest.resultCommit || latest.resultCommit===latest.commit || latest.resultCommit===state.record?.identity?.changed || !!latest.dirty;
     $('review-changes').disabled=opening || state.busy || running || !previewReady();
     $('agent-progress').hidden=!latest;
+    const nextActivityKey=latest?`${latest.id}:${latest.status}`:'';
+    if(activityKey!==nextActivityKey){activityKey=nextActivityKey;$('agent-progress-details').open=running || !!latest?.error;}
     $('agent-progress-title').textContent=running?`${provider()} is working`:latest?.status==='succeeded'?(latest.resultCommit===state.record?.identity?.changed?'Latest agent change':'Changes ready to review'):'Changes need attention';
     const summary=latest?.result?.split(/\n\s*\n/)[0].replace(/\[([^\]]+)\]\([^\n]+?\)/g,'$1');
     $('agent-progress-detail').textContent=notice || latest?.error || latest?.phase || summary || (running?'Your preview stays available while the agent works.':'');

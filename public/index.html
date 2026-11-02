@@ -137,7 +137,7 @@
       </section>
       <aside class="review">
 
-        <p class="eyebrow">GUIDED REVIEW</p>
+        <p class="eyebrow">REVIEW</p>
         <details id="branch-brief" open>
         <summary>Selected branch and comparison</summary>
         <h2 id="title">Choose a change</h2>
@@ -167,8 +167,8 @@
         <p id="review-branch-status" class="small" role="status" hidden></p>
         <p class="small" id="request-hint">To request a change, right-click the part of the preview you want changed.</p>
         <section id="agent-progress" hidden aria-label="Agent progress">
-          <h3 id="agent-progress-title" role="status" aria-live="polite"></h3>
-          <p id="agent-progress-detail"></p><p id="agent-progress-files" class="small"></p>
+          <details id="agent-progress-details"><summary id="agent-progress-title" role="status" aria-live="polite"></summary>
+          <p id="agent-progress-detail"></p><p id="agent-progress-files" class="small"></p></details>
           <button id="agent-progress-stop" class="secondary" hidden>Stop</button>
           <button id="agent-progress-review" class="primary" hidden>Review update</button>
           <button id="agent-progress-recovery" class="quiet" hidden>Inspect recovery details</button>
@@ -184,12 +184,10 @@
           <section id="guided-item" aria-label="Current review item">
             <div class="item-heading"><span id="item-number" class="eyebrow"></span><span id="item-status" class="item-status"></span></div>
             <h2 id="item-title"></h2>
-            <p id="item-description"></p>
-            <p id="item-instructions"></p>
+            <details id="item-background"><summary>About this change</summary><p id="item-description"></p><p id="item-instructions"></p></details>
             <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Looks good. If it is still wrong, right-click the affected area in the preview.</p></section>
-            <details><summary>Expected result</summary><p id="item-expected"></p></details>
-            <p class="small muted">Check the result, then choose Looks good. To request a change, right-click the preview.</p><div id="checks"></div>
-            <details id="item-more"><summary>More options</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Technical details and recovery</button><label class="field-label" for="item-notes">Notes</label>
+            <section class="review-expectation"><h3>What to check</h3><p id="item-expected"></p></section><div id="checks"></div>
+            <details id="item-more"><summary>Details and tools</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Technical details and recovery</button><label class="field-label" for="item-notes">Notes</label>
             <textarea id="item-notes" maxlength="4000" placeholder="Optional note"></textarea>
             <label class="field-label" for="item-outcome">Can’t check this?</label>
             <select id="item-outcome"><option value="">Choose an exception</option><option value="needs-fixes" hidden>Needs fixes</option><option value="blocked">Blocked — cannot test</option><option value="not-applicable">Not applicable</option></select>
