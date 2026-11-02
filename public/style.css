@@ -1082,3 +1082,20 @@ html[data-theme="dark"] .main-tools #theme-toggle:hover{background:#414750;borde
 .review #change-composer textarea{width:100%;box-sizing:border-box;min-height:130px}
 
 .review:has(#change-composer:not([hidden])) #review-workflow{display:none}
+#history-dialog .version-branch{font-weight:600;margin:8px 0}
+#history-dialog .version-intro{line-height:1.5;margin:0 0 20px}
+#history-dialog .version-viewing{font-weight:600;line-height:1.5}
+#history-dialog [role="status"]:empty{display:none}
+#history-dialog .version-main{display:flex;align-items:center;justify-content:space-between;gap:24px}
+#history-dialog .version-copy{min-width:0}
+#history-dialog .version-main button{flex-shrink:0;width:auto;margin:0}
+#history-dialog .branch-version-list h3{font-size:15px;line-height:1.5;margin:4px 0}
+#history-dialog .version-label{font-size:12px;font-weight:600;color:inherit}
+#history-dialog .branch-version-list details{margin-top:12px;font-size:12px;line-height:1.5}
+#history-dialog .branch-version-list summary{cursor:pointer;width:fit-content}
+#history-dialog button:focus-visible,#history-dialog summary:focus-visible{outline:2px solid currentColor;outline-offset:3px}
+#history-dialog .version-main button:not(:disabled):hover{background:#e8efe8}
+@media(max-width:600px){#history-dialog .version-main{align-items:flex-start;flex-direction:column;gap:8px}}
+html[data-theme="dark"] #history-dialog button{background:#30343a;color:#f1f3f5;border-color:#59616b}
+html[data-theme="dark"] #history-dialog .version-main button:not(:disabled):hover{background:#414750}
+html[data-theme="dark"] #history-dialog article{border-color:#484d55}
