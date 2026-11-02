@@ -80,3 +80,12 @@ test('right-click popup shows the exact screenshot that is sent and closes after
  e['change-request'].value='Make this blue';await e['make-changes'].onclick();
  assert.equal(captures,1);assert.equal(h.calls[0].data.attachment.screenshot,screenshot);assert.equal(e['change-composer'].open,false);
 });
+
+test('request sends the flattened drawing and text rather than the original photo',async t=>{
+ const h=harness(t),e=h.elements;await h.view.open({location:'/tutorials',selector:'#cta',label:'Try sandbox'});
+ const ctx=new Proxy({measureText:()=>({width:100})},{get:(target,key)=>target[key]||(()=>{})});
+ const canvas=e['change-photo-canvas'];canvas.getContext=()=>ctx;canvas.toDataURL=()=> 'data:image/png;base64,ZWRpdGVk';
+ e['change-screenshot'].naturalWidth=1200;e['change-screenshot'].naturalHeight=600;e['change-screenshot'].onload();
+ e['change-photo-tool'].value='text';e['change-photo-text'].value='Blue here';canvas.onkeydown({key:'Enter',preventDefault(){}});
+ e['change-request'].value='Use the marked area';await e['make-changes'].onclick();assert.equal(h.calls[0].data.attachment.screenshot,'data:image/png;base64,ZWRpdGVk');
+});

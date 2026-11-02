@@ -1110,3 +1110,12 @@ main.resizable-layout{grid-template-columns:var(--rail-width,230px) minmax(320px
 #review-dialog>.review>.eyebrow{display:none}
 #agent-progress{flex-shrink:0;margin:0 16px 12px;padding:12px;max-height:200px;overflow:auto}
 html[data-theme="dark"] #change-composer{background:#22252a;color:#f1f3f5;border-color:#59616b}
+
+#change-photo-canvas{display:block;max-width:100%;width:auto;height:auto;max-height:360px;object-fit:contain;touch-action:none;cursor:crosshair;margin:12px auto}
+#change-photo-canvas[hidden],#change-photo-tools[hidden]{display:none}
+#change-photo-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:16px}
+#change-photo-tools label{display:flex;align-items:center;gap:6px}
+#change-photo-tools input{flex:1;min-width:140px;padding:8px;font:inherit}
+#change-photo-tools button,#change-photo-tools select{font:inherit;padding:7px}
+#change-photo-tools p{flex-basis:100%;margin:0}
+#change-photo-canvas:focus-visible{outline:2px solid currentColor;outline-offset:3px}

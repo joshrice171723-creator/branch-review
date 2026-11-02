@@ -101,6 +101,8 @@
         <button id="close-change" class="quiet" aria-label="Close change request">×</button>
         <label class="change-prompt" for="change-request">What would you like to change?</label>
         <textarea id="change-request" rows="3" maxlength="10000" placeholder="Change the main button on the home page to blue."></textarea>
+        <div id="change-photo-tools" class="photo-tools" hidden><label>Photo tool <select id="change-photo-tool"><option value="draw">Draw</option><option value="text">Text</option></select></label><input id="change-photo-text" aria-label="Text to place on photo" placeholder="Type a label, then click the photo" maxlength="120" hidden><button id="change-photo-undo" type="button" disabled>Undo</button><button id="change-photo-clear" type="button" disabled>Clear</button><p class="small">Draw on the photo, or choose Text and click to place a label. With the photo focused, Enter places text in the center. Your marks are included when sent.</p></div>
+        <canvas id="change-photo-canvas" tabindex="0" aria-label="Request photo: draw with the pointer; in Text mode click to place a label, or press Enter to place it in the center" hidden></canvas>
         <img id="change-screenshot" alt="Screenshot of the selected preview, attached to this request" hidden><p id="change-context" class="small"></p><p id="change-explanation" class="small"></p>
         <button id="make-changes" class="primary" disabled>Send request</button>
         <p id="change-status" role="status" aria-live="polite"></p>

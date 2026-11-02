@@ -1,5 +1,7 @@
+import {photoMarkup} from './photo-markup.js';
 export function changeRequest({api,getState,getSide,workflow,capture,previewReady=()=>true,poll,close}){
   const $=id=>document.getElementById(id),drafts=new Map();
+  const markup=photoMarkup({image:$('change-screenshot'),canvas:$('change-photo-canvas'),controls:$('change-photo-tools'),tool:$('change-photo-tool'),text:$('change-photo-text'),undo:$('change-photo-undo'),clear:$('change-photo-clear')});
   let target=null,image=null,capturing=false,captureGeneration=0;
   const hide=()=>{$('change-composer').close?.();$('change-composer').hidden=true;};
   let reviewId=null,submitting=false,opening=false,latest=null,notice='',activityKey='';
@@ -9,7 +11,7 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
   const provider=()=>getState().agent?.provider==='muse'?'Muse':getState().agent?.provider==='claude'?'Claude Code':'Codex';
   function render(rows){
     const state=getState(),id=state.record?.id;
-    if(id!==reviewId){target=null;image=null;captureGeneration++;capturing=false;hide();reviewId=id;latest=null;notice='';$('change-request').value=drafts.get(id)||readDraft();}
+    if(id!==reviewId){target=null;image=null;markup.reset();captureGeneration++;capturing=false;hide();reviewId=id;latest=null;notice='';$('change-request').value=drafts.get(id)||readDraft();}
     if(rows)latest=rows.findLast(row=>row.kind==='fix' && (row.reviewId===id || row.resultCommit && row.resultCommit===state.record?.identity?.changed))||null;
     const running=submitting || latest?.status==='running';
     $('make-changes').disabled=(!!id && state.status!=='ready') || state.busy || state.jobsRunning || !!state.previewVersion || running || opening || capturing || !$('change-request').value.trim();
@@ -49,7 +51,7 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
       let attachment;
       if(id){
         if(!context.location)throw Error('Wait for the current page to finish loading.');
-        const screenshot=image || await capture();
+        const screenshot=markup.value() || image || await capture();
         if(identity()!==capturedIdentity)throw Error('The page or version changed during capture. Your request is saved; try again.');
         attachment={side,commit,location:context.location,screenshot};
       }
@@ -74,7 +76,7 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
     render();
     target=selection?{...selection,identity:JSON.stringify([getState().record?.id,getState().record?.identity?.[getSide()==='original'?'base':'changed'],getSide(),workflow.getContext(getSide()).location])}:null;
     const generation=++captureGeneration,identity=target?.identity;
-    image=null;$('change-screenshot').hidden=true;capturing=true;notice='';render();
+    image=null;markup.reset();$('change-screenshot').hidden=true;capturing=true;notice='';render();
     try{
       const screenshot=await capture();
       if(generation!==captureGeneration)return;
