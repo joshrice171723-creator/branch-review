@@ -94,7 +94,7 @@
           >
             ↗ Reset item
           </button>
-          <button id="new-change" class="quiet" hidden>Make changes</button>
+          <button id="new-change" class="quiet" hidden>Request change</button>
         </div>
 
         <form id="preview-address"><label id="preview-address-label" for="preview-url">Changed:</label><input id="preview-url" type="text" aria-describedby="preview-url-error" placeholder="Waiting for page…" disabled><button id="preview-go" type="submit" disabled>Go</button><span id="preview-url-error" role="status"></span></form>
@@ -103,7 +103,7 @@
         <label class="change-prompt" for="change-request">What would you like to change?</label>
         <textarea id="change-request" rows="3" maxlength="10000" placeholder="Change the main button on the home page to blue."></textarea>
         <p id="change-context" class="small"></p><p id="change-explanation" class="small"></p>
-        <button id="make-changes" class="primary" disabled>Make changes</button>
+        <button id="make-changes" class="primary" disabled>Send request</button>
         <p id="change-status" role="status" aria-live="polite"></p>
         <button id="review-changes" class="primary" hidden>Review changes</button>
 </section>
@@ -166,6 +166,13 @@
         <div id="error" role="alert" hidden></div>
         <p id="revision-warning" class="inline-choice" role="status" hidden></p>
         <p id="review-branch-status" class="small" role="status" hidden></p>
+        <section id="agent-progress" hidden aria-label="Agent progress">
+          <h3 id="agent-progress-title" role="status" aria-live="polite"></h3>
+          <p id="agent-progress-detail"></p><p id="agent-progress-files" class="small"></p>
+          <button id="agent-progress-stop" class="secondary" hidden>Stop</button>
+          <button id="agent-progress-review" class="primary" hidden>Review update</button>
+          <button id="agent-progress-recovery" class="quiet" hidden>Inspect recovery details</button>
+        </section>
         <section id="review-workflow" hidden>
           <details id="review-context"><summary>About this change</summary><p id="active-review" class="active-review"></p>
           <p id="review-summary" class="small"></p>
@@ -179,10 +186,10 @@
             <h2 id="item-title"></h2>
             <p id="item-description"></p>
             <p id="item-instructions"></p>
-            <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Verify fix and next. If it is still wrong, report a problem.</p></section>
+            <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Looks good. If it is still wrong, request a change.</p></section>
             <details><summary>Expected result</summary><p id="item-expected"></p></details>
-            <p class="small muted">Use these checks to inspect the change, then choose Looks good or Needs a change.</p><div id="checks"></div>
-            <details id="item-more"><summary>More options</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Agent activity and recovery</button><label class="field-label" for="item-notes">Notes</label>
+            <p class="small muted">Check the result, then choose Looks good or Request change.</p><div id="checks"></div>
+            <details id="item-more"><summary>More options</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Technical details and recovery</button><label class="field-label" for="item-notes">Notes</label>
             <textarea id="item-notes" maxlength="4000" placeholder="Optional note"></textarea>
             <label class="field-label" for="item-outcome">Can’t check this?</label>
             <select id="item-outcome"><option value="">Choose an exception</option><option value="needs-fixes" hidden>Needs fixes</option><option value="blocked">Blocked — cannot test</option><option value="not-applicable">Not applicable</option></select>
@@ -306,9 +313,9 @@
         <details id="plan-advanced"><summary>Checklist tools</summary><div id="plan-advanced-actions" class="tool-actions"><button id="capture-item" class="quiet" disabled>Add this screen</button><button id="generate-plan">Generate with Codex</button><button id="copy-plan-instructions">Copy branch instructions</button><button id="plan-export">Export checklist</button></div></details>
         <button id="plan-save" class="primary">Save checklist</button></details>
       </section>
-      <section id="tools-updates" hidden><h3>Send fixes</h3><p>Your selected agent works in a dedicated isolated checkout. Leave the chat field blank for a new fix chat, or resume an existing one. Review the resulting branch before merging.</p><label for="codex-chat">Existing session UUID (optional, same provider)</label><input id="codex-chat" placeholder="New dedicated fix chat"><button id="send-codex" class="secondary">Review and send fix request</button><details class="workflow-section"><summary>Jobs and agent activity</summary><div id="job-list"></div></details><hr><h3>Branch updates</h3><p id="update-summary"></p><pre id="update-commits"></pre><div class="tool-actions"><button id="refresh-updates">Refresh analysis</button><button id="open-updated">Open updated branch</button></div><h3>Recommended retest order</h3><p class="small">Recommendations never carry a pass forward. Every new commit has its own checklist.</p><ol id="retest-advice"></ol><h3>Related branches</h3><div id="branch-relations"></div></section>
+      <section id="tools-updates" hidden><h3>Agent activity</h3><p>Inspect a previous run or recover an unfinished change.</p><details><summary>Advanced recovery and manual handoff</summary><label for="codex-chat">Existing session UUID (optional, same provider)</label><input id="codex-chat" placeholder="New dedicated fix chat"><button id="send-codex" class="secondary">Review and send fix request</button></details><details class="workflow-section" open><summary>Jobs and agent activity</summary><div id="job-list"></div></details><hr><details><summary>Version details</summary><h3>Branch updates</h3><p id="update-summary"></p><pre id="update-commits"></pre><div class="tool-actions"><button id="refresh-updates">Refresh analysis</button><button id="open-updated">Open updated branch</button></div><h3>Recommended retest order</h3><p class="small">Recommendations never carry a pass forward. Every new commit has its own checklist.</p><ol id="retest-advice"></ol><h3>Related branches</h3><div id="branch-relations"></div></details></section>
       <section id="tools-evidence" hidden><h3>Starting state</h3><p>Restore the active version's scenario data when you need a repeatable starting point.</p><button id="restore-data">Restore starting data</button><div id="evidence-tools"></div></section>
-      <section id="tools-checks" hidden><h3>Automated checks</h3><p>Runs configured scripts in the isolated Changed checkout. These results are separate from manual QA.</p><label for="check-select">Check</label><select id="check-select"></select><pre id="check-command"></pre><button id="run-check">Run selected check</button><h3>Prepare the next branch</h3><p>Starts its isolated database and servers in a spare environment while you keep reviewing. Opening that commit reuses the prepared preview.</p><select id="warm-branch" aria-label="Branch to prepare"></select><button id="warm-preview">Prepare next preview</button><div id="screen-checks"></div></section>
+      <section id="tools-checks" hidden><h3>Automated checks</h3><p>Runs configured scripts in the isolated Changed checkout. These results are separate from manual QA.</p><label for="check-select">Check</label><select id="check-select"></select><pre id="check-command"></pre><button id="run-check">Run selected check</button><details><summary>Advanced preview preparation</summary><h3>Prepare the next branch</h3><p>Starts its isolated database and servers in a spare environment while you keep reviewing. Opening that commit reuses the prepared preview.</p><select id="warm-branch" aria-label="Branch to prepare"></select><button id="warm-preview">Prepare next preview</button></details><div id="screen-checks"></div></section>
       <section id="tools-release" hidden><h3>Verify the published workflow</h3><div id="published-tools"></div></section>
     </dialog>
     <script type="module" src="/app.js"></script>

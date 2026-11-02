@@ -52,3 +52,16 @@ test('navigation during screenshot capture stops submission and preserves the dr
 });
 test('selected area stays pinned and is included in the fix request',async t=>{const h=harness(t),e=h.elements;h.view.open({location:'/tutorials',selector:'#cta',label:'Try sandbox',rect:{x:1,y:2,width:30,height:40}});assert.equal(e['change-composer'].hidden,false);e['change-request'].value='Blue';await e['make-changes'].onclick();assert.match(h.calls[0].data.requestText,/Selected area:.*#cta/);});
 test('selected area cannot be sent after navigating elsewhere',async t=>{const h=harness(t),e=h.elements;h.view.open({location:'/tutorials',selector:'#cta',label:'Try sandbox'});e['change-request'].value='Blue';h.flow.getContext=()=>({location:'/other'});await e['make-changes'].onclick();assert.equal(h.calls.length,0);assert.match(e['change-status'].textContent,/Right-click/);});
+
+test('agent result stays visible for explicit review and failure retains recovery',async t=>{
+ const h=harness(t),e=h.elements;
+ h.view.render([{id:'job',reviewId:'one',kind:'fix',status:'succeeded',sameBranch:true,applied:true,branch:'demo',commit:'old',resultCommit:'new',result:'Changed the headline.',committedFiles:['Home.tsx']}]);
+ assert.equal(e['agent-progress'].hidden,false);
+ assert.equal(e['agent-progress-review'].hidden,false);
+ assert.equal(e['agent-progress-detail'].textContent,'Changed the headline.');
+ assert.match(e['agent-progress-files'].textContent,/Home.tsx/);
+ assert.equal(h.calls.length,0);
+ h.view.render([{id:'job',reviewId:'one',kind:'fix',status:'failed',error:'CLI disconnected'}]);
+ assert.equal(e['agent-progress-recovery'].hidden,false);
+ assert.equal(e['agent-progress-review'].hidden,true);
+});

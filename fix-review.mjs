@@ -65,7 +65,7 @@ export function focusRetest(record,previous,files,requestedPath){
 }
 
 export function prepareRetest(record){
-  if(!record.fixComparison || record.retestVersion===2 || record.delivery || record.approval)return;
+  if(!record.fixComparison || record.retestVersion===4 || record.delivery || record.approval)return;
   record.requestHistory ||= [];
   // A later request for the same item replaces earlier revision requests, not findings from the same revision.
   const latest=new Map();
@@ -93,17 +93,17 @@ export function prepareRetest(record){
       if(destinations.length===1){item.path=destinations[0];delete item.originalPath;}
       item.title='Verify reported fix on '+item.path;
       item.description=findings.map(issue=>issue.actual).filter(Boolean).join('\n');
-      item.expected=findings.map(issue=>issue.expected).join('\n');
+      item.expected=record.retestOriginals[item.id].expected || findings.map(issue=>issue.actual || issue.expected).join('\n');
       item.instructions='Open the reported area in both previews. Complete any sign-in or sandbox entry shown first. Compare the reported problem before and after the fix, then check the expectations below.';
       item.focus='';
-      item.steps=findings.map(issue=>'The reported problem is resolved: '+(issue.actual || issue.expected));
+      item.steps=['The page matches the expected result above.'];
       item.steps.push('The affected control still works and remains readable.');
       for(const key of Object.keys(record.checks || {}))if(key.startsWith(item.id+':'))delete record.checks[key];
     }
   }
   const first=record.issues.find(issue=>issue.status==='needs-retest' && record.manifest.scenarios.some(item=>item.id===issue.scenario));
   if(first)record.cursor={itemId:first.scenario,view:'item'};
-  record.retestVersion=2;
+  record.retestVersion=4;
 }
 
 export function mergeFixPlan(previous,generated,files){

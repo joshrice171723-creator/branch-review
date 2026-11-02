@@ -121,7 +121,7 @@ export function guided({api,getState,poll,error,onSelect}) {
     $('item-expected').textContent=current.expected || current.steps.join(' ');
     const retests=r.issues.filter(issue=>issue.scenario===current.id && issue.status==='needs-retest');
     $('latest-fix').hidden=!retests.length;
-    $('latest-fix-expected').textContent=retests.map(issue=>issue.expected).join('\n');
+    $('latest-fix-expected').textContent=current.expected || current.steps.join(' ');
     $('verify-fix').hidden=true;
     $('verify-fix').disabled=!enabled || currentStatus!=='ready-to-retest' || !current.steps.every((_,i)=>r.checks[`${current.id}:${i}`]);
     $('item-status').textContent=statusLabels[currentStatus]+(dirty?' · unsaved':'');$('item-status').className=`item-status status-${currentStatus}`;

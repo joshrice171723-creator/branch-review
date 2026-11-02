@@ -80,7 +80,7 @@ export function batchReview({api,getState,getSide,workflow,capture,poll,error}){
       edit.onclick=()=>open(issue);remove.onclick=async()=>{remove.disabled=true;try{await api('/api/request-update',{id:r.id,issueId:issue.id,remove:true});await poll();}catch(e){error(e.message);remove.disabled=false;}};row.append(title,description,edit,remove);return row;
     }));}
 
-    $('report-problem').textContent='Needs a change';$('report-problem').disabled=!enabled;
+    $('report-problem').textContent='Request change';$('report-problem').disabled=!enabled;
     $('item-next').textContent='Looks good → Next';$('item-next').disabled=!enabled||saving||!!r?.issues.some(i=>i.scenario===r.cursor.itemId&&i.status!=='resolved'&&i.status!=='needs-retest');
     $('prepare-handoff').hidden=true;$('handoff-panel').hidden=true;
     if(r && r.cursor?.view==='results'&&count){$('results-action').hidden=true;$('results-message').hidden=false;$('results-message').textContent=reviewAccountedFor(r)?'Review your collected requests, then make the changes together.':'Finish reviewing the remaining items before sending these requests.';}else $('results-action').hidden=false;

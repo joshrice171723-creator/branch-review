@@ -93,6 +93,9 @@ try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') 
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
 const batch=batchReview({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error});
+$('report-problem').onclick=()=>reviewTools.requestChange();
+$('review-workflow').before($('change-composer'));
+const saveRequest=document.createElement('button');saveRequest.textContent='Save a request for later';saveRequest.className='secondary';saveRequest.onclick=()=>batch.open();$('item-more').append(saveRequest);
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
@@ -100,6 +103,8 @@ $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('new-change').onclick=()=>reviewTools.requestChange();
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
 const evidenceMenu=document.createElement('button');evidenceMenu.textContent='Evidence tools';evidenceMenu.className='secondary';evidenceMenu.onclick=()=>reviewTools.open('evidence');$('item-more').append(evidenceMenu);
+const checksMenu=document.createElement('button');checksMenu.textContent='Checks';checksMenu.className='secondary';checksMenu.onclick=()=>reviewTools.open('checks');$('item-more').append(checksMenu);
+const publishedChecks=document.createElement('button');publishedChecks.textContent='Verify published version';publishedChecks.className='secondary';publishedChecks.onclick=()=>reviewTools.open('release');$('published-findings').after(publishedChecks);
 const branchHistoryView=branchHistory({api,getState:()=>currentState,flush:reviewWorkflow.flush,poll,error});
 
 // Keep review history in Versions and diagnostics/changed files with the review.
@@ -468,6 +473,7 @@ async function poll() {
     if(currentState.previewVersion){$('review-branch-status').hidden=false;$('review-branch-status').textContent=`Previewing ${currentState.previewVersion.sha.slice(0,7)} · Branch stays at ${currentState.record.identity.source.slice(0,7)} · Use history to return or restore`;$('review-workflow').hidden=true;}
     branchHistoryView.render(currentState);
     reviewTools.render(currentState);batch.render(currentState);
+    publishedChecks.hidden=!['published','verified'].includes(currentState.record?.delivery?.stage);
     void activityView.render();
     renderFocusStatus();
     const ready = currentState.status === "ready";

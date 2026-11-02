@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {frontendOnly,groupedBranches,focusRetest,mergeFixPlan,carryUnchangedChecks,colorFixPlan,appearanceFixPlan} from '../fix-review.mjs';
+import {frontendOnly,groupedBranches,focusRetest,mergeFixPlan,carryUnchangedChecks,colorFixPlan,appearanceFixPlan,prepareRetest} from '../fix-review.mjs';
 const item=(id,path,file)=>({id,title:id,path,files:[file],steps:['Check color']});
 const home=item('home','/meta-clinic','apps/web/src/Home.tsx'),tutorial=item('tutorial','/meta-clinic/resources','apps/web/src/Tutorial.tsx');
 const prior={id:'review',title:'Two buttons',identity:{ref:'refs/heads/demo',source:'source',changed:'before'},manifest:{scenarios:[home,tutorial]},checks:{'home:0':true,'tutorial:0':true},items:{},issues:[]};
@@ -30,12 +30,12 @@ test('frontend-only preparation reuses data and skips setup; backend changes use
  const prepareSource=source.slice(source.indexOf('export async function prepare('),source.indexOf('export async function resetScenario')).replace('export async function','async function');
  async function exercise(files,dirty='',warm=false){
   const calls=[],saved=[];
-  const old={sha:'old',database:'existing_database',scenario:{path:'/demo'},runtime:'standby'};
+  const old={sha:'old',api:1,web:2,database:'existing_database',scenario:{path:'/demo'},runtime:'standby'};
   const context={previewHealth:async snapshot=>({sides:{original:{ok:typeof warm==='function'?warm(snapshot.original):warm}}}),project:{kind:'meta-clinic'},path:{join:(...parts)=>parts.join('/'),resolve:value=>value},previewRoot:'/previews',local:'/data',root:'/app',state:{comparison:{files}},slots:{standby:{api:1,web:2}},scenarioRecipe:()=> 'recipe',frontendOnly,createHash:()=>({update:()=>({digest:()=> 'hash'})}),exists:async()=>true,assertOwner:async()=>{},progress:()=>{},environment:()=>({APPLY_DEVELOPMENT_DATABASE:'new_database'}),
    readFile:async file=>{if(file==='/app/recipe')return'fixture';if(file.includes('-old-hash'))return JSON.stringify(old);throw Error('missing');},
    writeFile:async(file,data)=>saved.push(JSON.parse(data)),git:async(...args)=>args[0]==='diff'?files.join('\0'):'/repo/git',
    run:async(command,args)=>{if(command==='ruby')return 'BRANCH_REVIEW={"path":"/demo"}';if(args.includes('--git-common-dir'))return'/repo/git';if(args[0]==='status')return dirty;if(args[0]==='rev-parse')return'old';return'';},
-   lifecycle:async(...args)=>calls.push(args)};
+   clearDeadPidRecords:async()=>0,recoverPreviewPorts:async()=>false,lifecycle:async(...args)=>calls.push(args)};
   vm.createContext(context);vm.runInContext(prepareSource+';globalThis.prepare=prepare;',context);
   const result=await context.prepare('standby','new',files);return{calls,saved,result};
  }
@@ -90,4 +90,13 @@ test('latest request page wins when a shared stylesheet affects several screens'
  const record={identity:{changed:'after'},manifest:prior.manifest,issues:[],items:{}};
  focusRetest(record,{...prior,cursor:{itemId:home.id}},[...home.files,...tutorial.files],tutorial.path+'?test=1');
  assert.equal(record.cursor.itemId,tutorial.id);
+});
+
+test('fix verification uses the new plan expectation and migrates stale version-two text',()=>{
+ const current={id:'home',path:'/meta-clinic',steps:['New wording'],expected:'Built around your clinic day.'};
+ const record={fixComparison:{before:'old',after:'new'},retestVersion:2,manifest:{scenarios:[{...current,expected:'Connected from the start.'}]},retestOriginals:{home:current},items:{},checks:{},issues:[{scenario:'home',status:'needs-retest',actual:'Change the subheading',expected:'Connected from the start.'}]};
+ prepareRetest(record);
+ assert.equal(record.manifest.scenarios[0].expected,'Built around your clinic day.');
+ assert.equal(record.issues[0].expected,'Connected from the start.');
+ assert.equal(record.retestVersion,4);
 });
