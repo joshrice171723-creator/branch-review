@@ -1104,11 +1104,6 @@ html[data-theme="dark"] #history-dialog article{border-color:#484d55}
 #history-dialog .version-request{white-space:pre-wrap;line-height:1.6;max-height:160px;overflow:auto;overflow-wrap:anywhere}
 #history-dialog .version-request:focus-visible{outline:2px solid currentColor;outline-offset:3px}
 
-main.resizable-layout{grid-template-columns:var(--rail-width,230px) minmax(320px,1fr)}
-#review-dialog{width:min(680px,90vw);max-height:85vh;overflow:auto;box-sizing:border-box}
-#review-dialog>.review{display:block;border:0;padding:12px 0 0;overflow:visible}
-#review-dialog>.review>.eyebrow{display:none}
-#agent-progress{flex-shrink:0;margin:0 16px 12px;padding:12px;max-height:200px;overflow:auto}
 html[data-theme="dark"] #change-composer{background:#22252a;color:#f1f3f5;border-color:#59616b}
 
 #change-photo-canvas{display:block;max-width:100%;width:auto;height:auto;max-height:360px;object-fit:contain;touch-action:none;cursor:crosshair;margin:12px auto}
