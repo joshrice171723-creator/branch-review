@@ -1063,6 +1063,8 @@ html[data-theme="dark"] .empty h2{color:#f1f3f5}
 html[data-theme="dark"] dialog::backdrop{background:#0009}
 html[data-theme="dark"] #review-notice{background:#30343a;color:#f1f3f5}
 html[data-theme="dark"] :is(#report-problem,#toggle-branches){background:#30343a;color:#f1f3f5;border-color:#59616b}
+html[data-theme="dark"] .comparison-menu .comparison-options{background:#22252a;color:#f1f3f5;border-color:#59616b;box-shadow:0 8px 28px #0006}
+html[data-theme="dark"] .comparison-options input{accent-color:#8ab4f8}
 html[data-theme="dark"] .item-navigation{background:#22252a;border-color:#484d55}
 html[data-theme="dark"] :is(.queue-status,.queue-number,.status-passed .queue-number,.status-needs-fixes .queue-number,.status-blocked .queue-number,#item-save){color:#c4cbd3}
 html[data-theme="dark"] .queue-item[aria-current="true"]{background:#3b4654;border-color:#8ab4f8}
