@@ -97,15 +97,15 @@
         </div>
 
         <form id="preview-address"><label id="preview-address-label" for="preview-url">Changed:</label><input id="preview-url" type="text" aria-describedby="preview-url-error" placeholder="Waiting for page…" disabled><button id="preview-go" type="submit" disabled>Go</button><span id="preview-url-error" role="status"></span></form>
-        <div id="preview-area"><section hidden id="change-composer" aria-label="Request a change">
+        <div id="preview-area"><dialog hidden id="change-composer" aria-label="Request a change">
         <button id="close-change" class="quiet" aria-label="Close change request">×</button>
         <label class="change-prompt" for="change-request">What would you like to change?</label>
         <textarea id="change-request" rows="3" maxlength="10000" placeholder="Change the main button on the home page to blue."></textarea>
-        <p id="change-context" class="small"></p><p id="change-explanation" class="small"></p>
+        <img id="change-screenshot" alt="Screenshot of the selected preview, attached to this request" hidden><p id="change-context" class="small"></p><p id="change-explanation" class="small"></p>
         <button id="make-changes" class="primary" disabled>Send request</button>
         <p id="change-status" role="status" aria-live="polite"></p>
         <button id="review-changes" class="primary" hidden>Review changes</button>
-</section>
+</dialog>
           <div id="empty" class="empty">
             <span class="empty-mark">⑂</span>
             <p class="eyebrow">SEE WHAT CHANGED</p>
@@ -263,8 +263,8 @@
         </p>
       </aside>
       <div class="panel-divider panel-divider-left" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize changes panel" aria-controls="branches" title="Drag to resize changes panel"></div>
-      <div class="panel-divider panel-divider-right" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize guided review panel" aria-controls="guided-item" title="Drag to resize guided review panel"></div>
     </main>
+    <dialog id="review-dialog" aria-labelledby="review-dialog-title"><header class="dialog-heading"><h2 id="review-dialog-title">Review</h2><button id="close-review" class="quiet">Close</button></header></dialog>
     <dialog id="published-problem" aria-labelledby="published-problem-title"><header class="dialog-heading"><h2 id="published-problem-title">Report a published problem</h2><button id="close-published-problem" class="quiet">Close</button></header><p class="small">This creates a new finding. Your completed review and approval stay unchanged.</p><form id="published-problem-form"><label for="published-problem-item">Review item</label><select id="published-problem-item"></select><label for="published-expected">Expected behavior</label><textarea id="published-expected" maxlength="4000" required></textarea><label for="published-actual">What went wrong?</label><textarea id="published-actual" maxlength="4000" required></textarea><button id="published-problem-save" class="primary">Save finding</button><p id="published-problem-status" role="status"></p></form></dialog>
     <dialog id="problem-dialog" aria-labelledby="problem-title"><header class="dialog-heading"><h2 id="problem-title">Report a problem</h2><button id="close-problem" class="quiet">Close</button></header><button id="problem-evidence" class="secondary">Add evidence: screenshot, recording or replay</button><p id="problem-status" role="status"></p></dialog>
     <dialog id="diff-dialog" aria-labelledby="diff-title"><header class="dialog-heading"><h2 id="diff-title">Code changes</h2><button id="close-diff" class="quiet">Close</button></header><p id="diff-identity" class="small"></p><label for="diff-files" class="field-label">Changed file</label><select id="diff-files"></select><p id="diff-warning" role="status" class="small"></p><pre id="diff-patch"></pre></dialog>

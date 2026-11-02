@@ -35,8 +35,8 @@ function dismissOverlays() {
 }
 dismissOverlays();
 function resizablePanels(main) {
-  const left=main.querySelector('.panel-divider-left'),right=main.querySelector('.panel-divider-right');
-  if (!left || !right) return;
+  const left=main.querySelector('.panel-divider-left');
+  if (!left) return;
   main.classList.add('resizable-layout');
   const key='branch-review:panel-widths';
   let saved={};try{saved=JSON.parse(localStorage.getItem(key) || '{}') || {};}catch{}
@@ -44,18 +44,18 @@ function resizablePanels(main) {
   const limits=side=>{
     const width=main.getBoundingClientRect().width;
     const rail=main.querySelector('.branches').getBoundingClientRect().width;
-    const review=narrow()?0:main.querySelector('.review').getBoundingClientRect().width;
+    const review=0;
     return side==='left' ? [160,Math.max(160,width-review-320)] : [260,Math.max(260,width-rail-320)];
   };
   function set(side,value) {
     const [min,max]=limits(side), size=Math.round(Math.max(min,Math.min(max,value)));
     main.style.setProperty(side==='left'?'--rail-width':'--review-width',`${size}px`);
-    const handle=side==='left'?left:right;
+    const handle=left;
     handle.setAttribute('aria-valuemin',String(min));handle.setAttribute('aria-valuemax',String(max));handle.setAttribute('aria-valuenow',String(size));handle.setAttribute('aria-valuetext',`${size} pixels`);
     return size;
   }
   function persist(){try{localStorage.setItem(key,JSON.stringify(saved));}catch{}}
-  for(const [handle,side,selector] of [[left,'left','.branches'],[right,'right','.review']]) {
+  for(const [handle,side,selector] of [[left,'left','.branches']]) {
     if(Number.isFinite(saved[side]))saved[side]=set(side,saved[side]);
     else {const [min,max]=limits(side);handle.setAttribute('aria-valuemin',String(min));handle.setAttribute('aria-valuemax',String(max));handle.setAttribute('aria-valuenow',String(Math.round(main.querySelector(selector).getBoundingClientRect().width)));}
     handle.addEventListener('pointerdown',event=>{
@@ -74,7 +74,7 @@ function resizablePanels(main) {
       saved[side]=set(side,current+direction*(side==='left'?1:-1)*(event.shiftKey?40:10));persist();
     });
   }
-  window.addEventListener('resize',()=>{for(const side of ['left','right'])if(Number.isFinite(saved[side]) && (side==='left'||!narrow()))set(side,saved[side]);});
+  window.addEventListener('resize',()=>{for(const side of ['left'])if(Number.isFinite(saved[side]) && (side==='left'||!narrow()))set(side,saved[side]);});
 }
 
 resizablePanels(document.querySelector('main'));
@@ -93,9 +93,16 @@ try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') 
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
 const batch=batchReview({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error});
-$('review-workflow').before($('change-composer'));
+document.body.append($('change-composer'));
+const reviewDialog=$('review-dialog');reviewDialog.append(document.querySelector('.review'));
+const openReview=()=>{if(!reviewDialog.open)reviewDialog.showModal();};
+$('close-review').onclick=()=>reviewDialog.close();
+const reviewButton=document.createElement('button');reviewButton.id='open-review';reviewButton.className='toolbar-icon labeled-tool';reviewButton.textContent='Review';reviewButton.onclick=openReview;$('toolbar-history').before(reviewButton);
+$('show-results').addEventListener('click',openReview);
+$('item-queue').addEventListener('click',event=>{if(event.target.closest('.queue-item'))openReview();});
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
+$('preview-area').after($('agent-progress'));
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
@@ -170,6 +177,7 @@ function error(message) {
   $("error").append(document.createTextNode(summary));
   if(technical){const details=document.createElement('details'),label=document.createElement('summary'),body=document.createElement('pre');label.textContent='Technical details';body.textContent=technical;body.style.whiteSpace='pre-wrap';details.append(label,body);$("error").append(details);}
   $("error").hidden = !message;
+  if(message)openReview();
   if(message)$("error").scrollIntoView({block:'nearest'});
 }
 const branchTitle=branch=>branch.subject==='fix: address Branch Review findings' && branch.displaySubject ? `${branch.displaySubject} · ${branch.sha.slice(0,7)}` : branch.subject;
@@ -272,6 +280,7 @@ async function select(branch,reveal=false) {
   selected = branch;
   if(reveal){ $('branch-brief').dataset.selecting=branch.sha===currentState.record?.identity.source && [branch.ref,...branch.aliases].includes(currentState.record?.identity.ref)?'':'true'; $('branch-brief').hidden=!!currentState.record && !$('branch-brief').dataset.selecting; }
   $('branch-brief').open = reveal || !currentState.record || ![branch.ref,...branch.aliases].includes(currentState.comparison?.branch.ref);
+  if(reveal)openReview();
   if(reveal)$('branch-brief').scrollIntoView({block:'start'});
   branchList();
   $("title").textContent = branchTitle(branch);
@@ -314,6 +323,7 @@ async function select(branch,reveal=false) {
   }
 }
 async function openBranch(branch) {
+  reviewDialog.close();
   if(currentState.busy || openingSelection?.starting)return;
   if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha && (!branch.fixJob || currentState.record.fixComparison))return;
   if(!await reviewWorkflow.flush())return;
@@ -479,7 +489,7 @@ async function poll() {
     const ready = currentState.status === "ready";
     const previewReady=ready || currentState.status==='preview-ready';
     pendingChecks.hidden=currentState.status!=='preview-ready';
-    if(currentState.status==='preview-ready')$('change-composer').hidden=true;
+    if(currentState.status==='preview-ready'){$('change-composer').close();$('change-composer').hidden=true;}
     renderAddress();
       const publishing=currentState.busy && currentState.record?.delivery?.stage==='deploying';
       const release=currentState.record?.delivery;
