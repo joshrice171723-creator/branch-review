@@ -113,6 +113,10 @@ export class ReviewStore {
     for (const key of ['expected','actual']) if (typeof input[key] !== 'string' || !input[key].trim() || input[key].length > 4000) throw new Error('Describe expected and actual behavior (up to 4,000 characters each).');
     if (!r.manifest.scenarios.some(s => s.id === input.scenario)) throw new Error('Choose a scenario for this finding.');
     const issue = { id:randomUUID(), expected:input.expected.trim(), actual:input.actual.trim(), scenario:input.scenario, side:published ? 'published' : input.side === 'original' ? 'original' : 'changed', status:'open', createdAt:new Date().toISOString(), commit:input.side === 'original' ? r.identity.base : r.identity.changed, location:String(input.location || '').slice(0,700), consoleErrors:Array.isArray(input.consoleErrors) ? input.consoleErrors.slice(-10).map(s=>String(s).slice(0,500)) : [] };
+    if(input.target){
+      if(typeof input.target.selector!=='string' || input.target.selector.length>1000 || typeof input.target.label!=='string' || input.target.label.length>160)throw Error('Choose the preview area again.');
+      issue.target={selector:input.target.selector,label:input.target.label};
+    }
     if (input.screenshot) {
       if (typeof input.screenshot !== 'string' || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(input.screenshot)) throw new Error('Screenshot must be PNG.');
       const data = Buffer.from(input.screenshot.split(',')[1], 'base64');

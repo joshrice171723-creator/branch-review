@@ -52,6 +52,7 @@ export function fixRequest(record) {
     if (saved.reason) lines.push(`Reason: ${saved.reason}`);
     for (const issue of record.issues.filter(issue=>issue.scenario===item.id && issue.status!=='resolved')) {
       lines.push(`Finding ${issue.id}: ${issue.actual}`, `Expected: ${issue.expected}`, `Observed in ${issue.side} at ${issue.commit}, ${issue.location || item.path}`);
+      if(issue.target)lines.push('Selected area: '+JSON.stringify(issue.target));
       if (issue.screenshot) lines.push(`Screenshot attachment: ${issue.screenshot}`);
       if (issue.video) lines.push(`Recording attachment: ${issue.video}`);
     }

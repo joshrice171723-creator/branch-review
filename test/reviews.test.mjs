@@ -91,3 +91,14 @@ test('regenerated item IDs retain findings only with an unambiguous route and so
   const ambiguous={...updated,scenarios:[...updated.scenarios,{...updated.scenarios[0],id:'another'}]};
   const blocked=await store.open({...nextSnapshot,changed:{sha:'d'}},ambiguous,'recipe');assert.equal(blocked.issues[0].scenario,'purple');
 });
+
+test('queued photo requests retain their selected area and attachment after restarting the store',async()=>{
+ const directory=await mkdtemp('.local/reviews-queue-test-'),store=await new ReviewStore(directory).load();
+ const r=await store.open(snapshot,defaultManifest,'recipe');
+ const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV1sAAAAASUVORK5CYII=';
+ await store.issue(r.id,{scenario:'intake',actual:'Change this to blue',expected:'Change this to blue',side:'changed',location:'/clinic',target:{selector:'#cta',label:'Button'},screenshot:'data:image/png;base64,'+png});
+ const restored=(await new ReviewStore(directory).load()).get(r.id),issue=restored.issues[0];
+ assert.equal(issue.actual,'Change this to blue');assert.deepEqual(issue.target,{selector:'#cta',label:'Button'});assert.equal(issue.status,'open');
+ assert.equal((await readFile(path.join(directory,'screenshots',issue.screenshot))).toString('base64'),png);
+ await assert.rejects(store.issue(r.id,{scenario:'intake',actual:'Blue',expected:'Blue',target:{selector:42,label:'Button'}}),/Choose the preview area/);
+});

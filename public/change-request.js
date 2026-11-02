@@ -18,12 +18,12 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
     $('change-request').disabled=running || opening || !!state.previewVersion;
     $('checklist-advanced').hidden=!id;
     $('change-context').textContent=target?`Selected: ${target.label} · ${target.location}`:id?`${getSide()==='original'?'Original':'Changed'} · ${workflow.getContext(getSide()).location || 'Waiting for page…'} · screenshot included when sent`:'No preview open yet.';
-    $('change-explanation').textContent=id?`${provider()} saves a new commit on this branch. Use history to preview or restore earlier versions.`:`${provider()} creates a work branch from the remote default branch. You review before publishing.`;
+    $('change-explanation').textContent='Add requests now; apply them together after you finish reviewing.';
     $('change-status').textContent=notice || (capturing?'Capturing screenshot…':'') || (latest?.previewReady && !previewReady()?'Loading the changed page…':'') || latest?.phase || (running?`${provider()} is making your changes…`:latest?.status==='succeeded'?'Your changes are ready to review.':latest && ['failed','interrupted','cancelled'].includes(latest.status)?`Changes need attention: ${latest.error || 'The run did not finish. Open Agent fixes for details.'}`:'');
     if(!$('change-composer').hidden && !notice && !capturing && !running)$('change-status').textContent='';
     $('review-changes').hidden=latest?.status!=='succeeded' || !latest.resultCommit || latest.resultCommit===latest.commit || latest.resultCommit===state.record?.identity?.changed || !!latest.dirty;
     $('review-changes').disabled=opening || state.busy || running || !previewReady();
-    $('agent-progress').hidden=!latest;
+    $('agent-progress').hidden=!latest || latest.status==='succeeded' && latest.resultCommit===state.record?.identity?.changed;
     const nextActivityKey=latest?`${latest.id}:${latest.status}`:'';
     if(activityKey!==nextActivityKey){activityKey=nextActivityKey;$('agent-progress-details').open=running || !!latest?.error;}
     $('agent-progress-title').textContent=running?`${provider()} is working`:latest?.status==='succeeded'?(latest.resultCommit===state.record?.identity?.changed?'Latest agent change':'Changes ready to review'):'Changes need attention';
@@ -55,9 +55,11 @@ export function changeRequest({api,getState,getSide,workflow,capture,previewRead
         if(identity()!==capturedIdentity)throw Error('The page or version changed during capture. Your request is saved; try again.');
         attachment={side,commit,location:context.location,screenshot};
       }
-      const requestText=`Requested change:\n${text}\n\n${id?`Preview context: ${side} at ${context.location || 'the selected review screen'}${context.heading?'\nPage heading: '+context.heading:''}`:'This is a new change from the remote default branch; no preview has been opened.'}${target?'\nSelected area: '+JSON.stringify({selector:target.selector,label:target.label,rect:target.rect}):''}\nApply only this request. The old checklist is context, not additional work.`;
-      const {result}=await api(id?'/api/job':'/api/new-change',{...(id?{id,kind:'fix'}:{}),requestText,...(attachment?{attachment}:{})});
-      if(getState().record?.id===id){latest=result;drafts.delete(id);storeDraft('');$('change-request').value='';hide();}
+      if(!id)throw Error('Open a branch before adding a change request.');
+      const item=state.record.manifest.scenarios.find(item=>item.id===state.record.cursor.itemId);
+      if(!item)throw Error('Choose a review item before adding a request.');
+      await api('/api/issue',{id,scenario:item.id,side,commit,location:context.location,actual:text,expected:text,screenshot:attachment.screenshot,...(target?{target:{selector:target.selector,label:target.label}}:{})});
+      if(getState().record?.id===id){drafts.delete(id);storeDraft('');$('change-request').value='';hide();}
       await poll();
     }catch(error){if(getState().record?.id===id)notice=error.message;}
     finally{submitting=false;render();}

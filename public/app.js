@@ -104,6 +104,9 @@ const checksMenu=document.createElement('button');checksMenu.textContent='Checks
 $('item-more').prepend($('item-background'));
 $('item-more').append($('files').closest('details'),$('diagnostic-log').closest('details'));
 $('review-context').append($('review-branch-status'));
+$('item-more').querySelector('summary').textContent='Advanced review options';
+$('item-more').open=false;$('tools-workspace').append($('item-more'));
+$('review-workflow').before($('batch-requests'));
 const publishedChecks=document.createElement('button');publishedChecks.textContent='Verify published version';publishedChecks.className='secondary';publishedChecks.onclick=()=>reviewTools.open('release');$('published-findings').after(publishedChecks);
 const branchHistoryView=branchHistory({api,getState:()=>currentState,flush:reviewWorkflow.flush,poll,error});
 

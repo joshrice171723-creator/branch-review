@@ -63,12 +63,12 @@ export function batchReview({api,getState,getSide,workflow,capture,poll,error}){
     }));if(!listDialog.open)listDialog.showModal();
   }
   requests.onclick=showList;
-  $('item-next').onclick=async()=>{if(saving)return;saving=true;try{if(!await workflow.flush())return;await api('/api/item-accept',{id:getState().record.id,itemId:getState().record.cursor.itemId});await poll();await next();}catch(e){error(e.message);}finally{saving=false;}};
-  send.onclick=async()=>{if(saving)return;saving=true;send.disabled=true;try{if(!await workflow.flush())return;const r=getState().record;await api('/api/job',{id:r.id,kind:'fix',batch:true,requestText:fixRequest({...r,issues:openIssues(r),manifest:{...r.manifest,scenarios:r.manifest.scenarios.filter(item=>openIssues(r).some(issue=>issue.scenario===item.id))}})});await poll();}catch(e){error(e.message);}finally{saving=false;}};
+  $('item-next').onclick=async()=>{if(saving)return;saving=true;try{if(!await workflow.flush())return;const r=getState().record;if(!openIssues(r).some(issue=>issue.scenario===r.cursor.itemId))await api('/api/item-accept',{id:r.id,itemId:r.cursor.itemId});await poll();await next();}catch(e){error(e.message);}finally{saving=false;}};
+  send.onclick=async()=>{if(saving || !reviewAccountedFor(getState().record))return;saving=true;send.disabled=true;try{if(!await workflow.flush())return;const r=getState().record;await api('/api/job',{id:r.id,kind:'fix',batch:true,requestText:fixRequest({...r,issues:openIssues(r),manifest:{...r.manifest,scenarios:r.manifest.scenarios.filter(item=>openIssues(r).some(issue=>issue.scenario===item.id))}})});await poll();}catch(e){error(e.message);}finally{saving=false;}};
   return {open:()=>open(),openTarget:selection=>open(null,selection),render(state){
     const r=state.record,enabled=!!r&&state.status==='ready'&&!state.busy&&!state.jobsRunning&&!state.previewVersion&&!isPublished(r),count=r?openIssues(r).length:0;
-    requests.hidden=!r||!count;requests.textContent=`${count} change${count===1?'':'s'} requested`;requests.disabled=!enabled;skip.disabled=!enabled;
-    send.hidden=!r||r.cursor?.view!=='results'||!count;send.textContent=count===1?'Make this change':`Make these ${count} changes`;send.disabled=!enabled||saving||!reviewAccountedFor(r);
+    requests.hidden=!r||!count;requests.textContent=`${count} queued change${count===1?'':'s'} · View`;requests.disabled=!enabled;skip.disabled=!enabled;
+    send.hidden=!r||r.cursor?.view!=='results'||!count;send.textContent=`Apply ${count} queued change${count===1?'':'s'}`;send.disabled=!enabled||saving||!reviewAccountedFor(r);
     const inSummary=!!r && r.cursor?.view==='results',unfinished=r?r.manifest.scenarios.filter(item=>['not-started','in-progress'].includes(itemStatus(r,item))):[],retests=r?r.manifest.scenarios.filter(item=>itemStatus(r,item)==='ready-to-retest'):[];
     continueReview.hidden=!inSummary||!unfinished.length;continueReview.disabled=!enabled;continueReview.textContent=`Continue ${unfinished.length} unfinished item${unfinished.length===1?'':'s'}`;
     verify.hidden=!inSummary||!retests.length;verify.disabled=!enabled;verify.textContent=`Verify ${retests.length} fix${retests.length===1?'':'es'}`;
@@ -79,7 +79,7 @@ export function batchReview({api,getState,getSide,workflow,capture,poll,error}){
       edit.onclick=()=>open(issue);remove.onclick=async()=>{remove.disabled=true;try{await api('/api/request-update',{id:r.id,issueId:issue.id,remove:true});await poll();}catch(e){error(e.message);remove.disabled=false;}};row.append(title,description,edit,remove);return row;
     }));}
 
-    $('item-next').textContent=r?.manifest.scenarios.length===1?'Looks good':'Looks good → Next';$('item-next').disabled=!enabled||saving||!!r?.issues.some(i=>i.scenario===r.cursor.itemId&&i.status!=='resolved'&&i.status!=='needs-retest');
+    $('item-next').textContent=r && openIssues(r).some(issue=>issue.scenario===r.cursor.itemId)?'Continue':r?.manifest.scenarios.length===1?'Looks good':'Looks good → Next';$('item-next').disabled=!enabled||saving;
     $('prepare-handoff').hidden=true;$('handoff-panel').hidden=true;
     if(r && r.cursor?.view==='results'&&count){$('results-action').hidden=true;$('results-message').hidden=false;$('results-message').textContent=reviewAccountedFor(r)?'Review your collected requests, then make the changes together.':'Finish reviewing the remaining items before sending these requests.';}else $('results-action').hidden=false;
     if(inSummary && (unfinished.length||retests.length)){$('results-action').hidden=true;$('results-message').hidden=false;$('results-message').textContent='Continue the unfinished items and verify completed fixes before making another batch of changes.';}
