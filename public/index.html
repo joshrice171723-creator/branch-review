@@ -94,7 +94,6 @@
           >
             ↗ Reset item
           </button>
-          <button id="new-change" class="quiet" hidden>Request change</button>
         </div>
 
         <form id="preview-address"><label id="preview-address-label" for="preview-url">Changed:</label><input id="preview-url" type="text" aria-describedby="preview-url-error" placeholder="Waiting for page…" disabled><button id="preview-go" type="submit" disabled>Go</button><span id="preview-url-error" role="status"></span></form>
@@ -166,6 +165,7 @@
         <div id="error" role="alert" hidden></div>
         <p id="revision-warning" class="inline-choice" role="status" hidden></p>
         <p id="review-branch-status" class="small" role="status" hidden></p>
+        <p class="small" id="request-hint">To request a change, right-click the part of the preview you want changed.</p>
         <section id="agent-progress" hidden aria-label="Agent progress">
           <h3 id="agent-progress-title" role="status" aria-live="polite"></h3>
           <p id="agent-progress-detail"></p><p id="agent-progress-files" class="small"></p>
@@ -186,9 +186,9 @@
             <h2 id="item-title"></h2>
             <p id="item-description"></p>
             <p id="item-instructions"></p>
-            <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Looks good. If it is still wrong, request a change.</p></section>
+            <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Looks good. If it is still wrong, right-click the affected area in the preview.</p></section>
             <details><summary>Expected result</summary><p id="item-expected"></p></details>
-            <p class="small muted">Check the result, then choose Looks good or Request change.</p><div id="checks"></div>
+            <p class="small muted">Check the result, then choose Looks good. To request a change, right-click the preview.</p><div id="checks"></div>
             <details id="item-more"><summary>More options</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Technical details and recovery</button><label class="field-label" for="item-notes">Notes</label>
             <textarea id="item-notes" maxlength="4000" placeholder="Optional note"></textarea>
             <label class="field-label" for="item-outcome">Can’t check this?</label>
@@ -197,7 +197,7 @@
             </details>
             <div class="save-line"><span id="item-save" role="status" aria-live="polite">Saved</span><button id="retry-item-save" class="quiet">Save now</button></div>
             <div id="unfinished-choice" class="inline-choice" hidden><p>This item is unfinished. Leave it open and continue?</p><button id="keep-testing" class="quiet">Keep testing</button><button id="leave-unfinished" class="secondary">Leave unfinished and continue</button></div>
-            <button id="report-problem" class="secondary">Report a problem</button><div class="item-navigation"><button id="item-previous" class="secondary">← Previous</button><button id="item-next" class="primary">Next item →</button></div>
+            <div class="item-navigation"><button id="item-previous" class="secondary">← Previous</button><button id="item-next" class="primary">Next item →</button></div>
           </section>
           <section id="guided-results" hidden aria-label="Review results">
             <h2 id="results-title">Your review summary</h2>

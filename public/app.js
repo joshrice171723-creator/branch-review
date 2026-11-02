@@ -93,14 +93,11 @@ try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') 
 const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
 const batch=batchReview({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error});
-$('report-problem').onclick=()=>reviewTools.requestChange();
 $('review-workflow').before($('change-composer'));
-const saveRequest=document.createElement('button');saveRequest.textContent='Save a request for later';saveRequest.className='secondary';saveRequest.onclick=()=>batch.open();$('item-more').append(saveRequest);
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
-$('new-change').onclick=()=>reviewTools.requestChange();
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
 const evidenceMenu=document.createElement('button');evidenceMenu.textContent='Evidence tools';evidenceMenu.className='secondary';evidenceMenu.onclick=()=>reviewTools.open('evidence');$('item-more').append(evidenceMenu);
 const checksMenu=document.createElement('button');checksMenu.textContent='Checks';checksMenu.className='secondary';checksMenu.onclick=()=>reviewTools.open('checks');$('item-more').append(checksMenu);
@@ -477,7 +474,6 @@ async function poll() {
     void activityView.render();
     renderFocusStatus();
     const ready = currentState.status === "ready";
-    $('new-change').hidden=!ready || !currentState.record;
     const previewReady=ready || currentState.status==='preview-ready';
     pendingChecks.hidden=currentState.status!=='preview-ready';
     if(currentState.status==='preview-ready')$('change-composer').hidden=true;
@@ -618,7 +614,7 @@ window.addEventListener("message", (event) => {
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:change-target' && currentState.status==='ready' && !currentState.busy){
     const data=event.data;if(typeof data.location!=='string' || !data.location.startsWith('/') || !data.target)return;
     toggle(side);reviewWorkflow.context(side,{...reviewWorkflow.getContext(side),location:data.location});renderAddress();
-    batch.openTarget({location:data.location,selector:String(data.target.selector || '').slice(0,1000),label:String(data.target.label || '').slice(0,160),rect:data.target.rect});
+    reviewTools.requestChange({location:data.location,selector:String(data.target.selector || '').slice(0,1000),label:String(data.target.label || '').slice(0,160),rect:data.target.rect});
   }
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:active' && $('layout-mode').value==='side-by-side')toggle(side);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:shortcut')runShortcut(event.data.command);
