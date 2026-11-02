@@ -416,7 +416,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
       selected.plan=await plans.get(selected.branch.sha) || selected.plan;
       return json(res,200,selected);
     }
-    if(req.method==='GET' && url.pathname==='/api/versions')return json(res,200,await branchVersions(git,store.get(url.searchParams.get('id'))));
+    if(req.method==='GET' && url.pathname==='/api/versions')return json(res,200,await branchVersions(git,store.get(url.searchParams.get('id')),jobs.rows));
     if(req.method==='GET' && url.pathname==='/api/commits')return json(res,200,await commitHistory(git,url.searchParams.get('sha')));
     if(req.method==='GET' && url.pathname==='/api/changes')return json(res,200,await changedFiles(git,url.searchParams.get('base'),url.searchParams.get('changed')));
     if(req.method==='GET' && url.pathname==='/api/diff')return json(res,200,await fileDiff(git,url.searchParams.get('base'),url.searchParams.get('changed'),url.searchParams.get('file')));

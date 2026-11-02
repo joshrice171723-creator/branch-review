@@ -20,7 +20,7 @@ function harness(t){
   globalThis.document={body,createElement:tag=>new Element(tag),getElementById:id=>elements[id]};
   globalThis.confirm=()=>true;t.after(()=>{delete globalThis.document;delete globalThis.confirm;});
   const state={record:{id:'review',identity:{ref:'refs/heads/demo'}},previewVersion:null};
-  const history={tip:'latest',ref:'refs/heads/demo',versions:[{sha:'latest',subject:'New heading',date:'2026-11-01T12:00:00Z'},{sha:'older',subject:'Old heading'},{sha:'base',subject:'Starting point before this branch',startingPoint:true}]};
+  const history={tip:'latest',ref:'refs/heads/demo',versions:[{sha:'latest',subject:'New heading',request:'Change this to blue.\n\nKeep <button> text.',date:'2026-11-01T12:00:00Z'},{sha:'older',subject:'Old heading'},{sha:'base',subject:'Starting point before this branch',startingPoint:true}]};
   const calls=[];let fail=false;
   branchHistory({getState:()=>state,api:async(endpoint,data)=>{calls.push({endpoint,data});if(fail)throw Error('Preview failed');return history;},flush:async()=>true,poll:async()=>{},error:()=>{}});
   const dialog=body.children.find(child=>child.tag==='dialog');
@@ -29,7 +29,7 @@ function harness(t){
 
 test('versions distinguish latest and current preview; viewing closes modal without restoring',async t=>{
   const h=harness(t);await h.elements['toolbar-history'].onclick();
-  let rows=h.rows();assert.equal(rows.length,3);assert.equal(rows[0].querySelectorAll('button').length,1);
+  let rows=h.rows();assert.equal(rows[0].querySelectorAll('p').find(p=>p.className==='version-request').textContent,'Change this to blue.\n\nKeep <button> text.');assert.equal(rows.length,3);assert.equal(rows[0].querySelectorAll('button').length,1);
   assert.equal(rows[0].querySelectorAll('button')[0].textContent,'Viewing now');
   const preview=rows[1].querySelectorAll('button')[0];assert.equal(preview.textContent,'View this version');
   await preview.onclick();assert.equal(h.dialog.open,false);assert.equal(h.elements.changed.clicked,true);
@@ -46,4 +46,10 @@ test('failed preview stays open and can be retried; restore keeps explicit branc
   let confirmed='';globalThis.confirm=message=>{confirmed=message;return false;};await restore.onclick();
   assert.match(confirmed,/all tracked files on demo/);assert.equal(h.calls.at(-1).endpoint,'/api/version-preview');
   globalThis.confirm=()=>true;await restore.onclick();assert.deepEqual(h.calls.at(-1),{endpoint:'/api/version-restore',data:{id:'review',sha:'older',expected:'latest',confirmation:'RESTORE older ON refs/heads/demo'}});
+});
+
+test('version list shows the saved request as text and identifies versions without requests',async t=>{
+  const h=harness(t);await h.elements['toolbar-history'].onclick();
+  assert.equal(h.rows()[1].querySelectorAll('p').find(p=>p.className==='version-request').textContent,'No saved request for this version.');
+  assert.equal(h.rows()[2].querySelectorAll('p').find(p=>p.className==='version-request').textContent,'Before changes on this branch.');
 });

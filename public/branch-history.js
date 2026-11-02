@@ -24,13 +24,13 @@ export function branchHistory({api,getState,flush,poll,error}){
         const row=document.createElement('article'),title=document.createElement('h3'),meta=document.createElement('p'),label=document.createElement('span');
         const isLatest=version.sha===history.tip,isViewed=version.sha===viewed;
         row.className=isViewed?'version-current':'';
-        title.textContent=version.subject;meta.className='small muted';
+        title.textContent=version.request?'Requested change':version.subject;meta.className='small muted';
         meta.textContent=version.date?new Date(version.date).toLocaleString():'';
         label.className='version-label';label.textContent=[isLatest?'Latest version':version.startingPoint?'Starting point':'Earlier version',isViewed?'Viewing now':''].filter(Boolean).join(' · ');
         const preview=document.createElement('button');preview.textContent=isViewed?'Viewing now':'View this version';preview.className='secondary';preview.disabled=isViewed || !!state.busy;
         preview.onclick=()=>act(isLatest?'/api/version-latest':'/api/version-preview',isLatest?{}:{sha:version.sha});
         const details=document.createElement('details'),summary=document.createElement('summary'),commit=document.createElement('p');
-        summary.textContent='Version details';commit.className='small muted';commit.textContent='Commit '+version.sha.slice(0,7);details.append(summary,commit);
+        summary.textContent='Version details';commit.className='small muted';commit.textContent=version.subject+' · Commit '+version.sha.slice(0,7);details.append(summary,commit);
         if(!isLatest){
           const explanation=document.createElement('p'),restore=document.createElement('button');
           explanation.textContent='To keep this version, restore all tracked files on this branch. This adds a new commit, preserves the full history, and does not push anything.';
@@ -38,7 +38,11 @@ export function branchHistory({api,getState,flush,poll,error}){
           restore.onclick=()=>{if(confirm(`Restore all tracked files on ${history.ref.replace('refs/heads/','')} to “${version.subject}” (${version.sha.slice(0,7)})? This adds a new commit and preserves the full history. Nothing is pushed.`))return act('/api/version-restore',{sha:version.sha,expected:history.tip,confirmation:`RESTORE ${version.sha} ON ${history.ref}`});};
           details.append(explanation,restore);
         }
-        const copy=document.createElement('div');copy.className='version-copy';copy.append(label,title,meta);
+        const copy=document.createElement('div');copy.className='version-copy';copy.append(label,title);
+        const request=document.createElement('p');request.className='version-request';
+        request.textContent=version.request || (version.startingPoint?'Before changes on this branch.':'No saved request for this version.');
+        if(version.request){request.tabIndex=0;request.setAttribute('role','region');request.setAttribute('aria-label','Requested change');}
+        copy.append(request,meta);
         const main=document.createElement('div');main.className='version-main';main.append(copy,preview);row.append(main,details);return row;
       }));
       notice.textContent=history.truncated?'Showing the most recent 200 changes and the starting point.':'';

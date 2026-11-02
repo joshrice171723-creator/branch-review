@@ -67,3 +67,22 @@ test('interrupted proposals remain recoverable and apply after a dirty checkout 
   const next=await git('commit-tree',await git('rev-parse',source+'^{tree}'),'-p',job.resultCommit,'-m','Another revision');
   await advanceBranch(git,run,record.identity.ref,job.resultCommit,next);assert.equal(await git('rev-parse','HEAD'),previousHead);assert.equal(await git('rev-parse',record.identity.ref),next);
 });
+
+test('version requests match exact fix commits and preserve user wording without agent context',async()=>{
+  const record={identity:{ref:'refs/heads/demo',base:'base'}};
+  const git=async(command)=>command==='rev-parse'?'tip':command==='merge-base'?'base':['tip\t2026-11-01\tFix','legacy\t2026-10-31\tOlder fix','manual\t2026-10-30\tManual commit','plain\t2026-10-29\tCustom request'].join('\n');
+  const request='Change this to blue.\n\nKeep the label exactly as it is.';
+  const jobs=[
+    {kind:'fix',resultCommit:'tip',commit:'previous',requestText:`Requested change:\n${request}\n\nPreview context: changed at /home\nSelected area: #button\nApply only this request.`},
+    {kind:'fix',resultCommit:'other',requestText:'This belongs to a different version'},
+    {kind:'plan',resultCommit:'tip',requestText:'Not a fix request'},
+    {kind:'fix',resultCommit:'legacy',requestText:'# Branch Review: fixes requested\n\nFinding one: Make the button blue.\nKeep its size.\nExpected: Blue\nObserved in changed\nFinding two: Use white text.\nExpected: White\nObserved in changed'},
+    {kind:'fix',resultCommit:'plain',requestText:'Change the title.\nAttached current page: /home\nObserved changed commit: old'}
+  ];
+  const history=await branchVersions(git,record,jobs);
+  assert.equal(history.versions[0].request,request);
+  assert.equal(history.versions[1].request,'Make the button blue.\nKeep its size.\n\nUse white text.');
+  assert.equal(history.versions[2].request,null);
+  assert.equal(history.versions[3].request,'Change the title.');
+  assert.equal(history.versions.at(-1).request,undefined);
+});

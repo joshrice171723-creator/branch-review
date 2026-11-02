@@ -23,13 +23,21 @@ export async function advanceBranch(git,run,ref,expected,commit){
   if(await git('rev-parse',ref)!==commit)throw Error('The branch moved again. Reopen its latest version before continuing.');
 }
 
-export async function branchVersions(git,record){
+export async function branchVersions(git,record,jobs=[]){
   const ref=record.identity.ref;
   if(!/^refs\/heads\/.+/.test(ref))throw Error('Open a local work branch to view its versions.');
   const tip=await git('rev-parse','--verify',ref),base=record.branchBaseline || record.identity.base;
   const boundary=await git('merge-base',base,tip);
   const output=await git('log','--first-parent','-200','--format=%H%x09%aI%x09%s',`${boundary}..${tip}`,'--');
   const versions=output.split('\n').filter(Boolean).map(line=>{const [sha,date,...subject]=line.split('\t');return {sha,date,subject:subject.join('\t')};});
+  for(const version of versions){
+    const job=jobs.findLast(job=>job.kind==='fix' && job.resultCommit===version.sha && job.resultCommit!==job.commit);
+    const text=job?.requestText?.replace(/\r\n/g,'\n');
+    version.request=null;
+    if(text?.startsWith('Requested change:\n'))version.request=text.slice('Requested change:\n'.length).split(/\n\n(?:Preview context:|This is a new change from the remote default branch;)/)[0].trim();
+    else if(text?.startsWith('# Branch Review: fixes requested'))version.request=[...text.matchAll(/^Finding [^:\n]+: ([\s\S]*?)(?=\nExpected:)/gm)].map(match=>match[1]).join('\n\n') || null;
+    else if(text)version.request=text.split('\nAttached current page:')[0].trim();
+  }
   versions.push({sha:boundary,subject:'Starting point before this branch',startingPoint:true});
   return {ref,tip,base,versions,truncated:versions.length>200};
 }

@@ -1099,3 +1099,6 @@ html[data-theme="dark"] .main-tools #theme-toggle:hover{background:#414750;borde
 html[data-theme="dark"] #history-dialog button{background:#30343a;color:#f1f3f5;border-color:#59616b}
 html[data-theme="dark"] #history-dialog .version-main button:not(:disabled):hover{background:#414750}
 html[data-theme="dark"] #history-dialog article{border-color:#484d55}
+
+#history-dialog .version-request{white-space:pre-wrap;line-height:1.6;max-height:160px;overflow:auto;overflow-wrap:anywhere}
+#history-dialog .version-request:focus-visible{outline:2px solid currentColor;outline-offset:3px}
