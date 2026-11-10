@@ -48,7 +48,7 @@ const delivery = new Delivery(git, store, defaultBranch);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
 let learnHandler;
 async function serveLearn(req,res,url){
-  if(!url.pathname.startsWith('/api/learn/') && !/^\/learn(?:-[a-z]+)?\.(?:html|css|js)$/.test(url.pathname))return false;
+  if(url.pathname!=='/mcp' && !url.pathname.startsWith('/api/learn/') && !/^\/learn(?:-[a-z]+)?\.(?:html|css|js)$/.test(url.pathname))return false;
   learnHandler ??= import('./learn-service.mjs').then(({createLearnHandler})=>createLearnHandler({
     origin,root,directory:process.env.BRANCH_REVIEW_LEARN_HOME || path.join(local,'learn'),
     reviewSource(id){

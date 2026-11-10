@@ -4,12 +4,13 @@ import {mountTranscript} from './learn-transcript.js';
 import {mountPractice} from './learn-practice.js';
 import {mountExercise} from './learn-exercise.js';
 import {mountMaker} from './learn-maker.js';
+import {mountMcp} from './learn-mcp.js';
 const $ = id => document.getElementById(id);
 let token;
 async function request(endpoint, data) {
-  const response=await fetch('/api/learn/'+endpoint,data===undefined ? {} : {
+  const response=await fetch('/api/learn/'+endpoint,data===undefined ? (token?{headers:{'X-Learn-Token':token}}:{}) : {
     method:'POST', headers:{'Content-Type':'application/json','X-Learn-Token':token},
-    body:JSON.stringify(data),keepalive:endpoint==='position',
+    body:JSON.stringify(data),keepalive:endpoint==='position'||endpoint==='state',
   });
   const result=await response.json();
   if(!response.ok) throw Error(result.error || 'Learn request failed.');
@@ -25,12 +26,11 @@ const api={
   jump:(section,cue)=>request('jump',{id:tour.id,section,cue}),
 };
 $('back').onclick=async()=>{
-  audio.pause();
-  await savePosition(true);
+  await window.learnFlush();
   if(window.learnDesktop) window.learnDesktop.back();
   else location.href='/';
 };
-window.learnFlush=async()=>{audio.pause();await savePosition(true);};
+window.learnFlush=async()=>{audio.pause();mcp.heartbeat(true);mcp.dispose();await savePosition(true);};
 if(!window.learnDesktop) {
   for(const id of ['tour-path','repo-path']){
     $(id).readOnly=false;
@@ -104,6 +104,24 @@ $('pick-zip').onclick = () => pick('tour-path','zip');
 const library=libraryUI({request,open:openEntry,setup:showSetup});
 const maker=mountMaker({request,openEntry,isPlaying:()=>!audio.paused,pause:()=>audio.pause(),
   refreshLibrary:()=>library.refresh()});
+const mcp=mountMcp({request,
+  snapshot:()=>tour && !$('player').hidden
+    ?{id:tour.id,section:sectionIndex,cue:Math.max(-1,activeIndex),seconds:audio.currentTime,playing:!audio.paused}
+    :{id:null},
+  async dispatch(command){
+    if(command.type==='open_tour')return openEntry(command.id);
+    if(!tour || $('player').hidden)return;
+    if(command.type==='pause'){
+      if(pendingSeek)pendingSeek.play=false;
+      audio.pause();
+    }else if(command.type==='resume'){
+      if(audio.paused)togglePlayback();
+    }else if(command.type==='seek')seekTo(command.seconds);
+    else if(command.type==='next_cue')moveCue(1);
+    else if(command.type==='prev_cue')moveCue(-1);
+    mcp.heartbeat(true);
+  },
+});
 function showSetup(entry) {
   relocateId=entry?.id;
   $('setup-title').textContent=entry?'Relocate tour':'Add a tour';
@@ -121,6 +139,7 @@ async function showLibrary(scan=false) {
   trackPosition=false;
   $('setup').hidden=$('player').hidden=$('player-actions').hidden=true;
   $('library').hidden=false;
+  mcp.heartbeat(true);
   await library.refresh(scan);
 }
 $('folders-button').onclick=()=>showLibrary().catch(library.report);
@@ -250,6 +269,7 @@ function seekTo(seconds) {
   if (pendingSeek) pendingSeek.seconds = seconds;
   if (audio.readyState >= 1) audio.currentTime = Math.max(0, Math.min(seconds, duration()));
   sync();
+  mcp.heartbeat(true);
 }
 function goTo(index,seconds,play){
   engage();
@@ -301,6 +321,7 @@ function sync() {
   $('caption').textContent = cue?.note || 'No cue at this position';
   showCode(cue);
   if (cue && trackPosition && $('ruby-mine').checked) sendJump();
+  mcp.heartbeat(true);
 }
 
 function sendJump() {
@@ -384,8 +405,8 @@ audio.addEventListener('loadedmetadata', () => {
   sync();
   if (pending?.play) audio.play().catch(report);
 });
-audio.addEventListener('timeupdate', () => { measureAudio(); sync(); savePosition(); });
-audio.addEventListener('seeked', () => { mediaClock=audio.currentTime; sync(); savePosition(true); });
+audio.addEventListener('timeupdate', () => { measureAudio(); sync(); savePosition(); if(!audio.paused)mcp.heartbeat(); });
+audio.addEventListener('seeked', () => { mediaClock=audio.currentTime; sync(); savePosition(true); mcp.heartbeat(true); });
 function practiceTick(){
   if(audio.paused)return;
   practice.check();
@@ -393,10 +414,10 @@ function practiceTick(){
 }
 audio.addEventListener('play', () => {
   tutor.stopSpeech();$('play').textContent='Ⅱ Pause';mediaClock=audio.currentTime;
-  cancelAnimationFrame(practiceFrame);practiceTick();savePosition(true);
+  cancelAnimationFrame(practiceFrame);practiceTick();savePosition(true);mcp.heartbeat(true);
 });
 audio.addEventListener('pause', () => {
-  cancelAnimationFrame(practiceFrame);$('play').textContent='▶ Play';savePosition(true);
+  cancelAnimationFrame(practiceFrame);$('play').textContent='▶ Play';savePosition(true);mcp.heartbeat(true);
 });
 audio.addEventListener('ended', async () => {
   if(practice.ended())return;
@@ -442,6 +463,11 @@ $('speed').onchange = () => {
 $('volume').oninput = () => { audio.volume = Number($('volume').value); };
 $('volume').onchange = () => api.preferences({ volume: audio.volume }).catch(report);
 
+function moveCue(direction) {
+  const cue = section().cues[activeIndex + direction];
+  if(cue)seekTo(cue.atSeconds);
+}
+
 document.addEventListener('keydown', event => {
   if (!tour || $('player').hidden || $('settings-dialog').open ||
       event.altKey || event.ctrlKey || event.metaKey || event.target.matches('input, select, textarea')) return;
@@ -456,17 +482,14 @@ document.addEventListener('keydown', event => {
   else if (key === 'arrowright') seekTo(audio.currentTime + 10);
   else if (key === 'n') startSection(sectionIndex + 1, !audio.paused);
   else if (key === 'p') startSection(sectionIndex - 1, !audio.paused);
-  else {
-    const index = activeIndex + (key === 'arrowdown' ? 1 : -1);
-    const cue = section().cues[index];
-    if (cue) seekTo(cue.atSeconds);
-  }
+  else moveCue(key === 'arrowdown' ? 1 : -1);
 });
 
 (async () => {
   try {
     const settings = await api.settings();
     tutor.settings(settings);
+    mcp.settings(settings);
     $('ruby-mine').checked = settings.rubyMine === true;
     $('speed').value = settings.speed || 1;
     $('volume').value = settings.volume ?? 1;

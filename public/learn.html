@@ -108,6 +108,15 @@
       <label class="control-label">Tutor voice <select id="tutor-voice"></select></label>
       <label class="control-label">Speech speed <select id="tutor-rate"><option value="0.9">0.9×</option><option value="1">1×</option><option value="1.1">1.1×</option><option value="1.2">1.2×</option></select></label>
       <p><label class="toggle"><input id="tutor-auto-speak" type="checkbox" checked> Speak Tutor answers automatically</label></p>
+      <p><label class="toggle"><input id="learn-mcp-enabled" type="checkbox"> Enable Learn MCP</label></p>
+      <div id="learn-mcp-config" hidden>
+        <p>Local endpoint <code id="learn-mcp-url"></code></p>
+        <label for="learn-mcp-snippet">Muse connection JSON</label>
+        <textarea id="learn-mcp-snippet" rows="8" readonly spellcheck="false"></textarea>
+        <button id="learn-mcp-copy" type="button">Copy connection JSON</button>
+        <p>To connect from muse.ai, route this endpoint through your existing tunnel. Keep the bearer token private.</p>
+      </div>
+      <p id="learn-mcp-notice" role="status"></p>
       <button class="primary" value="close">Done</button>
     </form>
   </dialog>

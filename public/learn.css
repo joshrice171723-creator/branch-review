@@ -251,6 +251,8 @@ dialog { width: min(420px, 90vw); border: 1px solid var(--edge); border-radius: 
 dialog::backdrop { background: #080c13bb; }
 dialog h2 { font-size: 21px; margin-bottom: 17px; }
 dialog p { color: var(--muted); margin: 9px 0 19px; line-height: 1.5; }
+#settings-dialog { width: min(520px, 90vw); max-height: 88vh; overflow: auto; }
+#learn-mcp-snippet { display: block; width: 100%; margin: 6px 0; padding: 8px; background: var(--bg); border: 1px solid var(--edge); border-radius: 6px; resize: vertical; }
 .toggle { display: flex; align-items: center; gap: 8px; }
 .toggle input { accent-color: var(--accent); }
 @media (max-width: 900px) {

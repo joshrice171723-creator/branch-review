@@ -6,15 +6,17 @@ import path from 'node:path';
 import {loadFolderTour,readTourCode,sendTourAudio,jumpToRubyMine} from './learn-player.mjs';
 import {createLibrary} from './learn-library.mjs';
 import {parseTutorAnswer,runLearnPlan,tutorPrompt} from './learn-tutor.mjs';
-import {readTranscript} from './learn-transcript.mjs';
+import {readTranscript,transcriptSentence} from './learn-transcript.mjs';
 import {createExercises} from './learn-exercise.mjs';
 import {createMaker} from './learn-maker.mjs';
+import {createLearnMcp} from './learn-mcp.mjs';
 
 const assets = new Map([
   ['/learn.html','text/html'], ['/learn-player.js','text/javascript'], ['/learn-library.js','text/javascript'], ['/learn-tutor.js','text/javascript'], ['/learn.css','text/css'],
   ['/learn-transcript.js','text/javascript'],
   ['/learn-practice.js','text/javascript'], ['/learn-exercise.js','text/javascript'],
   ['/learn-maker.js','text/javascript'],
+  ['/learn-mcp.js','text/javascript'],
 ]);
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
@@ -51,6 +53,7 @@ export async function createLearnHandler({origin,root,directory,reviewSource,sha
     return work;
   }
   const token = randomBytes(32).toString('hex');
+  if(!settings.mcpKey)await save({mcpKey:randomBytes(32).toString('hex')});
   const tours = new Map();
   const library = await createLibrary({directory,shared,loadTour:loadFolderTour});
   const exercises=createExercises({
@@ -90,8 +93,65 @@ export async function createLearnHandler({origin,root,directory,reviewSource,sha
     tours.set(entry.id,tour);
     return view(entry,tour);
   }
+  const transcriptCache=path.join(directory,'transcripts');
+  let player;
+  const commands=[];
+  const mcpEnabled=()=>settings.mcpEnabled!==false;
+  const activeTour=()=>requireTour(player?.id);
+  const mcp=createLearnMcp({
+    origin,key:settings.mcpKey,enabled:mcpEnabled,
+    async listTours(){
+      return (await library.list()).map(({id,title,sectionCount,state})=>({id,title,sectionCount,state}));
+    },
+    async getContext(){
+      if(!player?.id || !tours.has(player.id))return {tour:null,ageMs:player?Date.now()-player.updatedAt:null};
+      const {id,section,cue,seconds,playing,updatedAt}=player;
+      const tour=requireTour(id);
+      const {title,cues}=tour.sections[section];
+      const item=cues[cue];
+      let excerpt=null,codeError=null;
+      if(item){
+        try{
+          const {text}=await readTourCode(tour,item.file);
+          const lines=text.split('\n');
+          const startLine=Math.max(1,item.line-60),endLine=Math.min(lines.length,item.line+60);
+          excerpt={startLine,endLine,text:lines.slice(startLine-1,endLine).join('\n')};
+        }catch(error){codeError=error.message;}
+      }
+      const transcript=await readTranscript(tour,section,transcriptCache).catch(()=>null);
+      return {tour:{id,title:library.get(id).title},section:{index:section,title},
+        cue:item?{index:cue,file:item.file,line:item.line,note:item.note,atSeconds:item.atSeconds}:null,
+        excerpt,codeError,sentence:transcriptSentence(transcript,seconds),playing,seconds,ageMs:Date.now()-updatedAt};
+    },
+    async getTranscript(section){
+      const tour=activeTour();
+      if(!tour.sections[section])throw Error('Choose an available section.');
+      return readTranscript(tour,section,transcriptCache);
+    },
+    getFlags(){
+      if(!player?.id || !tours.has(player.id))return [];
+      const tour=activeTour();
+      return Object.keys(library.get(player.id).flags).map(key=>{
+        const [section,cue]=key.split(':').map(Number);
+        const item=tour.sections[section]?.cues[cue];
+        return item?{section,cue,file:item.file,line:item.line,note:item.note}:null;
+      }).filter(Boolean);
+    },
+    enqueue(command){
+      if(!player || Date.now()-player.polledAt>5000)throw Error('Open Learn to control playback.');
+      if(command.type==='open_tour')library.get(command.id);
+      else activeTour();
+      if(commands.length>=20)throw Error('Learn has too many pending playback commands.');
+      commands.push({command,at:Date.now()});
+      return {queued:true};
+    },
+  });
   return async function handleLearn(req,res,url) {
     const endpoint = url.pathname;
+    if(endpoint==='/mcp'){
+      await mcp(req,res);
+      return true;
+    }
     if (!assets.has(endpoint) && !endpoint.startsWith('/api/learn/')) return false;
     if(req.headers.host!==new URL(origin).host || ['cross-site','same-site'].includes(req.headers['sec-fetch-site'])) {
       json(res,403,{error:'Learn accepts local requests only.'});
@@ -103,8 +163,17 @@ export async function createLearnHandler({origin,root,directory,reviewSource,sha
         res.writeHead(200,{'Content-Type':assets.get(endpoint)+'; charset=utf-8','Content-Security-Policy':csp,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
         res.end(page);
       } else if(req.method==='GET' && endpoint==='/api/learn/bootstrap') {
-        const {rubyMine,speed,volume,tutorVoice,tutorRate,tutorAutoSpeak}=settings;
-        json(res,200,{rubyMine,speed,volume,tutorVoice,tutorRate,tutorAutoSpeak,token});
+        const {rubyMine,speed,volume,tutorVoice,tutorRate,tutorAutoSpeak,mcpKey}=settings;
+        json(res,200,{rubyMine,speed,volume,tutorVoice,tutorRate,tutorAutoSpeak,token,mcpKey,mcpEnabled:mcpEnabled()});
+      } else if(req.method==='GET' && endpoint==='/api/learn/control') {
+        if(req.headers['x-learn-token']!==token){
+          json(res,403,{error:'Reload Learn before continuing.'});return true;
+        }
+        if(!mcpEnabled() || !player || player.client!==url.searchParams.get('client')){
+          json(res,200,[]);return true;
+        }
+        player.polledAt=Date.now();
+        json(res,200,commands.splice(0).filter(({at})=>player.polledAt-at<=5000).map(({command})=>command));
       } else if(req.method==='GET' && endpoint==='/api/learn/library') {
         json(res,200,await library.list());
       } else if(['GET','HEAD'].includes(req.method) && endpoint==='/api/learn/audio') {
@@ -151,7 +220,27 @@ export async function createLearnHandler({origin,root,directory,reviewSource,sha
           if(typeof data.tutorVoice==='string' && data.tutorVoice.length<256)change.tutorVoice=data.tutorVoice;
           if(Number.isFinite(data.tutorRate) && data.tutorRate>=0.9 && data.tutorRate<=1.2)change.tutorRate=data.tutorRate;
           if(typeof data.tutorAutoSpeak==='boolean')change.tutorAutoSpeak=data.tutorAutoSpeak;
+          if(typeof data.mcpEnabled==='boolean')change.mcpEnabled=data.mcpEnabled;
           await save(change);
+          if(!mcpEnabled()){player=null;commands.length=0;}
+          json(res,200,{ok:true});
+        } else if(endpoint==='/api/learn/state') {
+          if(mcpEnabled()){
+            const {client,sequence,id,section,cue,seconds,playing}=data;
+            if(typeof client!=='string' || !/^[0-9a-f-]{36}$/.test(client) ||
+               !Number.isSafeInteger(sequence) || sequence<1)throw Error('Invalid player state.');
+            if(id!==null){
+              const entry=requireTour(id).sections[section];
+              if(!Number.isInteger(section) || !entry || !Number.isInteger(cue) || cue<-1 ||
+                 cue>=entry.cues.length || !Number.isFinite(seconds) || seconds<0 || typeof playing!=='boolean')
+                throw Error('Invalid player state.');
+            }
+            if(player?.client!==client)commands.length=0;
+            if(player?.client!==client || sequence>player.sequence){
+              const polledAt=player?.client===client?player.polledAt:0;
+              player={client,sequence,id,section,cue,seconds,playing,polledAt,updatedAt:Date.now()};
+            }
+          }
           json(res,200,{ok:true});
         } else if(endpoint==='/api/learn/position') {
           const tour=requireTour(data.id), position=data.position;
