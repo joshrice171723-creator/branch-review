@@ -1,3 +1,4 @@
+import {libraryUI} from './learn-library.js';
 const $ = id => document.getElementById(id);
 let token;
 async function request(endpoint, data) {
@@ -11,11 +12,11 @@ async function request(endpoint, data) {
 }
 const api={
   settings:async()=>{const data=await request('bootstrap');token=data.token;return data;},
-  pickFolder:()=>window.learnDesktop.pick('folder'),
-  openTour:(tourFolder,repoFolder)=>request('open',{tourFolder,repoFolder}),
+  pickFolder:(kind='folder')=>window.learnDesktop.pick(kind),
+  openTour:(tourFolder,repoFolder,id)=>request('open',{tourFolder,repoFolder,id}),
   code:file=>request('code?'+new URLSearchParams({id:tour.id,file})),
   preferences:settings=>request('preferences',settings),
-  position:position=>request('position',{id:tour.id,position}),
+  position:(position,completed)=>request('position',{id:tour.id,position,completed}),
   jump:(section,cue)=>request('jump',{id:tour.id,section,cue}),
 };
 $('back').onclick=async()=>{
@@ -30,7 +31,7 @@ if(!window.learnDesktop) {
     $(id).readOnly=false;
     $(id).oninput=updateFolders;
   }
-  $('pick-tour').hidden=$('pick-repo').hidden=true;
+  $('pick-tour').hidden=$('pick-repo').hidden=$('pick-zip').hidden=true;
 }
 
 const audio = $('audio');
@@ -41,7 +42,7 @@ let displayedFile;
 let rendered;
 let renderRequest = 0;
 let pendingSeek;
-let resume;
+let relocateId;
 let trackPosition = false;
 let lastSaved = '';
 let finished = false;
@@ -61,12 +62,14 @@ function showSetupError(error) {
 }
 
 function updateFolders() {
-  $('open-tour').disabled = !$('tour-path').value || !$('repo-path').value;
+  const zip=/\.zip$/i.test($('tour-path').value);
+  $('repo-field').hidden=zip;
+  $('open-tour').disabled = !$('tour-path').value || (!zip && !$('repo-path').value);
 }
 
-async function pick(id) {
+async function pick(id,kind) {
   try {
-    const folder = await api.pickFolder();
+    const folder = await api.pickFolder(kind);
     if (folder) $(id).value = folder;
     showSetupError(null);
     updateFolders();
@@ -74,38 +77,45 @@ async function pick(id) {
 }
 $('pick-tour').onclick = () => pick('tour-path');
 $('pick-repo').onclick = () => pick('repo-path');
-$('folders-button').onclick = () => {
-  audio.pause();
-  $('setup').hidden = false;
-  $('player').hidden = $('player-actions').hidden = true;
-  $('cancel-folders').hidden = false;
-};
-$('cancel-folders').onclick = () => {
-  $('tour-path').value = tour.tourFolder;
-  $('repo-path').value = tour.repoFolder;
+$('pick-zip').onclick = () => pick('tour-path','zip');
+const library=libraryUI({request,open:openEntry,setup:showSetup});
+function showSetup(entry) {
+  relocateId=entry?.id;
+  $('setup-title').textContent=entry?'Relocate tour':'Add a tour';
+  $('tour-path').value=entry?.source || '';
+  $('repo-path').value=entry?.codeRoot || '';
   showSetupError(null);
-  $('setup').hidden = true;
-  $('player').hidden = $('player-actions').hidden = false;
-};
+  updateFolders();
+  $('library').hidden=true;
+  $('setup').hidden=false;
+}
+async function showLibrary(scan=false) {
+  audio.pause();
+  await savePosition(true);
+  trackPosition=false;
+  $('setup').hidden=$('player').hidden=$('player-actions').hidden=true;
+  $('library').hidden=false;
+  await library.refresh(scan);
+}
+$('folders-button').onclick=()=>showLibrary().catch(library.report);
+$('cancel-folders').onclick=()=>showLibrary().catch(library.report);
 $('folder-form').onsubmit = async event => {
   event.preventDefault();
   $('open-tour').disabled = true;
   showSetupError(null);
-  try { await openTour(); }
+  try { renderTour(await api.openTour($('tour-path').value,$('repo-field').hidden?null:$('repo-path').value,relocateId)); }
   catch (error) { showSetupError(error); }
   finally { updateFolders(); }
 };
 
-function showResume(position) {
-  resume = position && tour.sections[position.section] && Number.isFinite(position.seconds) ? position : null;
-  $('resume-panel').hidden = !resume;
-  if (resume) $('resume-detail').textContent = tour.sections[resume.section].title + ' · ' + time(resume.seconds);
+async function openEntry(id,continued=false,play=false) {
+  renderTour(await request('library/open',{id}),continued,play);
 }
 
-async function openTour() {
-  const data = await api.openTour($('tour-path').value, $('repo-path').value);
+function renderTour(data,continued=false,play=false) {
+  audio.pause();
   tour = data;
-  $('setup').hidden = true;
+  $('setup').hidden=$('library').hidden=true;
   $('player').hidden = $('player-actions').hidden = false;
   $('warnings').hidden = !tour.warnings.length;
   $('warnings').open = false;
@@ -120,11 +130,13 @@ async function openTour() {
     const number = String(index + 1).padStart(2, '0');
     return listButton('section', number, entry.title, time(entry.durationSecs), () => startSection(index, true));
   }));
-  trackPosition = false;
+  trackPosition = play;
+  finished=false;
+  status('');
   lastSaved = '';
   displayedFile = undefined;
-  showResume(tour.position);
-  loadSection(0, 0, false);
+  const position=continued && tour.sections[tour.position?.section] ? tour.position : {section:0,seconds:0};
+  loadSection(position.section,position.seconds,play);
 }
 
 function listButton(kind, index, label, detail, onClick) {
@@ -152,7 +164,6 @@ function markActive(id, index) {
 
 function engage() {
   trackPosition = true;
-  showResume(null);
   finished = false;
   status('');
 }
@@ -314,13 +325,13 @@ audio.addEventListener('timeupdate', () => { sync(); savePosition(); });
 audio.addEventListener('seeked', () => { sync(); savePosition(true); });
 audio.addEventListener('play', () => { $('play').textContent = 'Ⅱ Pause'; savePosition(true); });
 audio.addEventListener('pause', () => { $('play').textContent = '▶ Play'; savePosition(true); });
-audio.addEventListener('ended', () => {
+audio.addEventListener('ended', async () => {
+  await api.position({section:sectionIndex,seconds:audio.currentTime},true).catch(report);
   if (sectionIndex + 1 < tour.sections.length) startSection(sectionIndex + 1, true);
   else {
     finished = true;
     trackPosition = false;
     status('Tour finished.');
-    api.position(null).catch(report);
   }
 });
 audio.addEventListener('error', () => status('Could not play the section MP3.'));
@@ -341,15 +352,6 @@ function togglePlayback() {
 }
 $('play').onclick = togglePlayback;
 $('seek').oninput = () => seekTo(Number($('seek').value));
-$('resume').onclick = () => {
-  const position = resume;
-  engage();
-  loadSection(position.section, position.seconds, true);
-};
-$('dismiss-resume').onclick = () => {
-  showResume(null);
-  api.position(null).catch(report);
-};
 $('settings-button').onclick = () => $('settings-dialog').showModal();
 $('ruby-mine').onchange = async () => {
   try {
@@ -387,14 +389,11 @@ document.addEventListener('keydown', event => {
 (async () => {
   try {
     const settings = await api.settings();
-    $('tour-path').value = settings.tourFolder || '';
-    $('repo-path').value = settings.repoFolder || '';
     $('ruby-mine').checked = settings.rubyMine === true;
     $('speed').value = settings.speed || 1;
     $('volume').value = settings.volume ?? 1;
     audio.playbackRate = audio.defaultPlaybackRate = Number($('speed').value) || 1;
     audio.volume = Number($('volume').value);
-    updateFolders();
-    if (!$('open-tour').disabled) await openTour();
-  } catch (error) { showSetupError(error); }
+    await showLibrary(true);
+  } catch (error) { $('library').hidden=false;library.report(error); }
 })();

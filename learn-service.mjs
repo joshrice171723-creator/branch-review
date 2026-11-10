@@ -1,11 +1,13 @@
 import {readFile,writeFile,mkdir,rename} from 'node:fs/promises';
-import {createHash,randomBytes} from 'node:crypto';
+import {randomBytes} from 'node:crypto';
 import {createServer} from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import {loadFolderTour,readTourCode,sendTourAudio,jumpToRubyMine} from './learn-player.mjs';
+import {createLibrary} from './learn-library.mjs';
 
 const assets = new Map([
-  ['/learn.html','text/html'], ['/learn-player.js','text/javascript'], ['/learn.css','text/css'],
+  ['/learn.html','text/html'], ['/learn-player.js','text/javascript'], ['/learn-library.js','text/javascript'], ['/learn.css','text/css'],
 ]);
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
@@ -23,9 +25,7 @@ async function body(req) {
   }
   return JSON.parse(Buffer.concat(chunks).toString() || '{}');
 }
-const tourId = tour => createHash('sha256').update(JSON.stringify([tour.tourFolder,tour.codeRoot])).digest('hex').slice(0,24);
-
-export async function createLearnHandler({origin,root,directory}) {
+export async function createLearnHandler({origin,root,directory,shared=process.env.BRANCH_REVIEW_TOURS_DIR || path.join(os.homedir(),'Documents','Tours')}) {
   await mkdir(directory,{recursive:true});
   const settingsFile = path.join(directory,'settings.json');
   let settings = JSON.parse(await readFile(settingsFile,'utf8').catch(error=>{
@@ -45,11 +45,13 @@ export async function createLearnHandler({origin,root,directory}) {
   }
   const token = randomBytes(32).toString('hex');
   const tours = new Map();
+  const library = await createLibrary({directory,shared,loadTour:loadFolderTour});
 
-  function view(id,tour) {
+  function view(entry,tour) {
+    const {id,position}=entry;
     return {
-      id,tourFolder:tour.tourFolder,repoFolder:tour.codeRoot,warnings:tour.warnings,
-      position:settings.activeId===id ? settings.position : null,
+      id,title:entry.title,tourFolder:entry.source,repoFolder:entry.codeRoot,warnings:tour.warnings,
+      position:position?{section:position.sectionIndex,seconds:position.seconds}:null,
       sections:tour.sections.map(({title,durationSecs,cues},section)=>({
         title,durationSecs,cues,audioUrl:`/api/learn/audio?id=${id}&section=${section}`,
       })),
@@ -59,6 +61,11 @@ export async function createLearnHandler({origin,root,directory}) {
     const tour = tours.get(id);
     if (!tour) throw Error('Open this tour again.');
     return tour;
+  }
+  async function open(id){
+    const {entry,tour}=await library.open(id);
+    tours.set(entry.id,tour);
+    return view(entry,tour);
   }
   return async function handleLearn(req,res,url) {
     const endpoint = url.pathname;
@@ -73,7 +80,9 @@ export async function createLearnHandler({origin,root,directory}) {
         res.writeHead(200,{'Content-Type':assets.get(endpoint)+'; charset=utf-8','Content-Security-Policy':csp,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
         res.end(page);
       } else if(req.method==='GET' && endpoint==='/api/learn/bootstrap') {
-        json(res,200,{...settings,token});
+        json(res,200,{rubyMine:settings.rubyMine,speed:settings.speed,volume:settings.volume,token});
+      } else if(req.method==='GET' && endpoint==='/api/learn/library') {
+        json(res,200,await library.list());
       } else if(['GET','HEAD'].includes(req.method) && endpoint==='/api/learn/audio') {
         await sendTourAudio(req,res,requireTour(url.searchParams.get('id')),Number(url.searchParams.get('section')));
       } else if(req.method==='GET' && endpoint==='/api/learn/code') {
@@ -84,11 +93,19 @@ export async function createLearnHandler({origin,root,directory}) {
         }
         const data = await body(req);
         if(endpoint==='/api/learn/open') {
-          const tour = await loadFolderTour(data.tourFolder,data.repoFolder);
-          const id = tourId(tour);
-          tours.set(id,tour);
-          if(settings.activeId!==id) await save({activeId:id,tourFolder:tour.tourFolder,repoFolder:tour.codeRoot,position:null});
-          json(res,200,view(id,tour));
+          const input={source:data.tourFolder,codeRoot:data.repoFolder || null};
+          const entry=data.id?await library.relocate(data.id,input):await library.add(input);
+          json(res,200,await open(entry.id));
+        } else if(endpoint==='/api/learn/library/open') {
+          json(res,200,await open(data.id));
+        } else if(endpoint==='/api/learn/library') {
+          await library.scan();json(res,200,await library.list());
+        } else if(endpoint==='/api/learn/library/rename') {
+          json(res,200,await library.rename(data.id,data.title));
+        } else if(endpoint==='/api/learn/library/remove') {
+          await library.remove(data.id);tours.delete(data.id);json(res,200,{ok:true});
+        } else if(endpoint==='/api/learn/library/reset') {
+          await library.reset(data.id);json(res,200,{ok:true});
         } else if(endpoint==='/api/learn/preferences') {
           const change={};
           if(typeof data.rubyMine==='boolean') change.rubyMine=data.rubyMine;
@@ -98,8 +115,11 @@ export async function createLearnHandler({origin,root,directory}) {
           json(res,200,{ok:true});
         } else if(endpoint==='/api/learn/position') {
           const tour=requireTour(data.id), position=data.position;
-          if(settings.activeId===data.id && (position===null || (Number.isInteger(position?.section) && tour.sections[position.section] &&
-              Number.isFinite(position.seconds) && position.seconds>=0))) await save({position});
+          if(!Number.isInteger(position?.section) || !tour.sections[position.section] ||
+             !Number.isFinite(position.seconds) || position.seconds<0) throw Error('Invalid playback position.');
+          const completedSection=data.completed===true?position.section:undefined;
+          await library.progress(data.id,{sectionIndex:position.section,seconds:position.seconds,completedSection,
+            finished:data.completed===true && position.section===tour.sections.length-1});
           json(res,200,{ok:true});
         } else if(endpoint==='/api/learn/jump') {
           if(settings.rubyMine===true) await jumpToRubyMine(requireTour(data.id),data.section,data.cue);

@@ -28,7 +28,7 @@ export async function tourFile(root, name) {
   return file;
 }
 
-export async function loadFolderTour(tourFolder, codeRoot) {
+export async function loadFolderTour(tourFolder, codeRoot, {zip=false}={}) {
   if (typeof tourFolder !== 'string' || typeof codeRoot !== 'string' || !tourFolder.trim() || !codeRoot.trim()) {
     throw new Error('Choose both the tour and code folders.');
   }
@@ -53,8 +53,9 @@ export async function loadFolderTour(tourFolder, codeRoot) {
         !Number.isFinite(section.durationSecs) || section.durationSecs <= 0 || !Array.isArray(section.cues)) {
       throw new Error(label + ' needs a title, MP3 or WAV, positive durationSecs, and cues.');
     }
+    const audioName=zip ? section.audio.replace(/^audio[/\\]/i,'') : section.audio;
     let audioPath;
-    try { audioPath = await tourFile(tourFolder, section.audio); }
+    try { audioPath = await tourFile(zip?path.join(tourFolder,'audio'):tourFolder, audioName); }
     catch (error) { throw new Error(label + ' cannot open ' + section.audio + ': ' + error.message); }
     const cues = [];
     for (const [cueIndex, cue] of section.cues.entries()) {
@@ -68,7 +69,7 @@ export async function loadFolderTour(tourFolder, codeRoot) {
       cues.push({ atSeconds, file, line, note, ...(exercise ? { exercise } : {}) });
     }
     cues.sort((a, b) => a.atSeconds - b.atSeconds);
-    sections.push({ title: section.title, durationSecs: section.durationSecs, audio: section.audio, audioPath, cues });
+    sections.push({ title: section.title, durationSecs: section.durationSecs, audio: zip?'audio/'+audioName:audioName, audioPath, cues });
   }
   return { tourFolder, codeRoot, sections, warnings, files, cache: new Map() };
 }

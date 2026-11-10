@@ -12,18 +12,31 @@
     <div class="identity"><span class="app-mark" aria-hidden="true">▸</span><h1>Learn — Walkthrough Player</h1></div>
     <div class="header-actions"><div class="header-actions" id="player-actions" hidden>
       <button id="settings-button" type="button">Settings</button>
-      <button id="folders-button" type="button">Change folders</button>
+      <button id="folders-button" type="button">Library</button>
     </div><button id="back" type="button">Back to Branch Review</button></div>
   </header>
-  <main id="setup">
+  <main id="library" hidden>
+    <header class="learn-library-heading">
+      <h2>Tour library</h2>
+      <div class="header-actions">
+        <button id="continue-last" type="button" hidden>Continue last tour</button>
+        <button id="library-refresh" type="button">Refresh</button>
+        <button id="library-add" class="primary" type="button">Add a tour</button>
+      </div>
+    </header>
+    <p id="library-notice" role="status"></p>
+    <p id="library-empty">Add a tour folder or ZIP to start, or place one in Documents\Tours and select Refresh.</p>
+    <div id="library-cards"></div>
+  </main>
+  <main id="setup" hidden>
     <form id="folder-form" class="setup-panel">
-      <h2>Open a tour</h2>
-      <label for="tour-path">Tour folder</label>
-      <div class="folder-row"><input id="tour-path" readonly placeholder="Choose the folder with cues.json and MP3s"><button id="pick-tour" type="button">Browse…</button></div>
-      <label for="repo-path">Repo folder</label>
-      <div class="folder-row"><input id="repo-path" readonly placeholder="Choose the root of the code repository"><button id="pick-repo" type="button">Browse…</button></div>
+      <h2 id="setup-title">Add a tour</h2>
+      <label for="tour-path">Tour folder or ZIP</label>
+      <div class="folder-row"><input id="tour-path" readonly placeholder="Choose a folder with cues.json or a tour ZIP"><button id="pick-tour" type="button">Folder…</button><button id="pick-zip" type="button">ZIP…</button></div>
+      <div id="repo-field"><label for="repo-path">Repo folder</label>
+      <div class="folder-row"><input id="repo-path" readonly placeholder="Choose the root of the code repository"><button id="pick-repo" type="button">Browse…</button></div></div>
       <p id="setup-error" class="error" role="alert" hidden></p>
-      <div class="setup-actions"><button id="cancel-folders" type="button" hidden>Cancel</button><button id="open-tour" class="primary" type="submit" disabled>Open tour</button></div>
+      <div class="setup-actions"><button id="cancel-folders" type="button">Cancel</button><button id="open-tour" class="primary" type="submit" disabled>Open tour</button></div>
     </form>
   </main>
   <main id="player" hidden>
@@ -35,7 +48,6 @@
     </aside>
     <section class="viewer" aria-label="Code viewer">
       <header class="viewer-header"><span class="viewer-label">Code</span><span id="file-heading">—</span></header>
-      <div id="resume-panel" class="notice resume" hidden><span id="resume-detail"></span><button class="primary" id="resume" type="button">Resume where you left off</button><button id="dismiss-resume" type="button">Start over</button></div>
       <details class="notice warnings" id="warnings" hidden><summary id="warning-summary"></summary><ul id="warning-list"></ul></details>
       <div id="code-scroll" class="code-scroll" tabindex="0" aria-label="Source code">
         <p id="code-message" class="code-message"></p>
@@ -70,5 +82,10 @@
     </form>
   </dialog>
   <audio id="audio" preload="auto"></audio>
+  <dialog id="rename-dialog"><form id="rename-form"><h2>Rename tour</h2>
+    <label for="rename-title">Title</label><input id="rename-title" required maxlength="160">
+    <p id="rename-error" role="status"></p>
+    <button id="rename-cancel" type="button">Cancel</button> <button type="submit" class="primary">Rename</button>
+  </form></dialog>
 </body>
 </html>

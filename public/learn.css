@@ -201,6 +201,20 @@ input[type="range"] { accent-color: var(--accent); }
 #volume { width: 92px; }
 #status { font-size: 12px; color: #ffd9a0; }
 .keyboard-help { margin-top: 7px; }
+#library{flex:1;overflow:auto;padding:clamp(20px,4vw,52px);background:#111a26}
+.learn-library-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.learn-library-heading h2{font-size:25px;letter-spacing:-.02em}
+#library-notice{color:#ffd9a0;margin-bottom:10px}
+#library-empty{padding:24px;border:1px solid var(--edge);border-radius:8px;color:var(--muted)}
+#library-cards{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))}
+.learn-card{padding:18px;background:var(--pane);border:1px solid var(--edge);border-radius:8px}
+.learn-card-header{display:flex;align-items:baseline;gap:14px;justify-content:space-between;margin-bottom:8px}
+.learn-card h3{font-size:17px;margin:0;overflow-wrap:anywhere}
+.learn-card-state{color:var(--accent);font-size:12px;text-align:right}
+.learn-card-muted,.learn-card-source{color:var(--muted);margin-top:5px}
+.learn-card-source{font:11px var(--mono);overflow-wrap:anywhere}
+.learn-card-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:15px}
+#rename-title{width:100%;background:var(--bg);border:1px solid var(--edge);border-radius:6px;padding:8px}
 dialog { width: min(420px, 90vw); border: 1px solid var(--edge); border-radius: 10px; background: var(--pane); color: var(--text); padding: 24px; }
 dialog::backdrop { background: #080c13bb; }
 dialog h2 { font-size: 21px; margin-bottom: 17px; }
