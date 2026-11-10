@@ -12,8 +12,8 @@ export function museUsage(stdout='',stderr=''){
   if(usage?.schemaVersion===1 && usage.reason==='no_allowance' && usage.allowance===null)return {status:'no-allowance',message:'Signed in — no allowance. '+museBillingMessage};
   return {status:'unverified',message:'Muse is installed; sign-in is not verified. Check connection to run a model smoke check.'};
 }
-export function museArgs({kind,cwd,output,chatId,images=[]}){
-  return ['exec','--json','--workspace',cwd,'--disable-approval','--disable-shell','--disable-reminders','--disable-web-tools','--disable-request-user-input','--no-foreign-personal-context',...(kind==='plan'?['--disable-write']:[]),...(chatId?['--session-id',chatId]:[]),...images.flatMap(file=>['--image',file]),'--prompt-file',output+'.prompt.txt'];
+export function museArgs({kind,cwd,output,chatId,images=[],model,reasoning}){
+  return ['exec','--json','--workspace',cwd,'--disable-approval','--disable-shell','--disable-reminders','--disable-web-tools','--disable-request-user-input','--no-foreign-personal-context',...(kind==='plan'?['--disable-write']:[]),...(model?['--model',model]:[]),...(reasoning?['--reasoning-effort',reasoning]:[]),...(chatId?['--session-id',chatId]:[]),...images.flatMap(file=>['--image',file]),'--prompt-file',output+'.prompt.txt'];
 }
 export function consumeMuseEvent(job,event){
   if(event.schema_version!==1){job.agentStatus='Unrecognized Muse event: '+JSON.stringify(event);return;}

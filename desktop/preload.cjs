@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 if (process.isMainFrame) contextBridge.exposeInMainWorld('desktop', {
-  openLearn: () => ipcRenderer.invoke('review:learn'),
+  openLearn: reviewId => ipcRenderer.invoke('review:learn',reviewId),
   openSetupHelp: key => ipcRenderer.invoke('review:setup-help',key),
   chooseRepository: path => ipcRenderer.invoke('review:choose-repository',path),
   recentProjects: () => ipcRenderer.invoke('review:recent-projects'),

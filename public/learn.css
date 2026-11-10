@@ -221,6 +221,18 @@ input[type="range"] { accent-color: var(--accent); }
 .learn-practice-panel textarea{display:block;width:100%;background:var(--bg);border:1px solid var(--edge);border-radius:6px;padding:6px;resize:vertical}
 .learn-practice-note,.learn-practice-verdict,.learn-practice-topic{color:var(--muted);white-space:pre-wrap;margin:5px 0;overflow-wrap:anywhere}
 .learn-practice-topic{flex:1 1 100%;color:var(--accent)}
+.learn-ready{display:flex;justify-content:space-between;align-items:center;gap:10px}
+#maker-dialog{width:min(760px,90vw);max-height:88vh;overflow:auto}
+#maker-dialog textarea{display:block;width:100%;margin:8px 0;padding:10px;background:var(--bg);border:1px solid var(--edge);border-radius:6px;resize:vertical}
+#maker-dialog p{margin:6px 0 12px}
+.learn-maker-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 13px}
+.learn-maker-row select{max-width:min(330px,65vw)}
+.learn-maker-chips button{font-size:12px}
+#maker-message{color:#ffd9a0}
+#maker-progress{margin-top:15px}
+#maker-phases{display:flex;gap:21px;flex-wrap:wrap;padding-left:21px;color:var(--muted)}
+#maker-phases [aria-current]{color:var(--accent);font-weight:700}
+#maker-progress-status{overflow-wrap:anywhere;margin:8px 0}
 #library{flex:1;overflow:auto;padding:clamp(20px,4vw,52px);background:#111a26}
 .learn-library-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
 .learn-library-heading h2{font-size:25px;letter-spacing:-.02em}

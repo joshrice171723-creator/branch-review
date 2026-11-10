@@ -61,7 +61,20 @@ async function launch() {
   const root = path.dirname(__dirname);
   const learnDirectory=path.join(app.getPath('userData'),'learn');
   process.env.BRANCH_REVIEW_LEARN_HOME=learnDirectory;
-  try{learnDoor=require('./learn-window.cjs').learnDoor({origin,root,directory:learnDirectory});}
+  try{learnDoor=require('./learn-window.cjs').learnDoor({origin,root,directory:learnDirectory,
+    projects:async()=>{
+      const {describeProjectCandidates,findProjectCandidates}=require('./project-discovery.cjs');
+      const saved=JSON.parse(await readFile(path.join(app.getPath('userData'),'desktop.json'),'utf8').catch(()=> '{}'));
+      const current=home?JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}')).repository:null;
+      const known=[current,...(saved.recentProjects || []),...Object.keys(saved.projects || {})].filter(Boolean);
+      const hidden=new Set(saved.hiddenProjects || []);
+      const names=known.map(folder=>path.basename(folder)).join(' ');
+      const found=names?await findProjectCandidates(require('node:os').homedir(),[{role:'user',text:names}],
+        {additionalRoots:[],limit:2000,timeout:1500}):[];
+      const unique=[...new Set([...known,...found].map(folder=>path.resolve(folder).toLowerCase()))].filter(folder=>!hidden.has(folder));
+      return (await describeProjectCandidates(unique)).filter(item=>item.checkout!=='unknown')
+        .map(item=>({path:item.path,name:path.basename(item.path)}));
+    }});}
   catch(error){if(error.code!=='MODULE_NOT_FOUND')throw error;}
   const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
@@ -133,7 +146,11 @@ async function launch() {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || new URL(event.senderFrame.url).origin !== origin) throw new Error('Only the review workspace can request desktop actions.');
   }
   ipcMain.handle('review:setup-help',async(event,key)=>{trusted(event);await shell.openExternal(setupUrl(key));});
-  ipcMain.handle('review:learn',event=>{trusted(event);if(!learnDoor)throw Error('Learn is unavailable.');return learnDoor.open(window);});
+  ipcMain.handle('review:learn',(event,reviewId)=>{
+    trusted(event);if(!learnDoor)throw Error('Learn is unavailable.');
+    if(reviewId!==undefined && (typeof reviewId!=='string' || !/^[a-f0-9]{32,64}$/i.test(reviewId)))throw Error('Choose a completed review.');
+    return learnDoor.open(window,false,reviewId);
+  });
   async function control(endpoint, data = {}) {
     const state = await fetch(origin + '/api/state').then(r => r.json());
     if (state.busy) { const error=new Error('Wait for the current operation to finish.');error.retryable=true;throw error; }

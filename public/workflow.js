@@ -56,6 +56,12 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   const openLearn=()=>window.desktop?.openLearn ? window.desktop.openLearn().catch(e=>error(e.message)) : location.assign('/learn.html');
   const learnDoor=$('learn-door');
   if(learnDoor)learnDoor.onclick=openLearn;
+  const teachBranch=$('teach-branch');
+  if(teachBranch)teachBranch.onclick=()=>{
+    const record=getState().record;
+    if(record?.approval?.commit===record?.identity.changed && record)
+      window.desktop?.openLearn(record.id).catch(e=>error(e.message));
+  };
   const projects=document.createElement('dialog');projects.id='projects-dialog';projects.setAttribute('aria-label','Projects');
   projects.innerHTML='<header class="dialog-heading"><h2>Projects</h2><button type="button" data-close>Close</button></header><button type="button" data-learn class="learn-door">Learn — Walkthrough Player</button><label for="projects-search">Find a project</label><input id="projects-search" type="search" placeholder="Search by name or folder"><div data-projects></div><button type="button" data-add>Add a project…</button><p role="status" data-status></p>';
   document.body.append(projects);const projectList=projects.querySelector('[data-projects]'),projectSearch=projects.querySelector('#projects-search'),projectStatus=projects.querySelector('[data-status]');let recent=[];
@@ -186,6 +192,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('repository-path').textContent = state.repository;
     $('repository-path').title = state.repository;
     const r=state.record, enabled=state.status==='ready' && !!r && !state.busy && !state.previewVersion;
+    if(teachBranch)teachBranch.hidden=!window.desktop?.openLearn || !r?.approval || r.approval.commit!==r.identity.changed;
     guide.render(state);
     const published=isPublished(r);
     $('published-report').hidden=!published;

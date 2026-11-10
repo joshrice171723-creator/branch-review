@@ -15,6 +15,7 @@
       <button id="folders-button" type="button">Library</button>
     </div><button id="back" type="button">Back to Branch Review</button></div>
   </header>
+  <section class="notice learn-ready" id="maker-ready" hidden><span>Your new tour is ready.</span><button id="maker-play" class="primary" type="button">Play</button></section>
   <main id="library" hidden>
     <header class="learn-library-heading">
       <h2>Tour library</h2>
@@ -22,11 +23,17 @@
         <button id="continue-last" type="button" hidden>Continue last tour</button>
         <button id="library-refresh" type="button">Refresh</button>
         <button id="library-add" class="primary" type="button">Add a tour</button>
+        <button id="maker-open" class="primary" type="button">Make a tour</button>
       </div>
     </header>
     <p id="library-notice" role="status"></p>
     <p id="library-empty">Add a tour folder or ZIP to start, or place one in Documents\Tours and select Refresh.</p>
     <div id="library-cards"></div>
+    <article id="maker-progress" class="learn-card" hidden>
+      <h3>Tour Maker</h3>
+      <ol id="maker-phases"><li>Reading repo</li><li>Outlining</li><li>Writing</li><li>Narrating</li><li>Packaging</li></ol>
+      <p id="maker-progress-status" role="status"></p><button id="maker-cancel" type="button">Cancel</button>
+    </article>
   </main>
   <main id="setup" hidden>
     <form id="folder-form" class="setup-panel">
@@ -105,6 +112,36 @@
     </form>
   </dialog>
   <audio id="audio" preload="auto"></audio>
+  <dialog id="maker-dialog">
+    <form id="maker-form">
+      <h2 id="maker-heading">Make a tour</h2>
+      <label for="maker-repos">Repository</label>
+      <div class="learn-maker-row"><select id="maker-repos"></select><button id="maker-browse" type="button">Browse…</button></div>
+      <p id="maker-path" class="learn-context"></p>
+      <div class="learn-maker-row">
+        <label>Ref <select id="maker-ref"><option value="">Current branch / HEAD</option></select></label>
+        <label class="toggle"><input id="maker-diff" type="checkbox"> Changes only (diff)</label>
+        <label id="maker-base-field" hidden>Base ref <select id="maker-base"></select></label>
+      </div>
+      <label for="maker-instructions">What should it focus on? How should it teach you?</label>
+      <textarea id="maker-instructions" rows="6" maxlength="60000"></textarea>
+      <div class="learn-maker-row learn-maker-chips">
+        <button type="button" data-maker-instructions>Teach me the whole project</button>
+        <button type="button" data-maker-instructions>Focus on the backend services</button>
+        <button type="button" data-maker-instructions>Teach me like a defense: hardest questions first</button>
+      </div>
+      <div class="learn-maker-row">
+        <label>Provider <select id="maker-provider"></select></label>
+        <label>Model <select id="maker-model"></select></label>
+        <label>Thinking <select id="maker-thinking"></select></label>
+        <label>Narration voice <select id="maker-voice"></select></label>
+      </div>
+      <p id="maker-provider-note"></p>
+      <p>The selected CLI receives repository context and your instructions.</p>
+      <p id="maker-message" role="status"></p>
+      <button id="maker-close" type="button">Cancel</button> <button id="maker-submit" class="primary" type="submit">Make my tour</button>
+    </form>
+  </dialog>
   <dialog id="exercise-dialog"><form id="exercise-form">
     <h2>Code exercise</h2>
     <p id="exercise-prompt"></p><p id="exercise-file" class="learn-context"></p>

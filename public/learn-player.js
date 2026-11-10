@@ -3,6 +3,7 @@ import {mountTutor} from './learn-tutor.js';
 import {mountTranscript} from './learn-transcript.js';
 import {mountPractice} from './learn-practice.js';
 import {mountExercise} from './learn-exercise.js';
+import {mountMaker} from './learn-maker.js';
 const $ = id => document.getElementById(id);
 let token;
 async function request(endpoint, data) {
@@ -101,6 +102,8 @@ $('pick-tour').onclick = () => pick('tour-path');
 $('pick-repo').onclick = () => pick('repo-path');
 $('pick-zip').onclick = () => pick('tour-path','zip');
 const library=libraryUI({request,open:openEntry,setup:showSetup});
+const maker=mountMaker({request,openEntry,isPlaying:()=>!audio.paused,pause:()=>audio.pause(),
+  refreshLibrary:()=>library.refresh()});
 function showSetup(entry) {
   relocateId=entry?.id;
   $('setup-title').textContent=entry?'Relocate tour':'Add a tour';
@@ -470,5 +473,7 @@ document.addEventListener('keydown', event => {
     audio.playbackRate = audio.defaultPlaybackRate = Number($('speed').value) || 1;
     audio.volume = Number($('volume').value);
     await showLibrary(true);
+    const reviewId=new URLSearchParams(location.search).get('review');
+    if(reviewId)await maker.show(reviewId);
   } catch (error) { $('library').hidden=false;library.report(error); }
 })();

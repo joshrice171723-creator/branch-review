@@ -51,6 +51,17 @@ async function serveLearn(req,res,url){
   if(!url.pathname.startsWith('/api/learn/') && !/^\/learn(?:-[a-z]+)?\.(?:html|css|js)$/.test(url.pathname))return false;
   learnHandler ??= import('./learn-service.mjs').then(({createLearnHandler})=>createLearnHandler({
     origin,root,directory:process.env.BRANCH_REVIEW_LEARN_HOME || path.join(local,'learn'),
+    reviewSource(id){
+      const record=store.get(id),head=record.identity.changed;
+      if(record.approval?.commit!==head)throw Error('Complete and approve this review before making its tour.');
+      const job=jobs.rows.findLast(item=>item.resultCommit===head || item.reviewId===id);
+      return {id,repoPath:repo,base:record.identity.base,head,
+        instructions:'Teach the changes: what changed, why it matters, what could break',
+        requestText:job?.requestText || record.requestHistory?.map(item=>item.requestText || item.text).filter(Boolean).join('\n'),
+        findings:record.issues?.map(({expected,actual,location,note})=>({expected,actual,location,note})),
+        agent:{provider:job?.provider || selectedAgent().provider,model:job?.model || agentSettings.model,
+          reasoning:job?.reasoning || agentSettings.reasoning}};
+    },
   }));
   return (await learnHandler)(req,res,url);
 }

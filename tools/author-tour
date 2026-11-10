@@ -1,0 +1,35 @@
+#!/usr/bin/env node
+import {parseArgs} from 'node:util';
+import {mkdtemp,realpath,rm} from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {authorTour} from '../learn-author.mjs';
+
+const {values}=parseArgs({options:{
+  repo:{type:'string'},base:{type:'string'},head:{type:'string'},out:{type:'string'},
+  instructions:{type:'string',default:'Teach the main flow, then the code that guards it.'},
+  provider:{type:'string',default:'codex'},model:{type:'string'},reasoning:{type:'string'},voice:{type:'string'},
+}});
+if(!values.repo){
+  console.error('Usage: node tools/author-tour --repo <repo> [--base <ref> --head <ref>] [--out <folder>] [--instructions <text>] [--provider <id>] [--model <id>] [--reasoning <level>] [--voice <name>]');
+  process.exit(1);
+}
+const directory=await mkdtemp(path.join(os.tmpdir(),'branch-review-author-'));
+const controller=new AbortController();
+process.once('SIGINT',()=>controller.abort(Error('Tour creation stopped.')));
+try{
+  const result=await authorTour({
+    repoPath:values.repo,mode:values.base?'diff':'repo',base:values.base,head:values.head,
+    instructions:values.instructions,providerId:values.provider,model:values.model,
+    reasoning:values.reasoning,narrationVoice:values.voice,
+  },{
+    directory,shared:values.out || path.join(os.homedir(),'Documents','Tours'),signal:controller.signal,
+    onProgress:(phase,message)=>console.error(phase+(message?' · '+message:'')),
+  });
+  console.log(JSON.stringify(result,null,2));
+}catch(error){console.error(error.message);process.exitCode=1;}
+finally{
+  const resolved=await realpath(directory).catch(()=>null);
+  if(resolved===directory && path.basename(directory).startsWith('branch-review-author-'))
+    await rm(directory,{recursive:true,force:true});
+}

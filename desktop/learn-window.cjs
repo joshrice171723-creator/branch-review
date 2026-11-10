@@ -2,11 +2,12 @@ const {BrowserWindow,dialog,ipcMain}=require('electron');
 const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 
-exports.learnDoor=function learnDoor({origin,root,directory}){
+exports.learnDoor=function learnDoor({origin,root,directory,projects}){
   let learn,opening;
   const page=origin+'/learn.html';
   function trusted(event){
-    if(!learn || event.sender!==learn.webContents || event.senderFrame!==learn.webContents.mainFrame || event.senderFrame.url!==page)
+    if(!learn || event.sender!==learn.webContents || event.senderFrame!==learn.webContents.mainFrame ||
+        event.senderFrame.url.split('?')[0]!==page)
       throw Error('Only Learn can select its tour and repository folders.');
   }
   ipcMain.handle('learn:pick',async(event,kind)=>{
@@ -18,7 +19,8 @@ exports.learnDoor=function learnDoor({origin,root,directory}){
     return result.canceled?null:result.filePaths[0];
   });
   ipcMain.handle('learn:back',event=>{trusted(event);learn.close();});
-  async function open(parent,firstRun=false){
+  ipcMain.handle('learn:projects',event=>{trusted(event);return projects();});
+  async function open(parent,firstRun=false,reviewId){
     if(learn && !learn.isDestroyed()){learn.show();learn.focus();return;}
     if(opening)return opening;
     opening=(async()=>{
@@ -46,7 +48,7 @@ exports.learnDoor=function learnDoor({origin,root,directory}){
           await stop?.().catch(()=>{});
           if(!parent.isDestroyed()){parent.show();parent.focus();}
         });
-        await learn.loadURL(page);
+        await learn.loadURL(reviewId?page+'?review='+encodeURIComponent(reviewId):page);
         parent.hide();
         learn.maximize();
         learn.show();

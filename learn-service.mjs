@@ -8,11 +8,13 @@ import {createLibrary} from './learn-library.mjs';
 import {parseTutorAnswer,runLearnPlan,tutorPrompt} from './learn-tutor.mjs';
 import {readTranscript} from './learn-transcript.mjs';
 import {createExercises} from './learn-exercise.mjs';
+import {createMaker} from './learn-maker.mjs';
 
 const assets = new Map([
   ['/learn.html','text/html'], ['/learn-player.js','text/javascript'], ['/learn-library.js','text/javascript'], ['/learn-tutor.js','text/javascript'], ['/learn.css','text/css'],
   ['/learn-transcript.js','text/javascript'],
   ['/learn-practice.js','text/javascript'], ['/learn-exercise.js','text/javascript'],
+  ['/learn-maker.js','text/javascript'],
 ]);
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
@@ -30,7 +32,7 @@ async function body(req) {
   }
   return JSON.parse(Buffer.concat(chunks).toString() || '{}');
 }
-export async function createLearnHandler({origin,root,directory,shared=process.env.BRANCH_REVIEW_TOURS_DIR || path.join(os.homedir(),'Documents','Tours')}) {
+export async function createLearnHandler({origin,root,directory,reviewSource,shared=process.env.BRANCH_REVIEW_TOURS_DIR || path.join(os.homedir(),'Documents','Tours')}) {
   await mkdir(directory,{recursive:true});
   const settingsFile = path.join(directory,'settings.json');
   let settings = JSON.parse(await readFile(settingsFile,'utf8').catch(error=>{
@@ -63,6 +65,8 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
     const home=process.env.BRANCH_REVIEW_HOME;
     return home?JSON.parse(await readFile(path.join(home,'agent-settings.json'),'utf8').catch(()=> '{}')):{};
   }
+  const maker=await createMaker({directory,shared,library,agentSettings,
+    preferences:()=>settings,savePreferences:save,reviewSource});
 
   function view(entry,tour) {
     const {id,position}=entry;
@@ -114,6 +118,12 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
       } else if(req.method==='GET' && endpoint==='/api/learn/exercise') {
         const id=url.searchParams.get('id'),entry=library.get(id);
         json(res,200,exercises.status(id) || entry.exercises?.[url.searchParams.get('key')] || null);
+      } else if(req.method==='GET' && endpoint==='/api/learn/maker/options') {
+        json(res,200,await maker.options());
+      } else if(req.method==='GET' && endpoint==='/api/learn/maker/review') {
+        json(res,200,await maker.review(url.searchParams.get('id')));
+      } else if(req.method==='GET' && endpoint==='/api/learn/maker/job') {
+        json(res,200,maker.get(url.searchParams.get('id')));
       } else if(req.method==='POST') {
         if(req.headers.origin!==origin || req.headers['x-learn-token']!==token) {
           json(res,403,{error:'Reload Learn before continuing.'});return true;
@@ -205,6 +215,12 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
         } else if(endpoint==='/api/learn/tutor/stop') {
           if(tutorJob?.id===data.id)tutorJob.controller.abort(Error('Tutor stopped.'));
           json(res,200,{ok:true});
+        } else if(endpoint==='/api/learn/maker/refs') {
+          json(res,200,await maker.refs(data.repoPath));
+        } else if(endpoint==='/api/learn/maker/start') {
+          json(res,202,await maker.start(data));
+        } else if(endpoint==='/api/learn/maker/cancel') {
+          json(res,200,maker.cancel(data.id));
         } else json(res,404,{error:'Learn route not found.'});
       } else json(res,404,{error:'Learn route not found.'});
     } catch(error) {

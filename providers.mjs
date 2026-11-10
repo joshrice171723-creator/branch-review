@@ -65,13 +65,19 @@ export async function codexConnections(file,cwd){
   const rows=JSON.parse(result.stdout);if(!Array.isArray(rows))throw Error('Could not inspect Codex connector configuration.');
   return rows.map(row=>row.name).filter(name=>typeof name==='string');
 }
-export function agentArgs(provider,{kind,cwd,output,chatId,connections=[],images=[]}){
+export function agentArgs(provider,{kind,cwd,output,chatId,connections=[],images=[],model,reasoning}){
   providerId(provider);
+  if(model!==undefined && model!==null && !/^[\w.:/-]{1,120}$/.test(model))throw Error('Choose a valid model ID.');
+  if(reasoning!==undefined && reasoning!==null && !['none','minimal','low','medium','high','xhigh','max','ultra'].includes(reasoning))
+    throw Error('Choose a supported thinking level.');
   if(provider==='codex' && connections.some(name=>! /^[A-Za-z0-9_-]+$/.test(name)))throw Error('Rename Codex connectors containing punctuation before running isolated jobs.');
-  if(provider==='codex')return ['-a','never','-C',cwd,'--disable','plugins','--disable','apps','--disable','hooks',...connections.flatMap(name=>['-c',`mcp_servers.${name}.enabled=false`]),'exec','--sandbox',kind==='plan'?'read-only':'workspace-write',...(chatId?['resume',chatId]:[]),...(kind==='plan'?['--ephemeral']:[]),...images.flatMap(file=>['--image',file]),'--json','--color','never','--output-last-message',output,'-'];
-  if(provider==='muse')return museArgs({kind,cwd,output,chatId,images});
+  if(provider==='codex')return ['-a','never','-C',cwd,'--disable','plugins','--disable','apps','--disable','hooks',
+    ...(reasoning?['-c','model_reasoning_effort='+JSON.stringify(reasoning)]:[]),
+    ...connections.flatMap(name=>['-c',`mcp_servers.${name}.enabled=false`]),'exec','--sandbox',kind==='plan'?'read-only':'workspace-write',
+    ...(model?['--model',model]:[]),...(chatId?['resume',chatId]:[]),...(kind==='plan'?['--ephemeral']:[]),...images.flatMap(file=>['--image',file]),'--json','--color','never','--output-last-message',output,'-'];
+  if(provider==='muse')return museArgs({kind,cwd,output,chatId,images,model,reasoning});
   // Restricted file tools keep Claude inside the owned checkout. Host checks run separately.
-  return ['-p','--restricted','--safe-mode','--permission-prompts','none','--permission-mode',kind==='plan'?'dontAsk':'acceptEdits','--tools',kind==='plan'?'Read,Glob,Grep':'Read,Glob,Grep,Edit,Write','--allowedTools','Read,Glob,Grep','--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--output-format','stream-json','--verbose',...(chatId?['--resume',chatId]:[]),...(kind==='plan'?['--no-session-persistence']:[])];
+  return ['-p','--restricted','--safe-mode','--permission-prompts','none','--permission-mode',kind==='plan'?'dontAsk':'acceptEdits','--tools',kind==='plan'?'Read,Glob,Grep':'Read,Glob,Grep,Edit,Write','--allowedTools','Read,Glob,Grep','--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--output-format','stream-json','--verbose',...(model?['--model',model]:[]),...(reasoning?['--effort',reasoning]:[]),...(chatId?['--resume',chatId]:[]),...(kind==='plan'?['--no-session-persistence']:[])];
 }
 export function consumeAgentEvent(job,event){
   if(job.provider==='muse'){consumeMuseEvent(job,event);return;}
