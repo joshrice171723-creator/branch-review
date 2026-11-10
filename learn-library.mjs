@@ -273,7 +273,7 @@ export async function createLibrary({ directory, shared, loadTour }) {
     }),
     patch: (id, change) => serial(() => {
       const entry = get(id);
-      for (const key of ['flags', 'notes', 'tutorSession', 'exercises']) {
+      for (const key of ['flags', 'notes', 'tutorSession', 'tutorContext', 'exercises']) {
         if (Object.hasOwn(change, key)) entry[key] = structuredClone(change[key]);
       }
       return update(entry);

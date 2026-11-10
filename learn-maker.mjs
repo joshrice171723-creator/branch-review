@@ -69,7 +69,7 @@ export async function createMaker({directory,shared,library,agentSettings,prefer
     const configured=await agentSettings();
     const input={
       repoPath:reference?.repoPath || data.repoPath,mode:reference?'diff':data.mode,
-      base:reference?.base || data.base,head:reference?.head || data.head,
+      base:reference?.base || data.base,head:reference?.head || data.head,branch:reference?.branch,
       requestText:reference?.requestText,findings:reference?.findings,
       instructions:data.instructions,providerId:provider,model:data.model,reasoning:data.reasoning,
       narrationVoice:data.narrationVoice,override:configured.executables?.[provider],

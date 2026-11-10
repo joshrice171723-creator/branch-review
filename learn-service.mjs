@@ -1,5 +1,5 @@
 import {readFile,writeFile,mkdir,rename} from 'node:fs/promises';
-import {randomBytes} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
 import {createServer} from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -288,17 +288,23 @@ export async function createLearnHandler({origin,root,directory,reviewSource,sha
           res.once('close',()=>{if(!res.writableEnded)controller.abort(Error('Tutor stopped.'));});
           try{
             const {text}=await readTourCode(tour,cue.file);
+            const entry=library.get(data.id);
+            const context=createHash('sha256').update(JSON.stringify([section.title,cue.note,cue.file,cue.line,text])).digest('hex');
+            const followUp=Boolean(entry.tutorSession && entry.tutorContext===context);
+            const workspace=path.join(directory,'tutor-workspace');
+            await mkdir(workspace,{recursive:true});
             const question=data.grade===true
               ? `Joshua's explanation: ${data.question}. Grade it against the code: one line - Solid, Partly, or Off - then one sentence on what to fix.`
               : data.question;
             const configured=await agentSettings();
-            const result=await runLearnPlan({provider:'muse',override:configured.executables?.muse,cwd:tour.codeRoot,
-              prompt:tutorPrompt({title:section.title,...cue,text,question}),directory:path.join(directory,'jobs'),
-              chatId:library.get(data.id).tutorSession,signal:controller.signal});
+            const result=await runLearnPlan({provider:'muse',override:configured.executables?.muse,cwd:workspace,
+              prompt:tutorPrompt({title:section.title,...cue,text,question,followUp}),directory:path.join(directory,'jobs'),
+              chatId:entry.tutorContext?entry.tutorSession:undefined,signal:controller.signal});
             if(result.status==='no-allowance')json(res,200,result);
             else{
-              if(result.chatId)await library.patch(data.id,{tutorSession:result.chatId});
-              json(res,200,{status:'ready',...parseTutorAnswer(result.text)});
+              const answer=parseTutorAnswer(result.text);
+              if(result.chatId)await library.patch(data.id,{tutorSession:result.chatId,tutorContext:context});
+              json(res,200,{status:'ready',...answer});
             }
           }finally{tutorJob=null;}
         } else if(endpoint==='/api/learn/tutor/stop') {

@@ -11,6 +11,10 @@ test('tutor context uses real line numbers and a bounded excerpt',()=>{
   assert.match(prompt,/Source excerpt \(lines 50-350/);
   assert.match(prompt,/200: line 199/);
   assert.doesNotMatch(prompt,/400: line/);
+  const followUp=tutorPrompt({file:'runner.rb',line:200,text,question:'Why?',followUp:true});
+  assert.match(followUp,/source already provided in this session/);
+  assert.match(followUp,/Joshua's question: Why\?/);
+  assert.doesNotMatch(followUp,/200: line 199/);
   assert.deepEqual(parseTutorAnswer('DISPLAY: First calculate due batches.\nSAY: First calculate due batches.'),{
     display:'First calculate due batches.',say:'First calculate due batches.',
   });

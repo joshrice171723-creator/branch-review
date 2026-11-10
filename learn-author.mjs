@@ -75,16 +75,17 @@ async function gather(input,signal){
   const pinned=input.mode==='diff' || Boolean(input.head && input.head!=='HEAD');
   const head=await commit(input.head || 'HEAD');
   const base=input.mode==='diff'?await commit(input.base):null;
-  const branch=pinned && input.head!=='HEAD'?input.head || head.slice(0,12):
-    (await git('symbolic-ref','--short','-q','HEAD').catch(()=>head.slice(0,12))).trim();
+  const branch=input.branch || (pinned && input.head!=='HEAD'?input.head || head.slice(0,12):
+    (await git('symbolic-ref','--short','-q','HEAD').catch(()=>head.slice(0,12))).trim());
   const names=pinned?
     (await git('ls-tree','-r','-z',head)).split('\0').flatMap(entry=>{
       const match=entry.match(/^100[67]\d{2} blob [a-f\d]+\t([\s\S]+)$/);
       return match?[match[1]]:[];
     }):
     (await git('ls-files','--cached','--others','--exclude-standard','-z')).split('\0');
-  const available=new Set(names.filter(textPath));
-  const touched=base?(await git('diff','--no-ext-diff','--no-textconv','--name-only','-z',base,head,'--')).split('\0').filter(name=>available.has(name)):[];
+  const tracked=new Set(names.filter(textPath));
+  const touched=base?(await git('diff','--no-ext-diff','--no-textconv','--name-only','-z',base,head,'--')).split('\0').filter(name=>tracked.has(name)):[];
+  const available=base?new Set(touched):tracked;
   const changed=touched.length?(await git('diff','--no-ext-diff','--no-textconv','--unified=3',base,head,'--',...touched.slice(0,100))).slice(0,64_000):'';
   const cache=new Map();
   async function read(name){
@@ -109,7 +110,7 @@ async function gather(input,signal){
     input.instructions.toLowerCase().includes(path.posix.basename(name).toLowerCase()));
   const likely=[...available].filter(name=>/\.(?:rb|mjs|cjs|js|jsx|ts|tsx|py|go|rs|java|cs|erb|html|css|sql|md|txt|ya?ml|json|toml)$/i.test(name) ||
     /(?:^|\/)(?:Gemfile|Dockerfile|Makefile)$/i.test(name));
-  const prioritized=[...new Set([...touched,...focused,...likely])];
+  const prioritized=base?touched:[...new Set([...focused,...likely])];
   const excerpts=[];
   let budget=140_000;
   for(const name of prioritized.slice(0,120)){
@@ -135,7 +136,8 @@ function outlinePrompt(source,input){
     input.mode==='diff'?'Originating request: '+String(input.request || input.requestText || '').slice(0,20_000):'',
     input.mode==='diff'?'Stored review findings: '+JSON.stringify(input.findings ?? []).slice(0,24_000):'',
     'Branch: '+source.branch+' at '+source.head,
-    'Repository tree:\n'+[...source.available].slice(0,350).join('\n'),
+    (source.base?'Give each changed file with a source excerpt at least one step.\nChanged files:\n':'Repository tree:\n')+
+      [...source.available].slice(0,350).join('\n'),
     source.changed?'Diff excerpt:\n'+source.changed:'',
     'Source excerpts:\n'+source.excerpts.join('\n\n'),
   ].filter(Boolean).join('\n\n');
@@ -279,9 +281,14 @@ export async function authorTour(input,{directory,shared,signal,onProgress=()=>{
   try{
     signal?.throwIfAborted();
     const providerId=input.providerId || 'muse';
+    const workspace=source.base?path.join(root,'outline-workspace'):source.repo;
+    if(source.base){
+      await mkdir(workspace,{recursive:true});
+      if(providerId==='codex')await exec('git',['init','-q'],{cwd:workspace,windowsHide:true,signal});
+    }
     onProgress('Outlining');
     const result=await runPlan({
-      provider:providerId,override:input.override,cwd:source.repo,prompt:outlinePrompt(source,input),
+      provider:providerId,override:input.override,cwd:workspace,prompt:outlinePrompt(source,input),
       directory:folder,signal,model:input.model,reasoning:input.reasoning,
       timeoutMs:300_000,onStatus:message=>onProgress('Outlining',message),
     });

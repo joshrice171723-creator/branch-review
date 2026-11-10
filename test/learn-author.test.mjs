@@ -37,12 +37,13 @@ test('author engine pins diff code, drops invalid cues, and packages exact sente
   const [voice]=await installedVoices();
   assert(voice,'Windows SAPI voice unavailable');
   const shared=path.join(root,'Tours');
-  const result=await authorTour({repoPath:repo,mode:'diff',base,head,instructions:'Focus on schedule.rb.',
+  const result=await authorTour({repoPath:repo,mode:'diff',base,head,branch:'reviewed-schedule',instructions:'Focus on schedule.rb.',
     providerId:'codex',model:'gpt-6.1-sol',reasoning:'low',narrationVoice:voice},{
     directory:path.join(root,'jobs'),shared,runPlan:async input=>{
       assert.match(input.prompt,/Focus on schedule\.rb\./);
       assert.match(input.prompt,/1: LIMIT = 10/);
       assert.doesNotMatch(input.prompt,/LIMIT = 99/);
+      assert.doesNotMatch(input.prompt,/runner\.rb/);
       return {status:'ready',text:JSON.stringify({title:'Schedule Tour',sections:[{title:'Schedule',steps:[
         {file:'schedule.rb',line:1,say:'Limit is ten. The value is constant.'},
         {file:'schedule.rb',line:3,say:'The cutoff method returns the limit.'},
@@ -55,6 +56,7 @@ test('author engine pins diff code, drops invalid cues, and packages exact sente
   const [entry]=await library.scan();
   const {tour}=await library.open(entry.id);
   assert.equal(tour.manifest.commitRange,base+'..'+head);
+  assert.equal(tour.manifest.branch,'reviewed-schedule');
   assert.equal((await readTourCode(tour,'schedule.rb')).text,source);
   const {sentences,estimated}=await readTranscript(tour,0);
   assert.equal(estimated,false);assert.equal(sentences.length,3);

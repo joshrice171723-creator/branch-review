@@ -165,6 +165,15 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   $('close-evidence').onclick=()=>{$('evidence-dialog').close();$('evidence-image').removeAttribute('src');};
   function report(id) {
     if(!id)return;
+    const teachSaved=$('teach-saved-review');
+    if(teachSaved){
+      const record=getState().record;
+      const approved=record?.id===id
+        ? record.approval?.commit===record.identity.changed
+        : $('history').selectedOptions[0]?.dataset.approved==='true';
+      teachSaved.hidden=!window.desktop?.openLearn || !approved;
+      teachSaved.onclick=()=>window.desktop.openLearn(id).catch(e=>error(e.message));
+    }
     $('report-frame').src=`/api/report?id=${encodeURIComponent(id)}&inline=1`;
     $('download-report').href=`/api/report?id=${encodeURIComponent(id)}`;
     $('report-dialog').showModal();
@@ -182,7 +191,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
       const rows=await api('/api/history'), selected=$('history').value;
       $('history').replaceChildren(node('option','Choose a saved review'));
       $('history').firstChild.value='';
-      for(const row of rows) { const option=node('option',`${row.identity.changed.slice(0,7)} · ${row.openIssues} open · ${row.title}`);option.value=row.id;$('history').append(option); }
+      for(const row of rows) { const option=node('option',`${row.identity.changed.slice(0,7)} · ${row.openIssues} open · ${row.title}`);option.value=row.id;option.dataset.approved=String(row.approval?.commit===row.identity.changed);$('history').append(option); }
       $('history').value=selected;
       historyKey=key;
     } catch(e) { error(e.message); }

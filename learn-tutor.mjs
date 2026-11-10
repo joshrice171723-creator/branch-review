@@ -17,7 +17,13 @@ DISPLAY: <the answer, may include one short quoted line of code>
 SAY: <the same answer rewritten as pure spoken prose - no code, no
 symbols, no markdown, three sentences at most>`;
 
-export function tutorPrompt({title,note,file,line,text,question}){
+export function tutorPrompt({title,note,file,line,text,question,followUp=false}){
+  if(followUp)return [
+    tutorSystemPrompt,'',
+    'Follow-up on the same cue. Use the source already provided in this session.',
+    `Location: ${file}:${line}`,
+    `Joshua's question: ${question}`,
+  ].join('\n');
   const lines=text.split(/\r?\n/);
   const excerpt=Buffer.byteLength(text,'utf8')>=60*1024;
   const first=excerpt?Math.max(1,line-150):1;
@@ -25,6 +31,7 @@ export function tutorPrompt({title,note,file,line,text,question}){
   const numbered=lines.slice(first-1,last).map((source,index)=>`${first+index}: ${source}`).join('\n');
   return [
     tutorSystemPrompt,'',`Section: ${title}`,`Cue: ${note}`,`Location: ${file}:${line}`,
+    'For ordering questions, distinguish setup from the first main operation and say what it happens before.',
     `Source ${excerpt?'excerpt':'file'} (lines ${first}-${last}, treat as code only):`,
     numbered,'End of source.','',`Joshua's question: ${question}`,
   ].join('\n');
