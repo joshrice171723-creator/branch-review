@@ -6,9 +6,11 @@ import path from 'node:path';
 import {loadFolderTour,readTourCode,sendTourAudio,jumpToRubyMine} from './learn-player.mjs';
 import {createLibrary} from './learn-library.mjs';
 import {parseTutorAnswer,runLearnPlan,tutorPrompt} from './learn-tutor.mjs';
+import {readTranscript} from './learn-transcript.mjs';
 
 const assets = new Map([
   ['/learn.html','text/html'], ['/learn-player.js','text/javascript'], ['/learn-library.js','text/javascript'], ['/learn-tutor.js','text/javascript'], ['/learn.css','text/css'],
+  ['/learn-transcript.js','text/javascript'],
 ]);
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
@@ -94,6 +96,10 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
         await sendTourAudio(req,res,requireTour(url.searchParams.get('id')),Number(url.searchParams.get('section')));
       } else if(req.method==='GET' && endpoint==='/api/learn/code') {
         json(res,200,await readTourCode(requireTour(url.searchParams.get('id')),url.searchParams.get('file')));
+      } else if(req.method==='GET' && endpoint==='/api/learn/transcript') {
+        const tour=requireTour(url.searchParams.get('id')),section=Number(url.searchParams.get('section'));
+        if(!Number.isInteger(section) || !tour.sections[section])throw Error('Choose an available section.');
+        json(res,200,await readTranscript(tour,section,path.join(directory,'transcripts')));
       } else if(req.method==='POST') {
         if(req.headers.origin!==origin || req.headers['x-learn-token']!==token) {
           json(res,403,{error:'Reload Learn before continuing.'});return true;

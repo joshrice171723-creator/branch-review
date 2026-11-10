@@ -1,4 +1,4 @@
-export function mountTutor({request,getContext,pause,isPaused}){
+export function mountTutor({request,getContext,pause,isPaused,onPanel}){
   const $=id=>document.getElementById(id);
   const panel=$('learn-tutor'),form=$('tutor-form'),question=$('tutor-question');
   let pending,answer,contextKey,voiceURI='',rate=1,autoSpeak=true;
@@ -25,6 +25,7 @@ export function mountTutor({request,getContext,pause,isPaused}){
     if(!getContext())return;
     pause();
     panel.hidden=false;
+    onPanel(true);
     syncContext();
     question.focus();
   }
@@ -44,7 +45,7 @@ export function mountTutor({request,getContext,pause,isPaused}){
     catch(error){setStatus(error.message);}
   }
   $('tutor-open').onclick=open;
-  $('tutor-close').onclick=()=>{panel.hidden=true;stopSpeech();void stop();};
+  $('tutor-close').onclick=()=>{panel.hidden=true;onPanel(false);stopSpeech();void stop();};
   $('tutor-stop').onclick=stop;
   $('tutor-speak').onclick=speak;
   $('tutor-silence').onclick=stopSpeech;

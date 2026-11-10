@@ -69,6 +69,11 @@
       <p id="tutor-answer" class="learn-answer" hidden></p>
       <div class="header-actions"><button id="tutor-speak" type="button" disabled>Speak answer</button><button id="tutor-silence" type="button">Stop speaking</button></div>
     </aside>
+    <aside id="learn-transcript" class="learn-panel" aria-label="Transcript" hidden>
+      <header><h2>Transcript</h2><button id="transcript-close" type="button">Hide</button></header>
+      <p id="transcript-notice" role="status"></p>
+      <ol id="transcript-sentences"></ol>
+    </aside>
     <footer class="transport">
       <div class="caption-row"><span id="caption" aria-live="polite">—</span><span id="section-position"></span></div>
       <div class="seek-row">
@@ -79,6 +84,7 @@
       <div class="transport-actions">
         <button id="play" class="primary" type="button">▶ Play</button>
         <button id="tutor-open" type="button" disabled>Ask</button>
+        <button id="transcript-open" type="button" aria-pressed="true">Transcript</button>
         <label class="control-label">Speed <select id="speed"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
         <label class="control-label volume-label">Volume <input id="volume" type="range" min="0" max="1" step="0.01" value="1"></label>
         <span id="status" role="status"></span>

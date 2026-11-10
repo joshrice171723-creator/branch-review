@@ -1,5 +1,6 @@
 import {libraryUI} from './learn-library.js';
 import {mountTutor} from './learn-tutor.js';
+import {mountTranscript} from './learn-transcript.js';
 const $ = id => document.getElementById(id);
 let token;
 async function request(endpoint, data) {
@@ -52,7 +53,9 @@ function cueContext(){
   const cue=tour && section()?.cues[activeIndex];
   return cue?{id:tour.id,section:sectionIndex,cue:activeIndex,title:section().title,...cue}:null;
 }
-const tutor=mountTutor({request,getContext:cueContext,pause:()=>audio.pause(),isPaused:()=>audio.paused});
+const transcript=mountTranscript({request,seek:seekTo,position:()=>audio.currentTime});
+const tutor=mountTutor({request,getContext:cueContext,pause:()=>audio.pause(),isPaused:()=>audio.paused,
+  onPanel:open=>transcript.suppress(open)});
 const time = seconds => {
   const value = Math.max(0, Math.floor(seconds || 0));
   return Math.floor(value / 60) + ':' + String(value % 60).padStart(2, '0');
@@ -196,6 +199,7 @@ function loadSection(index, seconds, play) {
       () => seekTo(cue.atSeconds))));
   audio.src = section().audioUrl;
   audio.load();
+  void transcript.load(tour.id,sectionIndex);
   updateTimeline();
   sync();
 }
@@ -236,6 +240,7 @@ function cueAt(seconds) {
 }
 function sync() {
   if (!tour) return;
+  transcript.sync(audio.currentTime);
   updateTimeline();
   const index = cueAt(audio.currentTime);
   if (index === activeIndex) return;
