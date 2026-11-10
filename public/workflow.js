@@ -53,9 +53,14 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     notice('');
   }
   $('choose-repository').hidden = !window.desktop;
+  const openLearn=()=>window.desktop?.openLearn ? window.desktop.openLearn().catch(e=>error(e.message)) : location.assign('/learn.html');
+  const learnDoor=$('learn-door');
+  if(learnDoor)learnDoor.onclick=openLearn;
   const projects=document.createElement('dialog');projects.id='projects-dialog';projects.setAttribute('aria-label','Projects');
-  projects.innerHTML='<header class="dialog-heading"><h2>Projects</h2><button type="button" data-close>Close</button></header><label for="projects-search">Find a project</label><input id="projects-search" type="search" placeholder="Search by name or folder"><div data-projects></div><button type="button" data-add>Add a project…</button><p role="status" data-status></p>';
+  projects.innerHTML='<header class="dialog-heading"><h2>Projects</h2><button type="button" data-close>Close</button></header><button type="button" data-learn class="learn-door">Learn — Walkthrough Player</button><label for="projects-search">Find a project</label><input id="projects-search" type="search" placeholder="Search by name or folder"><div data-projects></div><button type="button" data-add>Add a project…</button><p role="status" data-status></p>';
   document.body.append(projects);const projectList=projects.querySelector('[data-projects]'),projectSearch=projects.querySelector('#projects-search'),projectStatus=projects.querySelector('[data-status]');let recent=[];
+  const learnEntrance=projects.querySelector('[data-learn]');
+  if(learnEntrance)learnEntrance.onclick=openLearn;
   const projectNode=(tag,value)=>{const e=document.createElement(tag);e.textContent=value;return e;};
   function renderProjects(){
     const query=projectSearch.value.trim().toLowerCase(),matches=recent.filter(item=>`${item.name} ${item.path}`.toLowerCase().includes(query));

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Learn — Walkthrough Player</title>
+  <link rel="stylesheet" href="learn.css">
+  <script type="module" src="learn-player.js"></script>
+</head>
+<body class="learn-world">
+  <header class="app-header">
+    <div class="identity"><span class="app-mark" aria-hidden="true">▸</span><h1>Learn — Walkthrough Player</h1></div>
+    <div class="header-actions"><div class="header-actions" id="player-actions" hidden>
+      <button id="settings-button" type="button">Settings</button>
+      <button id="folders-button" type="button">Change folders</button>
+    </div><button id="back" type="button">Back to Branch Review</button></div>
+  </header>
+  <main id="setup">
+    <form id="folder-form" class="setup-panel">
+      <h2>Open a tour</h2>
+      <label for="tour-path">Tour folder</label>
+      <div class="folder-row"><input id="tour-path" readonly placeholder="Choose the folder with cues.json and MP3s"><button id="pick-tour" type="button">Browse…</button></div>
+      <label for="repo-path">Repo folder</label>
+      <div class="folder-row"><input id="repo-path" readonly placeholder="Choose the root of the code repository"><button id="pick-repo" type="button">Browse…</button></div>
+      <p id="setup-error" class="error" role="alert" hidden></p>
+      <div class="setup-actions"><button id="cancel-folders" type="button" hidden>Cancel</button><button id="open-tour" class="primary" type="submit" disabled>Open tour</button></div>
+    </form>
+  </main>
+  <main id="player" hidden>
+    <aside class="sidebar" aria-label="Tour navigation">
+      <div class="side-heading"><h2>Sections</h2><span id="section-count"></span></div>
+      <ol id="sections" class="section-list"></ol>
+      <div class="side-heading cue-heading"><h2>Cues</h2><span id="cue-count"></span></div>
+      <ol id="cues" class="cue-list"></ol>
+    </aside>
+    <section class="viewer" aria-label="Code viewer">
+      <header class="viewer-header"><span class="viewer-label">Code</span><span id="file-heading">—</span></header>
+      <div id="resume-panel" class="notice resume" hidden><span id="resume-detail"></span><button class="primary" id="resume" type="button">Resume where you left off</button><button id="dismiss-resume" type="button">Start over</button></div>
+      <details class="notice warnings" id="warnings" hidden><summary id="warning-summary"></summary><ul id="warning-list"></ul></details>
+      <div id="code-scroll" class="code-scroll" tabindex="0" aria-label="Source code">
+        <p id="code-message" class="code-message"></p>
+        <div id="source" hidden>
+          <div id="gutter" aria-hidden="true"></div>
+          <pre id="code"><code id="code-text"></code></pre>
+        </div>
+      </div>
+    </section>
+    <footer class="transport">
+      <div class="caption-row"><span id="caption" aria-live="polite">—</span><span id="section-position"></span></div>
+      <div class="seek-row">
+        <span id="elapsed" class="timestamp">0:00</span>
+        <div class="timeline"><input id="seek" type="range" min="0" max="1" step="0.001" value="0" aria-label="Seek in section"><div id="markers" aria-hidden="true"></div></div>
+        <span id="total" class="timestamp">0:00</span>
+      </div>
+      <div class="transport-actions">
+        <button id="play" class="primary" type="button">▶ Play</button>
+        <label class="control-label">Speed <select id="speed"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+        <label class="control-label volume-label">Volume <input id="volume" type="range" min="0" max="1" step="0.01" value="1"></label>
+        <span id="status" role="status"></span>
+      </div>
+      <div class="keyboard-help">Space play/pause · ←/→ seek 10s · ↑/↓ cue · N/P section</div>
+    </footer>
+  </main>
+  <dialog id="settings-dialog">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <label class="toggle"><input id="ruby-mine" type="checkbox"> Follow cues in RubyMine</label>
+      <p>Open each cue in RubyMine while the built-in viewer follows playback.</p>
+      <button class="primary" value="close">Done</button>
+    </form>
+  </dialog>
+  <audio id="audio" preload="auto"></audio>
+</body>
+</html>

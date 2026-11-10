@@ -16,10 +16,10 @@ if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') {
   process.env.BRANCH_REVIEW_HOME ||= path.join(devRoot, 'workspace');
   delete process.env.META_CLINIC_REPO;
 }
-let window, welcomeWindow, closing = false, home;
+let window, welcomeWindow, closing = false, home, learnDoor;
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (window) { window.show(); window.focus(); } });
+  app.on('second-instance', () => { if (!learnDoor?.focus() && window) { window.show(); window.focus(); } });
   app.whenReady().then(launch).catch(error => { dialog.showErrorBox('Branch Review could not start', error.message); app.exit(1); });
 }
 async function firstProject(detectProject) {
@@ -30,9 +30,10 @@ async function firstProject(detectProject) {
   welcome.webContents.on('will-navigate',(event,url)=>{if(url!==page)event.preventDefault();});
   return new Promise((resolve,reject)=>{
     let finished=false,foundProject=null;
-    const finish=value=>{if(finished)return;finished=true;ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');ipcMain.removeHandler('welcome:help');ipcMain.removeHandler('welcome:git');resolve(value);};
+    const finish=value=>{if(finished)return;finished=true;ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');ipcMain.removeHandler('welcome:help');ipcMain.removeHandler('welcome:git');ipcMain.removeHandler('welcome:learn');resolve(value);};
     welcome.on('closed',()=>finish(null));
     const trustedWelcome=event=>{if(event.sender!==welcome.webContents || event.senderFrame!==welcome.webContents.mainFrame || event.senderFrame.url!==page)throw Error('Only the welcome screen can select a project.');};
+    ipcMain.handle('welcome:learn',event=>{trustedWelcome(event);if(!learnDoor)throw Error('Learn is unavailable.');return learnDoor.open(welcome,true);});
     ipcMain.handle('welcome:probe',async(event,provider)=>{trustedWelcome(event);return probeProvider(provider);});
     ipcMain.handle('welcome:git',async event=>{trustedWelcome(event);return gitAvailable({exec});});
     ipcMain.handle('welcome:help',async(event,provider)=>{trustedWelcome(event);if(!['git','codex','claude','muse'].includes(provider))throw Error('Choose a coding agent.');await shell.openExternal(setupUrl(provider));});
@@ -58,6 +59,10 @@ async function firstProject(detectProject) {
 }
 async function launch() {
   const root = path.dirname(__dirname);
+  const learnDirectory=path.join(app.getPath('userData'),'learn');
+  process.env.BRANCH_REVIEW_LEARN_HOME=learnDirectory;
+  try{learnDoor=require('./learn-window.cjs').learnDoor({origin,root,directory:learnDirectory});}
+  catch(error){if(error.code!=='MODULE_NOT_FOUND')throw error;}
   const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
   if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') await mkdir(path.dirname(settingsPath), {recursive:true});
@@ -128,6 +133,7 @@ async function launch() {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || new URL(event.senderFrame.url).origin !== origin) throw new Error('Only the review workspace can request desktop actions.');
   }
   ipcMain.handle('review:setup-help',async(event,key)=>{trusted(event);await shell.openExternal(setupUrl(key));});
+  ipcMain.handle('review:learn',event=>{trusted(event);if(!learnDoor)throw Error('Learn is unavailable.');return learnDoor.open(window);});
   async function control(endpoint, data = {}) {
     const state = await fetch(origin + '/api/state').then(r => r.json());
     if (state.busy) { const error=new Error('Wait for the current operation to finish.');error.retryable=true;throw error; }

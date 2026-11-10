@@ -8,3 +8,6 @@ form.addEventListener('submit',async event=>{event.preventDefault();const text=i
 async function choose(foundPath){busy=true;status.textContent='Getting your project ready…';update();try{await window.welcome.choose(agent.value,foundPath);status.textContent='';}catch(error){status.textContent=error.message || 'Could not open that project. Try again.';}finally{busy=false;update();}}
 button.addEventListener('click',()=>choose());openFound.addEventListener('click',()=>candidate&&choose(candidate.path));
 void check();
+document.getElementById('welcome-learn')?.addEventListener('click',()=>{
+  window.learnDoor.open().catch(error=>{status.textContent=error.message;});
+});

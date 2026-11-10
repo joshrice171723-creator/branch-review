@@ -11,6 +11,8 @@
     "*.rb",
     "public/**/*",
     "desktop/main.cjs",
+    "desktop/learn-window.cjs",
+    "desktop/learn-preload.cjs",
     "desktop/welcome.html",
     "desktop/welcome.js",
     "desktop/welcome-preload.cjs",

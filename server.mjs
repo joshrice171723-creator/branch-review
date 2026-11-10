@@ -46,6 +46,14 @@ const cleanup=databaseCleanup({run,local,state,records:store.records,preparedFix
 let toolsSettings=JSON.parse(await readFile(path.join(local,'tools-settings.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
 const delivery = new Delivery(git, store, defaultBranch);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
+let learnHandler;
+async function serveLearn(req,res,url){
+  if(!url.pathname.startsWith('/api/learn/') && !['/learn.html','/learn.css','/learn-player.js'].includes(url.pathname))return false;
+  learnHandler ??= import('./learn-service.mjs').then(({createLearnHandler})=>createLearnHandler({
+    origin,root,directory:process.env.BRANCH_REVIEW_LEARN_HOME || path.join(local,'learn'),
+  }));
+  return (await learnHandler)(req,res,url);
+}
 async function manifestFor(sha) {
   const plan=await plans.get(sha);
   if(!plan)throw Error('Reopen this branch to generate its checklist from the current changes.');
@@ -386,6 +394,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
+    if(await serveLearn(req,res,url))return;
     if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await readRecipe(local).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await consolidateFixBranches(groupedBranches(await branches(),jobs.rows,store.records),git));
     if(req.method==='GET' && url.pathname==='/api/qa-review')return json(res,200,store.get(url.searchParams.get('id')));
