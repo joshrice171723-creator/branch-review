@@ -49,7 +49,9 @@ export function libraryUI({request,open,setup}){
       await request('library/remove',{id:entry.id});
       await refresh();
     }));
-    article.append(header,counts,recent,source,actions);
+    const practice=element('p',time(entry.secondsListened || 0)+' listened · '+entry.completedSections.length+
+      ' sections completed · '+Object.keys(entry.flags || {}).length+' flags','learn-card-muted');
+    article.append(header,counts,recent,source,practice,actions);
     return article;
   }
   async function refresh(scan=false){

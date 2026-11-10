@@ -7,10 +7,12 @@ import {loadFolderTour,readTourCode,sendTourAudio,jumpToRubyMine} from './learn-
 import {createLibrary} from './learn-library.mjs';
 import {parseTutorAnswer,runLearnPlan,tutorPrompt} from './learn-tutor.mjs';
 import {readTranscript} from './learn-transcript.mjs';
+import {createExercises} from './learn-exercise.mjs';
 
 const assets = new Map([
   ['/learn.html','text/html'], ['/learn-player.js','text/javascript'], ['/learn-library.js','text/javascript'], ['/learn-tutor.js','text/javascript'], ['/learn.css','text/css'],
   ['/learn-transcript.js','text/javascript'],
+  ['/learn-practice.js','text/javascript'], ['/learn-exercise.js','text/javascript'],
 ]);
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
@@ -49,6 +51,13 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
   const token = randomBytes(32).toString('hex');
   const tours = new Map();
   const library = await createLibrary({directory,shared,loadTour:loadFolderTour});
+  const exercises=createExercises({
+    protectedRoots:[path.join(os.homedir(),'appointment-flow'),path.join(os.homedir(),'Desktop','DefenseLoop')],
+    onDone:(id,key,result)=>{
+      tours.get(id)?.cache.delete(result.file);
+      return library.patch(id,{exercises:{...library.get(id).exercises,[key]:result}});
+    },
+  });
   let tutorJob;
   async function agentSettings(){
     const home=process.env.BRANCH_REVIEW_HOME;
@@ -59,9 +68,11 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
     const {id,position}=entry;
     return {
       id,title:entry.title,tourFolder:entry.source,repoFolder:entry.codeRoot,warnings:tour.warnings,
+      flags:entry.flags,notes:entry.notes,exercises:entry.exercises,
       position:position?{section:position.sectionIndex,seconds:position.seconds}:null,
       sections:tour.sections.map(({title,durationSecs,cues},section)=>({
-        title,durationSecs,cues,audioUrl:`/api/learn/audio?id=${id}&section=${section}`,
+        title,durationSecs,cues:cues.map((cue,index)=>({...cue,exercise:exercises.describe(tour,entry,section,index)})),
+        audioUrl:`/api/learn/audio?id=${id}&section=${section}`,
       })),
     };
   }
@@ -100,6 +111,9 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
         const tour=requireTour(url.searchParams.get('id')),section=Number(url.searchParams.get('section'));
         if(!Number.isInteger(section) || !tour.sections[section])throw Error('Choose an available section.');
         json(res,200,await readTranscript(tour,section,path.join(directory,'transcripts')));
+      } else if(req.method==='GET' && endpoint==='/api/learn/exercise') {
+        const id=url.searchParams.get('id'),entry=library.get(id);
+        json(res,200,exercises.status(id) || entry.exercises?.[url.searchParams.get('key')] || null);
       } else if(req.method==='POST') {
         if(req.headers.origin!==origin || req.headers['x-learn-token']!==token) {
           json(res,403,{error:'Reload Learn before continuing.'});return true;
@@ -134,9 +148,33 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
           if(!Number.isInteger(position?.section) || !tour.sections[position.section] ||
              !Number.isFinite(position.seconds) || position.seconds<0) throw Error('Invalid playback position.');
           const completedSection=data.completed===true?position.section:undefined;
-          await library.progress(data.id,{sectionIndex:position.section,seconds:position.seconds,completedSection,
+          const entry=await library.progress(data.id,{sectionIndex:position.section,seconds:position.seconds,completedSection,
+            listened:Number.isFinite(data.listened)?Math.max(0,Math.min(20,data.listened)):0,
             finished:data.completed===true && position.section===tour.sections.length-1});
+          json(res,200,{secondsListened:entry.secondsListened,completedSections:entry.completedSections.length,flags:Object.keys(entry.flags).length});
+        } else if(['/api/learn/practice/flag','/api/learn/practice/note'].includes(endpoint)){
+          const tour=requireTour(data.id),entry=library.get(data.id);
+          if(!Number.isInteger(data.section)||!Number.isInteger(data.cue)||!tour.sections[data.section]?.cues[data.cue])
+            throw Error('Choose an available cue.');
+          const key=data.section+':'+data.cue;
+          if(endpoint.endsWith('/flag')){
+            if(typeof data.flag!=='boolean')throw Error('Choose whether this cue is flagged.');
+            if(data.flag)entry.flags[key]=true;else delete entry.flags[key];
+            await library.patch(data.id,{flags:entry.flags});
+          }else{
+            if(typeof data.note!=='string'||data.note.length>4000)throw Error('Enter a note under 4,000 characters.');
+            if(data.note.trim())entry.notes[key]=data.note;else delete entry.notes[key];
+            await library.patch(data.id,{notes:entry.notes});
+          }
           json(res,200,{ok:true});
+        } else if(endpoint==='/api/learn/exercise/start') {
+          json(res,200,await exercises.start(requireTour(data.id),library.get(data.id),data.section,data.cue,data.confirmed));
+        } else if(endpoint==='/api/learn/exercise/undo') {
+          const result=await exercises.undo(data.id,data.confirmed);
+          const entry=library.get(data.id);
+          await library.patch(data.id,{exercises:{...entry.exercises,[result.key]:result}});
+          requireTour(data.id).cache.clear();
+          json(res,200,result);
         } else if(endpoint==='/api/learn/jump') {
           if(settings.rubyMine===true) await jumpToRubyMine(requireTour(data.id),data.section,data.cue);
           json(res,200,{ok:true});

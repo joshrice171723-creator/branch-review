@@ -1,6 +1,8 @@
 import {libraryUI} from './learn-library.js';
 import {mountTutor} from './learn-tutor.js';
 import {mountTranscript} from './learn-transcript.js';
+import {mountPractice} from './learn-practice.js';
+import {mountExercise} from './learn-exercise.js';
 const $ = id => document.getElementById(id);
 let token;
 async function request(endpoint, data) {
@@ -18,7 +20,7 @@ const api={
   openTour:(tourFolder,repoFolder,id)=>request('open',{tourFolder,repoFolder,id}),
   code:file=>request('code?'+new URLSearchParams({id:tour.id,file})),
   preferences:settings=>request('preferences',settings),
-  position:(position,completed)=>request('position',{id:tour.id,position,completed}),
+  position:(position,completed,listened)=>request('position',{id:tour.id,position,completed,listened}),
   jump:(section,cue)=>request('jump',{id:tour.id,section,cue}),
 };
 $('back').onclick=async()=>{
@@ -48,6 +50,7 @@ let relocateId;
 let trackPosition = false;
 let lastSaved = '';
 let finished = false;
+let listened=0,mediaClock=null,practiceFrame;
 const section = () => tour.sections[sectionIndex];
 function cueContext(){
   const cue=tour && section()?.cues[activeIndex];
@@ -56,6 +59,16 @@ function cueContext(){
 const transcript=mountTranscript({request,seek:seekTo,position:()=>audio.currentTime});
 const tutor=mountTutor({request,getContext:cueContext,pause:()=>audio.pause(),isPaused:()=>audio.paused,
   onPanel:open=>transcript.suppress(open)});
+const exercise=mountExercise({request,context:cueContext,pause:()=>audio.pause()});
+const practice=mountPractice({request,context:cueContext,sections:()=>tour?.sections || [],
+  clock:()=>tour?{section:sectionIndex,seconds:audio.currentTime,duration:duration(),rate:audio.playbackRate,
+    playing:!audio.paused && audio.readyState>=1,seeking:audio.seeking}:null,
+  go:goTo,pause:()=>audio.pause(),status:value=>status(value),redrawFlags});
+function redrawFlags(){
+  Array.from($('cues').children).forEach((item,index)=>{
+    item.firstElementChild.dataset.shaky=String(practice.flagged(sectionIndex,index));
+  });
+}
 const time = seconds => {
   const value = Math.max(0, Math.floor(seconds || 0));
   return Math.floor(value / 60) + ':' + String(value % 60).padStart(2, '0');
@@ -125,6 +138,8 @@ async function openEntry(id,continued=false,play=false) {
 function renderTour(data,continued=false,play=false) {
   audio.pause();
   tour = data;
+  listened=0;mediaClock=null;
+  practice.setTour(data);
   $('setup').hidden=$('library').hidden=true;
   $('player').hidden = $('player-actions').hidden = false;
   $('warnings').hidden = !tour.warnings.length;
@@ -182,7 +197,23 @@ function savePosition(force = false) {
   const key = sectionIndex + ':' + Math.floor(audio.currentTime / 5);
   if (!force && lastSaved === key) return;
   lastSaved = key;
-  return api.position({ section: sectionIndex, seconds: audio.currentTime }).catch(report);
+  return persistPosition();
+}
+function persistPosition(completed=false){
+  const amount=listened,id=tour.id;
+  listened=0;
+  return api.position({section:sectionIndex,seconds:audio.currentTime},completed,amount).catch(error=>{
+    if(tour?.id===id)listened+=amount;
+    report(error);
+  });
+}
+function measureAudio(){
+  const now=audio.currentTime;
+  if(trackPosition&&!audio.paused&&!audio.seeking&&mediaClock!==null){
+    const delta=(now-mediaClock)/audio.playbackRate;
+    if(delta>0 && delta<2)listened+=delta;
+  }
+  mediaClock=now;
 }
 function loadSection(index, seconds, play) {
   if (!tour.sections[index]) return;
@@ -190,6 +221,7 @@ function loadSection(index, seconds, play) {
   audio.pause();
   sectionIndex = index;
   activeIndex = -2;
+  mediaClock=null;
   pendingSeek = { seconds, play };
   markActive('sections', index);
   $('section-position').textContent = 'Section ' + (index + 1) + ' of ' + tour.sections.length;
@@ -197,6 +229,7 @@ function loadSection(index, seconds, play) {
   $('cues').replaceChildren(...section().cues.map((cue, i) =>
     listButton('cue', String(i + 1).padStart(2, '0'), cue.note, cue.file + ':' + cue.line,
       () => seekTo(cue.atSeconds))));
+  redrawFlags();
   audio.src = section().audioUrl;
   audio.load();
   void transcript.load(tour.id,sectionIndex);
@@ -210,9 +243,20 @@ function startSection(index, play) {
 }
 function seekTo(seconds) {
   engage();
+  mediaClock=null;
   if (pendingSeek) pendingSeek.seconds = seconds;
   if (audio.readyState >= 1) audio.currentTime = Math.max(0, Math.min(seconds, duration()));
   sync();
+}
+function goTo(index,seconds,play){
+  engage();
+  if(index!==sectionIndex){loadSection(index,seconds,play);return;}
+  if(!play)audio.pause();
+  seekTo(seconds);
+  if(play){
+    if(pendingSeek)pendingSeek.play=true;
+    else audio.play().catch(report);
+  }
 }
 
 function updateTimeline() {
@@ -246,6 +290,8 @@ function sync() {
   if (index === activeIndex) return;
   activeIndex = index;
   tutor.syncContext();
+  exercise.sync();
+  practice.cueChanged();
   markActive('cues', index);
   $('cues').children[index]?.scrollIntoView({block:'nearest'});
   const cue = section().cues[index];
@@ -335,17 +381,29 @@ audio.addEventListener('loadedmetadata', () => {
   sync();
   if (pending?.play) audio.play().catch(report);
 });
-audio.addEventListener('timeupdate', () => { sync(); savePosition(); });
-audio.addEventListener('seeked', () => { sync(); savePosition(true); });
-audio.addEventListener('play', () => { tutor.stopSpeech(); $('play').textContent = 'Ⅱ Pause'; savePosition(true); });
-audio.addEventListener('pause', () => { $('play').textContent = '▶ Play'; savePosition(true); });
+audio.addEventListener('timeupdate', () => { measureAudio(); sync(); savePosition(); });
+audio.addEventListener('seeked', () => { mediaClock=audio.currentTime; sync(); savePosition(true); });
+function practiceTick(){
+  if(audio.paused)return;
+  practice.check();
+  if(!audio.paused)practiceFrame=requestAnimationFrame(practiceTick);
+}
+audio.addEventListener('play', () => {
+  tutor.stopSpeech();$('play').textContent='Ⅱ Pause';mediaClock=audio.currentTime;
+  cancelAnimationFrame(practiceFrame);practiceTick();savePosition(true);
+});
+audio.addEventListener('pause', () => {
+  cancelAnimationFrame(practiceFrame);$('play').textContent='▶ Play';savePosition(true);
+});
 audio.addEventListener('ended', async () => {
-  await api.position({section:sectionIndex,seconds:audio.currentTime},true).catch(report);
+  if(practice.ended())return;
+  const summary=await persistPosition(true);
   if (sectionIndex + 1 < tour.sections.length) startSection(sectionIndex + 1, true);
   else {
     finished = true;
     trackPosition = false;
-    status('Tour finished.');
+    status('Tour finished.'+(summary?' '+time(summary.secondsListened)+' listened · '+summary.completedSections+
+      ' sections completed · '+summary.flags+' flags':''));
   }
 });
 audio.addEventListener('error', () => status('Could not play the section MP3.'));
@@ -385,6 +443,7 @@ document.addEventListener('keydown', event => {
   if (!tour || $('player').hidden || $('settings-dialog').open ||
       event.altKey || event.ctrlKey || event.metaKey || event.target.matches('input, select, textarea')) return;
   const key = event.key.toLowerCase();
+  if(practice.key(event))return;
   if (key === ' ' && event.target.matches('button')) return;
   if (![' ', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'n', 'p', 'q'].includes(key)) return;
   event.preventDefault();

@@ -85,11 +85,12 @@
         <button id="play" class="primary" type="button">▶ Play</button>
         <button id="tutor-open" type="button" disabled>Ask</button>
         <button id="transcript-open" type="button" aria-pressed="true">Transcript</button>
+        <button id="exercise-open" type="button" hidden>Exercise</button>
         <label class="control-label">Speed <select id="speed"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
         <label class="control-label volume-label">Volume <input id="volume" type="range" min="0" max="1" step="0.01" value="1"></label>
         <span id="status" role="status"></span>
       </div>
-      <div class="keyboard-help">Space play/pause · ←/→ seek 10s · ↑/↓ cue · N/P section · Q ask</div>
+      <div class="keyboard-help">Space play/pause · ←/→ seek 10s · ↑/↓ cue · N/P section · Q ask · F flag · Shift+N note</div>
     </footer>
   </main>
   <dialog id="settings-dialog">
@@ -104,6 +105,15 @@
     </form>
   </dialog>
   <audio id="audio" preload="auto"></audio>
+  <dialog id="exercise-dialog"><form id="exercise-form">
+    <h2>Code exercise</h2>
+    <p id="exercise-prompt"></p><p id="exercise-file" class="learn-context"></p>
+    <label class="toggle"><input id="exercise-confirm" type="checkbox" required> I will edit the real file in my editor.</label>
+    <p id="exercise-status" role="status"></p>
+    <button id="exercise-close" type="button">Close</button>
+    <button id="exercise-undo" type="button" hidden>Undo change</button>
+    <button id="exercise-start" class="primary" type="submit">Start watching</button>
+  </form></dialog>
   <dialog id="rename-dialog"><form id="rename-form"><h2>Rename tour</h2>
     <label for="rename-title">Title</label><input id="rename-title" required maxlength="160">
     <p id="rename-error" role="status"></p>

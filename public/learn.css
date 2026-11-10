@@ -213,6 +213,14 @@ input[type="range"] { accent-color: var(--accent); }
 #transcript-sentences{padding:0;margin:0;list-style:none}
 #transcript-sentences button{display:block;width:100%;text-align:left;line-height:1.5;margin-bottom:4px;background:transparent;border:1px solid transparent}
 #transcript-sentences button[aria-current]{background:var(--active);border-left:3px solid var(--accent)}
+.learn-practice-actions{display:flex;gap:7px;flex-wrap:wrap}
+.learn-practice-actions [aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--active)}
+.cue-button[data-shaky="true"] .item-label::after{content:" ◆";color:#ffd28b}
+.learn-practice-panel form{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin:7px 0}
+.learn-practice-panel label{flex:1 1 240px}
+.learn-practice-panel textarea{display:block;width:100%;background:var(--bg);border:1px solid var(--edge);border-radius:6px;padding:6px;resize:vertical}
+.learn-practice-note,.learn-practice-verdict,.learn-practice-topic{color:var(--muted);white-space:pre-wrap;margin:5px 0;overflow-wrap:anywhere}
+.learn-practice-topic{flex:1 1 100%;color:var(--accent)}
 #library{flex:1;overflow:auto;padding:clamp(20px,4vw,52px);background:#111a26}
 .learn-library-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
 .learn-library-heading h2{font-size:25px;letter-spacing:-.02em}

@@ -1,0 +1,35 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,readFile,rm,writeFile} from 'node:fs/promises';
+import {setTimeout as wait} from 'node:timers/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {createExercises} from '../learn-exercise.mjs';
+
+test('exercise waits for an external edit and only undoes an unchanged single-line result',async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'learn-exercise-test-'));
+  const copy=path.join(root,'copy'),protectedRepo=path.join(root,'protected');
+  await Promise.all([mkdir(copy),mkdir(protectedRepo)]);
+  const original='class Schedule\r\n  FOLLOW_UP_DAYS_BEFORE = 3\r\nend\r\n';
+  const changed=original.replace('= 3','= 4');
+  const file=path.join(copy,'schedule.rb'),protectedFile=path.join(protectedRepo,'schedule.rb');
+  await Promise.all([writeFile(file,original),writeFile(protectedFile,original)]);
+  const exercise={prompt:'Change the follow-up day.',file:'schedule.rb',contains:'FOLLOW_UP_DAYS_BEFORE = 4',absent:null};
+  const tour={codeRoot:copy,sections:[{cues:[{file:'schedule.rb',exercise}]}]};
+  const entry={id:'copy',source:path.join(root,'folder-tour')};
+  const done=[];
+  const exercises=createExercises({protectedRoots:[protectedRepo],onDone:(id,key)=>done.push([id,key])});
+  t.after(async()=>{exercises.dispose();await rm(root,{recursive:true,force:true});});
+  await assert.rejects(exercises.start(tour,entry,0,0,false),/Confirm/);
+  assert.equal((await exercises.start(tour,entry,0,0,true)).state,'watching');
+  await writeFile(file,changed);
+  for(let i=0;i<40 && exercises.status(entry.id).state==='watching';i++)await wait(80);
+  assert.equal(exercises.status(entry.id).state,'done');
+  assert.deepEqual(done,[[entry.id,'0:0']]);
+  await writeFile(file,changed+'# Later edit\r\n');
+  await assert.rejects(exercises.undo(entry.id,true),/changed after/);
+  await writeFile(file,changed);
+  assert.equal((await exercises.undo(entry.id,true)).state,'undone');
+  assert.equal(await readFile(file,'utf8'),original);
+  assert.equal(await readFile(protectedFile,'utf8'),original);
+});

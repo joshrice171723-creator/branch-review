@@ -31,11 +31,15 @@ test('shared snapshot ZIP survives library restart, relocation, rename and remov
   assert.equal(entry.sectionCount,2);
   const {tour}=await library.open(entry.id);
   assert.equal((await readTourCode(tour,'demo.rb')).text,'def demo\nend\n');
-  await library.progress(entry.id,{sectionIndex:1,seconds:60,completedSection:0});
+  await library.progress(entry.id,{sectionIndex:1,seconds:60,completedSection:0,listened:4.1});
+  await library.patch(entry.id,{flags:{'1:0':true},notes:{'1:0':'Review the method.'}});
   library=await createLibrary(options);
   const [resumed]=await library.list();
   assert.deepEqual(resumed.position,{sectionIndex:1,seconds:60});
   assert.equal(resumed.percent,75);
+  assert.equal(resumed.secondsListened,4.1);
+  assert.deepEqual(resumed.flags,{'1:0':true});
+  assert.deepEqual(resumed.notes,{'1:0':'Review the method.'});
   const moved=path.join(root,'moved.tour.zip');
   await rename(zip,moved);
   assert.equal((await library.list())[0].state,'missing');
