@@ -1,4 +1,5 @@
 import {libraryUI} from './learn-library.js';
+import {mountTutor} from './learn-tutor.js';
 const $ = id => document.getElementById(id);
 let token;
 async function request(endpoint, data) {
@@ -47,6 +48,11 @@ let trackPosition = false;
 let lastSaved = '';
 let finished = false;
 const section = () => tour.sections[sectionIndex];
+function cueContext(){
+  const cue=tour && section()?.cues[activeIndex];
+  return cue?{id:tour.id,section:sectionIndex,cue:activeIndex,title:section().title,...cue}:null;
+}
+const tutor=mountTutor({request,getContext:cueContext,pause:()=>audio.pause(),isPaused:()=>audio.paused});
 const time = seconds => {
   const value = Math.max(0, Math.floor(seconds || 0));
   return Math.floor(value / 60) + ':' + String(value % 60).padStart(2, '0');
@@ -90,6 +96,7 @@ function showSetup(entry) {
   $('setup').hidden=false;
 }
 async function showLibrary(scan=false) {
+  tutor.stopSpeech();
   audio.pause();
   await savePosition(true);
   trackPosition=false;
@@ -176,6 +183,7 @@ function savePosition(force = false) {
 }
 function loadSection(index, seconds, play) {
   if (!tour.sections[index]) return;
+  tutor.stopSpeech();
   audio.pause();
   sectionIndex = index;
   activeIndex = -2;
@@ -232,6 +240,7 @@ function sync() {
   const index = cueAt(audio.currentTime);
   if (index === activeIndex) return;
   activeIndex = index;
+  tutor.syncContext();
   markActive('cues', index);
   $('cues').children[index]?.scrollIntoView({block:'nearest'});
   const cue = section().cues[index];
@@ -323,7 +332,7 @@ audio.addEventListener('loadedmetadata', () => {
 });
 audio.addEventListener('timeupdate', () => { sync(); savePosition(); });
 audio.addEventListener('seeked', () => { sync(); savePosition(true); });
-audio.addEventListener('play', () => { $('play').textContent = 'Ⅱ Pause'; savePosition(true); });
+audio.addEventListener('play', () => { tutor.stopSpeech(); $('play').textContent = 'Ⅱ Pause'; savePosition(true); });
 audio.addEventListener('pause', () => { $('play').textContent = '▶ Play'; savePosition(true); });
 audio.addEventListener('ended', async () => {
   await api.position({section:sectionIndex,seconds:audio.currentTime},true).catch(report);
@@ -372,9 +381,10 @@ document.addEventListener('keydown', event => {
       event.altKey || event.ctrlKey || event.metaKey || event.target.matches('input, select, textarea')) return;
   const key = event.key.toLowerCase();
   if (key === ' ' && event.target.matches('button')) return;
-  if (![' ', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'n', 'p'].includes(key)) return;
+  if (![' ', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'n', 'p', 'q'].includes(key)) return;
   event.preventDefault();
   if (key === ' ') togglePlayback();
+  else if (key === 'q') tutor.open();
   else if (key === 'arrowleft') seekTo(audio.currentTime - 10);
   else if (key === 'arrowright') seekTo(audio.currentTime + 10);
   else if (key === 'n') startSection(sectionIndex + 1, !audio.paused);
@@ -389,6 +399,7 @@ document.addEventListener('keydown', event => {
 (async () => {
   try {
     const settings = await api.settings();
+    tutor.settings(settings);
     $('ruby-mine').checked = settings.rubyMine === true;
     $('speed').value = settings.speed || 1;
     $('volume').value = settings.volume ?? 1;

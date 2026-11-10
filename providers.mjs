@@ -26,6 +26,13 @@ export async function executable(provider,override,env=process.env){
     const candidates=await Promise.all(versions.filter(entry=>entry.isDirectory()).map(async entry=>{const file=path.join(bin,entry.name,'codex.exe'),info=await stat(file).catch(()=>null);return info?.isFile()?{file,time:info.mtimeMs}:null;}));
     const latest=candidates.filter(Boolean).sort((a,b)=>b.time-a.time)[0];if(latest)return latest.file;
   }
+  if(provider==='muse' && process.platform==='win32' && env.LOCALAPPDATA){
+    const folder=path.join(env.LOCALAPPDATA,'Programs','muse');
+    const entries=await readdir(folder,{withFileTypes:true}).catch(()=>[]);
+    const installed=entries.filter(entry=>entry.isFile() && /^muse-bin-[\w.-]+\.exe$/i.test(entry.name))
+      .sort((a,b)=>b.name.localeCompare(a.name,undefined,{numeric:true}));
+    if(installed.length)return path.join(folder,installed[0].name);
+  }
   throw Error(`${providerNames[provider]} CLI was not found. Install it or choose its executable in Workspace.`);
 }
 export function launchCommand(file,args){

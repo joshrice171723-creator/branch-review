@@ -25,7 +25,7 @@ export async function configuredChecks(git,sha){
 }
 const fixCommitMessage=job=>'fix: '+(job.requestText || 'address Branch Review findings').replace(/^Requested change:\s*/,'').split('\n')[0].trim().slice(0,120);
 export class ReviewJobs {
-  constructor(directory,{git,run,previewRoot,toolchain,repo,prepareNext,prepareFix,changedCwd,codex,provider=()=>({provider:'codex'}),project}){Object.assign(this,{directory,git,run,previewRoot,toolchain,repo,codex,provider,project,prepareNext,prepareFix,changedCwd});this.rows=[];this.processes=new Map();}
+  constructor(directory,{git,run,previewRoot,toolchain,repo,prepareNext,prepareFix,changedCwd,codex,provider=()=>({provider:'codex'}),project,agentEnv=process.env}){Object.assign(this,{directory,git,run,previewRoot,toolchain,repo,codex,provider,project,prepareNext,prepareFix,changedCwd,agentEnv});this.rows=[];this.processes=new Map();}
   async load(){this.rows=JSON.parse(await readFile(path.join(this.directory,'jobs.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return'[]';throw e;}));for(const row of this.rows){if(row.status==='running'){row.status='interrupted';row.error='App closed before this job reported completion. Inspect its worktree before retrying.';}if(row.kind==='fix' && row.status==='succeeded' && row.resultCommit===row.commit){row.status='failed';row.error='The agent returned without a committed fix. Review its files before committing.';}}await this.save();return this;}
   async save(){this.saving=(this.saving || Promise.resolve()).catch(()=>{}).then(async()=>{await mkdir(this.directory,{recursive:true});const file=path.join(this.directory,'jobs.json');await writeFile(file+'.tmp',JSON.stringify(this.rows,null,2));await rename(file+'.tmp',file);});return this.saving;}
   async stopProcess(child){
@@ -108,7 +108,7 @@ export class ReviewJobs {
     if(job.cancelRequested)throw Error('Job stopped. Any saved files remain in its isolated checkout.');
     try{await new Promise((resolve,reject)=>{
       const launch=launchCommand(command,args);
-      const child=spawn(launch.file,launch.args,{cwd,windowsHide:true,shell:false,env:{...process.env,ELECTRON_RUN_AS_NODE:'1',PATH:`${this.toolchain}${path.delimiter}${process.env.PATH}`},stdio:['pipe','pipe','pipe']});
+      const child=spawn(launch.file,launch.args,{cwd,windowsHide:true,shell:false,env:{...this.agentEnv,ELECTRON_RUN_AS_NODE:'1',PATH:`${this.toolchain}${path.delimiter}${this.agentEnv.PATH}`},stdio:['pipe','pipe','pipe']});
       this.processes.set(job.id,child);
       let timedOut=false;const timer=setTimeout(()=>{timedOut=true;void this.stopProcess(child).catch(error=>{job.log+='\nCould not stop timed-out process: '+redact(error.message);});},30*60*1000);
       let events='';

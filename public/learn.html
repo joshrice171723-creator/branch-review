@@ -57,6 +57,18 @@
         </div>
       </div>
     </section>
+    <aside id="learn-tutor" class="learn-panel" aria-label="Tutor" hidden>
+      <header><h2>Tutor</h2><button id="tutor-close" type="button">Close</button></header>
+      <p id="tutor-context" class="learn-context"></p>
+      <form id="tutor-form">
+        <label for="tutor-question">Question about this cue</label>
+        <textarea id="tutor-question" rows="4" maxlength="6000" required></textarea>
+        <div class="header-actions"><button id="tutor-send" class="primary" type="submit">Ask Muse</button><button id="tutor-stop" type="button" hidden>Stop</button></div>
+      </form>
+      <p id="tutor-status" role="status"></p>
+      <p id="tutor-answer" class="learn-answer" hidden></p>
+      <div class="header-actions"><button id="tutor-speak" type="button" disabled>Speak answer</button><button id="tutor-silence" type="button">Stop speaking</button></div>
+    </aside>
     <footer class="transport">
       <div class="caption-row"><span id="caption" aria-live="polite">—</span><span id="section-position"></span></div>
       <div class="seek-row">
@@ -66,11 +78,12 @@
       </div>
       <div class="transport-actions">
         <button id="play" class="primary" type="button">▶ Play</button>
+        <button id="tutor-open" type="button" disabled>Ask</button>
         <label class="control-label">Speed <select id="speed"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
         <label class="control-label volume-label">Volume <input id="volume" type="range" min="0" max="1" step="0.01" value="1"></label>
         <span id="status" role="status"></span>
       </div>
-      <div class="keyboard-help">Space play/pause · ←/→ seek 10s · ↑/↓ cue · N/P section</div>
+      <div class="keyboard-help">Space play/pause · ←/→ seek 10s · ↑/↓ cue · N/P section · Q ask</div>
     </footer>
   </main>
   <dialog id="settings-dialog">
@@ -78,6 +91,9 @@
       <h2>Settings</h2>
       <label class="toggle"><input id="ruby-mine" type="checkbox"> Follow cues in RubyMine</label>
       <p>Open each cue in RubyMine while the built-in viewer follows playback.</p>
+      <label class="control-label">Tutor voice <select id="tutor-voice"></select></label>
+      <label class="control-label">Speech speed <select id="tutor-rate"><option value="0.9">0.9×</option><option value="1">1×</option><option value="1.1">1.1×</option><option value="1.2">1.2×</option></select></label>
+      <p><label class="toggle"><input id="tutor-auto-speak" type="checkbox" checked> Speak Tutor answers automatically</label></p>
       <button class="primary" value="close">Done</button>
     </form>
   </dialog>

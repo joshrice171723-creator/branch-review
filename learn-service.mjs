@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {loadFolderTour,readTourCode,sendTourAudio,jumpToRubyMine} from './learn-player.mjs';
 import {createLibrary} from './learn-library.mjs';
+import {parseTutorAnswer,runLearnPlan,tutorPrompt} from './learn-tutor.mjs';
 
 const assets = new Map([
-  ['/learn.html','text/html'], ['/learn-player.js','text/javascript'], ['/learn-library.js','text/javascript'], ['/learn.css','text/css'],
+  ['/learn.html','text/html'], ['/learn-player.js','text/javascript'], ['/learn-library.js','text/javascript'], ['/learn-tutor.js','text/javascript'], ['/learn.css','text/css'],
 ]);
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
@@ -46,6 +47,11 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
   const token = randomBytes(32).toString('hex');
   const tours = new Map();
   const library = await createLibrary({directory,shared,loadTour:loadFolderTour});
+  let tutorJob;
+  async function agentSettings(){
+    const home=process.env.BRANCH_REVIEW_HOME;
+    return home?JSON.parse(await readFile(path.join(home,'agent-settings.json'),'utf8').catch(()=> '{}')):{};
+  }
 
   function view(entry,tour) {
     const {id,position}=entry;
@@ -80,7 +86,8 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
         res.writeHead(200,{'Content-Type':assets.get(endpoint)+'; charset=utf-8','Content-Security-Policy':csp,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
         res.end(page);
       } else if(req.method==='GET' && endpoint==='/api/learn/bootstrap') {
-        json(res,200,{rubyMine:settings.rubyMine,speed:settings.speed,volume:settings.volume,token});
+        const {rubyMine,speed,volume,tutorVoice,tutorRate,tutorAutoSpeak}=settings;
+        json(res,200,{rubyMine,speed,volume,tutorVoice,tutorRate,tutorAutoSpeak,token});
       } else if(req.method==='GET' && endpoint==='/api/learn/library') {
         json(res,200,await library.list());
       } else if(['GET','HEAD'].includes(req.method) && endpoint==='/api/learn/audio') {
@@ -111,6 +118,9 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
           if(typeof data.rubyMine==='boolean') change.rubyMine=data.rubyMine;
           if([0.75,1,1.25,1.5,2].includes(data.speed)) change.speed=data.speed;
           if(Number.isFinite(data.volume) && data.volume>=0 && data.volume<=1) change.volume=data.volume;
+          if(typeof data.tutorVoice==='string' && data.tutorVoice.length<256)change.tutorVoice=data.tutorVoice;
+          if(Number.isFinite(data.tutorRate) && data.tutorRate>=0.9 && data.tutorRate<=1.2)change.tutorRate=data.tutorRate;
+          if(typeof data.tutorAutoSpeak==='boolean')change.tutorAutoSpeak=data.tutorAutoSpeak;
           await save(change);
           json(res,200,{ok:true});
         } else if(endpoint==='/api/learn/position') {
@@ -123,6 +133,33 @@ export async function createLearnHandler({origin,root,directory,shared=process.e
           json(res,200,{ok:true});
         } else if(endpoint==='/api/learn/jump') {
           if(settings.rubyMine===true) await jumpToRubyMine(requireTour(data.id),data.section,data.cue);
+          json(res,200,{ok:true});
+        } else if(endpoint==='/api/learn/tutor') {
+          if(tutorJob)throw Error('A Tutor question is already running.');
+          const tour=requireTour(data.id), section=tour.sections[data.section], cue=section?.cues[data.cue];
+          if(!cue)throw Error('Choose a cue before asking Tutor.');
+          if(typeof data.question!=='string' || !data.question.trim() || data.question.length>6000)
+            throw Error('Enter a question under 6,000 characters.');
+          const controller=new AbortController();
+          tutorJob={id:data.id,controller};
+          res.once('close',()=>{if(!res.writableEnded)controller.abort(Error('Tutor stopped.'));});
+          try{
+            const {text}=await readTourCode(tour,cue.file);
+            const question=data.grade===true
+              ? `Joshua's explanation: ${data.question}. Grade it against the code: one line - Solid, Partly, or Off - then one sentence on what to fix.`
+              : data.question;
+            const configured=await agentSettings();
+            const result=await runLearnPlan({provider:'muse',override:configured.executables?.muse,cwd:tour.codeRoot,
+              prompt:tutorPrompt({title:section.title,...cue,text,question}),directory:path.join(directory,'jobs'),
+              chatId:library.get(data.id).tutorSession,signal:controller.signal});
+            if(result.status==='no-allowance')json(res,200,result);
+            else{
+              if(result.chatId)await library.patch(data.id,{tutorSession:result.chatId});
+              json(res,200,{status:'ready',...parseTutorAnswer(result.text)});
+            }
+          }finally{tutorJob=null;}
+        } else if(endpoint==='/api/learn/tutor/stop') {
+          if(tutorJob?.id===data.id)tutorJob.controller.abort(Error('Tutor stopped.'));
           json(res,200,{ok:true});
         } else json(res,404,{error:'Learn route not found.'});
       } else json(res,404,{error:'Learn route not found.'});
