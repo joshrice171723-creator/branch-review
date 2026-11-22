@@ -91,7 +91,8 @@ let allBranches = [],
   frameKey = "",
   selectionGeneration = 0, selectedComparison = null, commitBranchSha = '', diffGeneration = 0;
 try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') || 'null');if(openingSelection){openingSelection.starting=false;selected=openingSelection;}}catch{}
-const reviewWorkflow = workflow({api, getState:()=>currentState, getSide:()=>active, error, poll, reopen:(force=true)=>mountFrames(currentState,force)});
+const reviewWorkflow = workflow({api,getState:()=>currentState,getSide:()=>active,error,poll,
+  reopen:(force=true)=>mountFrames(currentState,force),openHandoff:()=>projectWorkbench.openReview()});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
 const batch=batchReview({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error});
 document.body.append($('change-composer'));
@@ -99,6 +100,15 @@ const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,w
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
 const projectWorkbench=apexPanel({api, getState:()=>currentState, openBranch});
+$('apex-chat-about-review').onclick=async()=>{
+  if(!await reviewWorkflow.flush()) return;
+  const record=currentState.record;
+  if(!record) return;
+  const {repository,ref,changed}=record.identity;
+  const scenario=record.manifest.scenarios.find(item=>item.id===reviewWorkflow.scenario());
+  await projectWorkbench.openChat({kind:'branch-review',project:repository,reviewId:record.id,
+    ref,commit:changed,scenarioId:scenario?.id,scenarioTitle:scenario?.title,route:scenario?.path});
+};
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
 const evidenceMenu=document.createElement('button');evidenceMenu.textContent='Evidence tools';evidenceMenu.className='secondary';evidenceMenu.onclick=()=>reviewTools.open('evidence');$('item-more').append(evidenceMenu);
@@ -636,7 +646,9 @@ window.addEventListener("message", (event) => {
   }
 });
 await poll();
-const setupGuide=onboarding({api,settings:()=>reviewTools.open('workspace'),refresh:async()=>{await poll();await loadBranches();error('');}});
+const setupGuide=onboarding({api,settings:()=>reviewTools.open('workspace'),openWorkbench:projectWorkbench.open,
+  refresh:async()=>{await poll();await loadBranches();error('');}});
+if(window.desktop) void projectWorkbench.prepare().catch(()=>{}); // Open Workbench can surface and retry setup failures.
 if (location.hash === '#workbench' || new URLSearchParams(location.search).has('workbenchRun')) await projectWorkbench.open();
 else void setupGuide.initialize();
 await loadBranches().catch((e) => error(e.message));

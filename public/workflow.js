@@ -18,7 +18,7 @@ export async function mergeAndPublish(api, state, wait = ms => new Promise(resol
   }
   await api('/api/publish',{id,confirmation:`PUBLISH ${sha} TO ${state.publishTarget}`});
 }
-export function workflow({api, getState, getSide, error, poll, reopen}) {
+export function workflow({api, getState, getSide, error, poll, reopen, openHandoff}) {
   let scenario = 'intake', rendered = '', screenshot = null, screenshotKey = null, screenshotContext = null, draftKey = '', savingFinding = false, capturing = false;
   const retestNotes = new Map();
   const contexts = {original:{}, changed:{}};
@@ -127,7 +127,11 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   $('results-action').onclick=async()=>{
     const state=getState(),r=state.record;
     if(delivering || approving || state.busy)return;
-    if(r.integration?.sourceOnly && r.approval){$('open-apex-panel').click();return;}
+    if(r.integration?.sourceOnly && r.approval){
+      if(openHandoff) await openHandoff();
+      else $('open-apex-panel').click();
+      return;
+    }
     if(state.publishTarget===null && r.approval){if(r.delivery?.stage==='pushed')return;return $('ship').click();}
     if(['published','verified'].includes(r.delivery?.stage)){try{await api('/api/published-review',{id:r.id,action:'start'});await window.desktop.openPublished(state.publishTarget+'/qa?view=office');}catch(e){error(e.message);}return;}
     const action=deliveryStep(getState().record,getState().releaseConfigured).action;if(!action)return;
@@ -273,10 +277,10 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('publish').disabled=!enabled || !r.approval || r.delivery?.stage!=='pushed' || !state.releaseConfigured;
     $('release-settings').disabled=state.busy;
     if(r.integration?.sourceOnly){
-      $('delivery-state').textContent='Workbench source commit '+r.identity.changed.slice(0,8);
+      $('delivery-state').textContent='Workbench source commit '+r.identity.changed;
       if(canApprove(r)){
-        $('results-message').textContent=r.approval?'Approved for Workbench.':'Checklist complete. Approve this source commit.';
-        if(r.approval){$('results-action').textContent='Return to Workbench';$('results-action').disabled=!enabled;}
+        $('results-message').textContent=r.approval?'The local approval applies to this commit.':'Checklist complete. Approve this source commit.';
+        if(r.approval){$('results-action').textContent='Open review handoff';$('results-action').disabled=!enabled;}
       }
     }
     $('smoke').disabled=!enabled || r.delivery?.stage!=='published';

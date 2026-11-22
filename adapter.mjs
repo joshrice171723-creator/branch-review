@@ -18,6 +18,7 @@ const config = JSON.parse(
   ),
 );
 export const repo =
+  process.env.BRANCH_REVIEW_DESKTOP_REPOSITORY ||
   process.env.META_CLINIC_REPO ||
   config.repository ||
   process.cwd();

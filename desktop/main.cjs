@@ -1,6 +1,7 @@
 const {chooseRepository,availableRepository}=require('./repository.cjs');
 const {setupUrl,gitAvailable,requireGit}=require('./setup-help.cjs');
 const {askProjectAgent,suggestPreviewRecipe}=require('./welcome-agent.cjs');
+const {configureBundledRuntimes}=require('./windows-runtime.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
 const { execFile } = require('node:child_process');
@@ -30,10 +31,16 @@ async function firstProject(detectProject) {
   welcome.webContents.on('will-navigate',(event,url)=>{if(url!==page)event.preventDefault();});
   return new Promise((resolve,reject)=>{
     let finished=false,foundProject=null;
+    const readyProviders=new Set();
     const finish=value=>{if(finished)return;finished=true;ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');ipcMain.removeHandler('welcome:help');ipcMain.removeHandler('welcome:git');resolve(value);};
     welcome.on('closed',()=>finish(null));
     const trustedWelcome=event=>{if(event.sender!==welcome.webContents || event.senderFrame!==welcome.webContents.mainFrame || event.senderFrame.url!==page)throw Error('Only the welcome screen can select a project.');};
-    ipcMain.handle('welcome:probe',async(event,provider)=>{trustedWelcome(event);return probeProvider(provider);});
+    ipcMain.handle('welcome:probe',async(event,provider)=>{
+      trustedWelcome(event);readyProviders.delete(provider);
+      const result=await probeProvider(provider);
+      if(result.status==='ready')readyProviders.add(provider);
+      return result;
+    });
     ipcMain.handle('welcome:git',async event=>{trustedWelcome(event);return gitAvailable({exec});});
     ipcMain.handle('welcome:help',async(event,provider)=>{trustedWelcome(event);if(!['git','codex','claude','muse'].includes(provider))throw Error('Choose a coding agent.');await shell.openExternal(setupUrl(provider));});
     ipcMain.handle('welcome:chat',async(event,provider,messages)=>{
@@ -44,19 +51,23 @@ async function firstProject(detectProject) {
       return {message:reply.message,project:null};
     });
     ipcMain.handle('welcome:choose',async (event,provider,found)=>{
-      trustedWelcome(event);const agent=await probeProvider(provider);if(agent.status!=='ready')throw Error(agent.message);
+      trustedWelcome(event);
+      if(!['codex','claude','muse'].includes(provider))throw Error('Choose a coding agent.');
       if(!await requireGit({exec,dialog,openExternal:url=>shell.openExternal(url)}))return;
       let chosen;if(found){if(!foundProject || found!==foundProject || !await availableRepository(foundProject,exec))throw Error('That project is no longer available. Ask the agent to find it again.');chosen={repository:foundProject,projectInfo:await detectProject(foundProject)};}else chosen=await chooseRepository({dialog,window:welcome,exec,detectProject});if(!chosen)return;
       const trust=await dialog.showMessageBox(welcome,{buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'The agent may use your project instructions to set up a preview. Only open projects you trust.'});
       if(trust.response!==0)return;
       let suggestedRecipe=null;
-      if(chosen.projectInfo.needsSetup){try{const {validateRecipe}=await import(pathToFileURL(path.join(path.dirname(__dirname),'project-settings.mjs')).href);const suggestion=await suggestPreviewRecipe(provider,chosen.repository);if(suggestion)suggestedRecipe=validateRecipe(suggestion);}catch{}}
+      if(chosen.projectInfo.needsSetup && readyProviders.has(provider)){try{const {validateRecipe}=await import(pathToFileURL(path.join(path.dirname(__dirname),'project-settings.mjs')).href);const suggestion=await suggestPreviewRecipe(provider,chosen.repository);if(suggestion)suggestedRecipe=validateRecipe(suggestion);}catch{}}
       welcome.hide();finish({...chosen,provider,suggestedRecipe});
     });
     welcome.loadFile(path.join(__dirname,'welcome.html')).catch(error=>{ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');ipcMain.removeHandler('welcome:help');ipcMain.removeHandler('welcome:git');reject(error);});
   });
 }
 async function launch() {
+  if (app.isPackaged && process.platform === 'win32') {
+    configureBundledRuntimes(path.join(process.resourcesPath, 'runtime'));
+  }
   const root = path.dirname(__dirname);
   const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
@@ -66,7 +77,7 @@ async function launch() {
   await mkdir(home, { recursive: true });
   process.env.BRANCH_REVIEW_HOME = home;
   const configured=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
-  const previousRepository=process.env.META_CLINIC_REPO || configured.repository;
+  const previousRepository=configured.repository || process.env.META_CLINIC_REPO;
   if(previousRepository && !await requireGit({exec,dialog,openExternal:url=>shell.openExternal(url)})){app.quit();return;}
   const unavailable=previousRepository && !await availableRepository(previousRepository,exec);
   if(unavailable){
@@ -89,7 +100,8 @@ async function launch() {
     await writeFile(path.join(home,'config.json'),JSON.stringify({...existing,repository,previewRoot:existing.previewRoot || path.join(home,'previews')}));
   }
   const savedConfig=JSON.parse(await readFile(path.join(home,'config.json'),'utf8').catch(()=> '{}'));
-  savedConfig.repository=process.env.META_CLINIC_REPO || savedConfig.repository;
+  savedConfig.repository=savedConfig.repository || process.env.META_CLINIC_REPO;
+  process.env.BRANCH_REVIEW_DESKTOP_REPOSITORY=savedConfig.repository;
   settings.projects={...settings.projects,[path.resolve(savedConfig.repository).toLowerCase()]:home};
   await writeFile(settingsPath, JSON.stringify({...settings,home}));
   // Refuse to attach privileged desktop APIs to an unknown listener.

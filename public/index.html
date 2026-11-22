@@ -26,6 +26,7 @@
         <div><h2 id="apex-panel-title">Workbench</h2><small id="apex-checkout"></small></div>
         <div class="tool-actions">
           <button id="apex-handoff-toggle" type="button" aria-expanded="false" aria-controls="apex-handoff">Review handoff</button>
+          <button id="apex-recovery-toggle" type="button" aria-expanded="false" aria-controls="apex-recovery" hidden>Workspace files</button>
           <button id="close-apex-panel" type="button">Close</button>
         </div>
       </div>
@@ -36,8 +37,14 @@
         <p id="apex-review-state" role="status" hidden></p>
         <button type="button" id="apex-push" hidden>Push to GitHub</button>
         <button type="button" id="apex-github-check" hidden>Publish GitHub PR check</button>
+        <button type="button" id="apex-pr-draft" hidden>Draft pull request</button>
         <a id="apex-evidence-download" download hidden>Download review evidence</a>
         <a id="apex-github-evidence" target="_blank" rel="noopener" hidden>Open evidence on GitHub</a>
+        <section id="apex-pr-draft-panel" aria-label="Pull request draft" hidden>
+          <label for="apex-pr-draft-text">Pull request title and description</label>
+          <textarea id="apex-pr-draft-text" rows="9" readonly></textarea>
+          <button id="apex-pr-draft-copy" type="button">Copy draft</button>
+        </section>
         <ul id="apex-review-checks" aria-label="Review checklist" hidden></ul>
         <fieldset id="apex-findings" hidden><legend>Findings for a new repair task</legend>
           <div id="apex-finding-choices"></div><button id="apex-pick-findings" type="button">Prepare repair task</button>
@@ -48,8 +55,14 @@
           <button id="apex-create-repair" type="button">Create repair task</button>
         </fieldset>
       </section>
+      <section id="apex-recovery" hidden aria-label="Workbench workspace files">
+        <button id="apex-cleanup-preview" type="button">Preview cleanup</button>
+        <p id="apex-cleanup-status" role="status"></p>
+        <ul id="apex-cleanup-files" aria-label="Managed files"></ul>
+      </section>
       <p id="apex-panel-status" role="status" hidden></p>
-      <button id="install-apex-panel" class="primary" type="button" hidden>Install Workbench for this project</button>
+      <button id="retry-apex-panel" type="button" hidden>Retry Workbench</button>
+      <button id="install-apex-panel" class="primary" type="button" hidden>Upgrade Workbench</button>
       <iframe id="apex-panel-frame" title="Project Workbench" hidden></iframe>
     </dialog>
     <main>
@@ -221,7 +234,7 @@
             <details id="item-background"><summary>About this change</summary><p id="item-description"></p><p id="item-instructions"></p></details>
             <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Looks good. If it is still wrong, right-click the affected area in the preview.</p></section>
             <section class="review-expectation"><h3>What to check</h3><p id="item-expected"></p></section><div id="checks"></div>
-            <details id="item-more"><summary>Details and tools</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Technical details and recovery</button><label class="field-label" for="item-notes">Notes</label>
+            <details id="item-more"><summary>Details and tools</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Technical details and recovery</button><button id="apex-chat-about-review" class="secondary" type="button">Chat about this review</button><label class="field-label" for="item-notes">Notes</label>
             <textarea id="item-notes" maxlength="4000" placeholder="Optional note"></textarea>
             <label class="field-label" for="item-outcome">Can’t check this?</label>
             <select id="item-outcome"><option value="">Choose an exception</option><option value="needs-fixes" hidden>Needs fixes</option><option value="blocked">Blocked — cannot test</option><option id="item-not-applicable" value="not-applicable">Not applicable</option></select>

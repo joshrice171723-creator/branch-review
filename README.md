@@ -1,8 +1,10 @@
 # Branch Review
 
-Open **Workbench** in the toolbar to use the selected repository’s Apex harness. The panel includes Design, Live run, and History.
-For a new project, select **Install Workbench for this project**. The bundled release requires Ruby, Python, and Node.
-The panel operates on the displayed project checkout. Branch Review keeps its isolated comparison previews.
+Select **Open Workbench** during project setup, or select **Workbench** in the toolbar.
+The desktop app prepares the bundled runtime for the trusted repository you open.
+Use Design, Quality, Live run, and History in the embedded panel.
+Apply a build profile in Workbench. Choose checks and publish a Quality policy before starting a Design build.
+Use **Upgrade Workbench** when an upgrade is available.
 
 Use **Review handoff** to select a completed run. Select **Review this commit** to inspect it.
 For Design runs, Original uses the base commit recorded for the group. Changed uses the completed commit.
@@ -11,6 +13,7 @@ To repair a Design group, select the findings and affected slices in Design.
 For other runs, select unresolved findings and use **Prepare repair task**.
 
 After approval, select **Download review evidence** to save the exact commits, checklist, approval, and recorded Quality results.
+Select **Draft pull request** to preview and copy a title and description with the evidence fingerprints.
 Select **Push to GitHub** to push the reviewed commit to its branch. New branches default to `origin`.
 If the branch moves or the Design group reopens, complete a new review before pushing.
 
@@ -19,6 +22,8 @@ Install GitHub CLI and run `gh auth login` with access to publish comments and c
 Select **Publish GitHub PR check** in Review handoff.
 GitHub records the signed-in publisher. The downloaded evidence records the local reviewer separately.
 The check links to a PR comment with the exact commit, result, and evidence fingerprints.
+Use **Chat about this review** to open the project conversation with the selected review context.
+Use **Workspace files** and **Preview cleanup** to inspect managed scratch and temporary files.
 
 Set `APEX_WORKBENCH_URL` to a running project-bound panel to reuse its service. Branch Review checks the project identity before opening it.
 Set `BRANCH_REVIEW_PORT` to use another local port. The three preview ports remain reserved for branch comparisons.

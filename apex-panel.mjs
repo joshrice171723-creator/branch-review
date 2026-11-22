@@ -10,6 +10,21 @@ import {promisify} from 'node:util';
 const execute = promisify(execFile);
 const require = createRequire(import.meta.url);
 const prefix = '/__workbench/';
+const workspaceCommand = `
+import json
+from pathlib import Path
+import runpy
+import sys
+
+project = Path(sys.argv[2]).resolve(strict=True)
+environment = runpy.run_path(sys.argv[1])
+if sys.argv[3] == "prepare":
+    folder = environment["managed"](project, create=True)
+    result = {name: str(folder / name) for name in ("scratch", "tmp")}
+else:
+    result = environment["cleanup"](project)
+print(json.dumps(result))
+`;
 
 export function panelAddress(value) {
   if (!value) return null;
@@ -25,9 +40,11 @@ export function panelAddress(value) {
 export function projectPanel(repository, configured = process.env.APEX_WORKBENCH_URL, origin) {
   const remote = panelAddress(configured);
   const root = path.resolve(repository);
+  const python=process.env.HARNESS_PYTHON || 'python';
   const entry = path.join(root, '.harness', 'portable', 'mount.cjs');
+  const environment=path.join(root,'.harness','portable','environment.py');
   const installer = fileURLToPath(new URL('./workbench-install.py', import.meta.url));
-  let starting, owned, installing, opened = false;
+  let starting, owned, installing, preparing, directories, opened=false;
 
   async function externalAddress() {
     let target = remote;
@@ -66,6 +83,7 @@ export function projectPanel(repository, configured = process.env.APEX_WORKBENCH
     const known = record && JSON.parse(record.toString('utf8'));
     const current = Boolean(actual && actual === bundled.manifestSha256);
     return {project:root,installed,connected:Boolean(remote),mounted:Boolean(owned),
+      managed:Boolean(directories),
       availableRevision:bundled.revision,runtimeRevision:current?bundled.revision:known?.revision || null,
       upgradeAvailable:Boolean(installed && !remote && bundled.manifestSha256 && !current)};
   }
@@ -87,10 +105,14 @@ export function projectPanel(repository, configured = process.env.APEX_WORKBENCH
     if (installing) throw Error('Workbench is updating. Try again when it finishes.');
     if (!await available()) throw Error('Install Workbench for this project first.');
     if (!starting) {
-      const runtime = require(entry);
-      const request = runtime.mountWorkbench(root,{onExit:()=>{
-        if(starting===request) { starting=null; owned=null; }
-      }}).then(panel=>{
+      const request=(async()=>{
+        const checkout=await realpath(root),actual=await realpath(entry);
+        if(actual!==path.join(checkout,'.harness','portable','mount.cjs'))
+          throw Error('The Workbench runtime must belong to this checkout.');
+        return require(actual).mountWorkbench(checkout,{python,workDirectories:directories,onExit:()=>{
+          if(starting===request) { starting=null; owned=null; }
+        }});
+      })().then(panel=>{
         if(panel.active===false) throw Error('Workbench stopped before opening.');
         return owned=panel;
       }).catch(error=>{ if(starting===request) starting=null; throw error; });
@@ -111,29 +133,64 @@ export function projectPanel(repository, configured = process.env.APEX_WORKBENCH
       owned=null;
       starting=null;
     }
-    await execute(process.env.HARNESS_PYTHON || 'python', [installer, root],
+    await execute(python, [installer, root],
       {cwd:root,windowsHide:true,timeout:120000,maxBuffer:512*1024});
     if (!await available()) throw Error('The installation did not supply a portable panel.');
     delete require.cache[require.resolve(entry)];
+    directories=null;
     return info();
+  }
+  function install() {
+    if (remote) throw Error('Update the configured Workbench service from its project picker.');
+    if (!installing) installing=upgrade().finally(()=>{installing=null;});
+    return installing;
+  }
+  async function workspace(mode) {
+    const actual=await realpath(environment);
+    if(actual!==path.join(await realpath(root),'.harness','portable','environment.py'))
+      throw Error('The Workbench environment must belong to this checkout.');
+    try {
+      const reply=await execute(python,['-I','-c',workspaceCommand,actual,root,mode],
+        {cwd:root,windowsHide:true,timeout:30000,maxBuffer:2*1024*1024});
+      return JSON.parse(reply.stdout);
+    } catch(error) {
+      const detail=error.stderr?.trim().split(/\r?\n/).at(-1);
+      throw Error(detail || 'The Workbench environment could not be read. Retry Workbench.');
+    }
+  }
+  function prepare() {
+    if(remote) return info();
+    if(!preparing) preparing=(async()=>{
+      if(installing) await installing;
+      if(!await available()) await install();
+      if(!directories && await access(environment).then(()=>true,error=>{
+        if(error.code==='ENOENT') return false;
+        throw error;
+      })) directories=await workspace('prepare');
+      await register();
+      return info();
+    })().finally(()=>{preparing=null;});
+    return preparing;
   }
   return {
     frameOrigin: remote?.origin || '',
     status: info,
-    async install() {
-      if (remote) throw Error('Update the configured Workbench service from its project picker.');
-      if (!installing) installing=upgrade().finally(()=>{installing=null;});
-      return installing;
+    install,
+    prepare,
+    async cleanupPreview() {
+      if(remote || !directories) throw Error('Prepare this checkout in Branch Review before previewing cleanup.');
+      return workspace('cleanup');
     },
     async open() {
       if (remote) {
         const src=await externalAddress();
-        await register();return {src,project:root};
+        await register();return {src,project:root,managed:false};
       }
+      if(!owned) await prepare();
       await mount();
       await register();
       opened=true;
-      return {src:prefix, project:root};
+      return {src:prefix,project:root,managed:Boolean(directories)};
     },
     handle(req,res) {
       if (!req.url.startsWith(prefix)) return false;

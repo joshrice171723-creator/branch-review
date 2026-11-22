@@ -53,7 +53,7 @@ def install(project):
                     (backup / name).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(target, backup / name)
         try:
-            subprocess.run(["ruby", str(root / "bin/harness"), "setup", "install", "--project", str(project)], check=True)
+            subprocess.run([os.environ.get("HARNESS_RUBY") or "ruby", str(root / "bin/harness"), "setup", "install", "--project", str(project)], check=True)
             if (home / "MANIFEST.sha256").read_bytes() != manifest:
                 raise ValueError("The installed Workbench manifest differs from the bundle.")
             replace_file(home / "workbench-runtime.json", json.dumps({

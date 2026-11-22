@@ -7,9 +7,14 @@ The installer includes the desktop runtime. It does not include your project, ac
 ## First project
 
 1. Install [Git for Windows](https://git-scm.com/downloads/win). Clone your project with your usual Git client and ensure it has an `origin` remote and a commit.
-2. Install the runtime your project requires. Simple static HTML projects use the built-in preview. Automatic npm Vite/Next previews need [Node.js with npm](https://nodejs.org/en/download), a root package-lock.json and the project's supported Node version. For other stacks, Branch Review can ask the selected agent to suggest preview commands; projects with unclear setup still need additional configuration.
-3. Install either [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/setup), then sign in with `codex login` or `claude auth login`. You use your own provider account and usage allowance. Claude requires version 2.1.259 or later for the restricted job flags used here.
-4. Open Branch Review, choose your coding agent, and describe your project in the chat. The agent can find a local Git project by name; if there are several matches, it asks which one you want. Confirm the project to open it. You can also choose a folder directly.
+2. Open Branch Review and choose your project folder. Confirm that you trust the project before opening it.
+3. Install any version or service your project requires. Automatic npm previews use the root `package-lock.json`.
+4. To use agent features, install and sign in to your selected coding agent. Choose it in Branch Review. You use your own provider account and usage allowance.
+
+Claude Code 2.1.259 or later supports the flags used for restricted agent jobs.
+
+The Windows installer includes private Python 3.13.17, Ruby 3.4.13, Node.js 24.19.0, and npm.
+Workbench uses these runtimes without changing your system PATH.
 5. Fix flagged setup items and select Check again. The guide can fetch remote branches. Choose Start reviewing, then a branch. If you have no branch yet, choose Make changes and describe what you want; the agent creates an isolated branch from the latest remote default branch. Compare Original and Changed before approving anything.
 
 If Git identity is missing, set your own `git config user.name` and `git config user.email` inside your project. If origin/default branch is missing, configure your real remote, fetch it and run `git remote set-head origin -a`. Branch Review does not create or guess an account identity or remote.
@@ -24,4 +29,7 @@ This repository and its v0.6.0 release are public. Download the installer and ch
 
 Fresh-profile testing is distinct from a clean Windows machine. The Windows installer workflow is configured to build and test on a hosted Windows runner, install silently and check the installed runtime with Node/agent discovery unavailable. Its first run was blocked before execution by GitHub account billing; it is not clean-machine proof. It does not supply provider credentials or prove live agent work on every machine. Live Claude work still requires a signed-in test account. See DISTRIBUTION_AUDIT.md for the tested boundaries.
 
-Installer implementation uses the standard [electron-builder NSIS target](https://www.electron.build/nsis.html). Build with `npm ci`, `node node_modules/electron/install.js`, and `npm run installer`. Outputs are outside source in `../installers`. Only application source and production dependencies are included.
+Build on Windows with `npm ci`, `node node_modules/electron/install.js`, and `npm run installer`.
+The build downloads and verifies the exact runtime archives in `desktop/windows-runtimes.json`.
+Set `BRANCH_REVIEW_RUNTIME_CACHE` to reuse a folder of these archives.
+The installer output goes to `../installers` by default. Set `BRANCH_REVIEW_INSTALLER_OUTPUT` to choose another folder.

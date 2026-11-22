@@ -3,7 +3,7 @@ import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
-import {applyWorkbenchRubric, approvedWorkbenchEvidence, completedRuns, createRepair, designChecklist, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, rubricComplete, validateWorkbenchPreview, workbenchComparison, workbenchMockup, workbenchReview, workbenchRubric} from './workbench-handoff.mjs';
+import {applyWorkbenchRubric, approvedWorkbenchEvidence, completedRuns, createRepair, designChecklist, draftWorkbenchPullRequest, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, rubricComplete, validateWorkbenchPreview, workbenchComparison, workbenchMockup, workbenchReview, workbenchRubric} from './workbench-handoff.mjs';
 import {githubApi, publishWorkbenchCheck} from './workbench-github.mjs';
 import localOrigin from './desktop/local-origin.cjs';
 import {projectPanel} from './apex-panel.mjs';
@@ -461,7 +461,7 @@ actions.add('/api/tools-settings');
 actions.add('/api/workbench-findings');
 actions.add('/api/workbench-push');
 actions.add('/api/workbench-publish-check');
-for (const endpoint of ['/api/workbench-open','/api/workbench-install','/api/workbench-export','/api/workbench-repair']) actions.add(endpoint);
+for (const endpoint of ['/api/workbench-open','/api/workbench-prepare','/api/workbench-install','/api/workbench-export','/api/workbench-repair']) actions.add(endpoint);
 actions.add('/api/fix-commit');
 actions.add('/api/retry-muse');
 actions.add('/api/agent-settings');actions.add('/api/agent-probe');
@@ -484,9 +484,12 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
     if (req.method === 'GET' && url.pathname === '/api/workbench') return json(res,200,await apex.status());
+    if (req.method === 'GET' && url.pathname === '/api/workbench-cleanup-preview') return json(res,200,await apex.cleanupPreview());
     if (req.method === 'GET' && url.pathname === '/api/workbench-runs') return json(res,200,await completedRuns(repo));
     if (req.method === 'GET' && url.pathname === '/api/workbench-review') return json(res,200,
       await workbenchReview(repo,url.searchParams.get('run'),store.records,git));
+    if (req.method === 'GET' && url.pathname === '/api/workbench-pr-draft') return json(res,200,
+      await draftWorkbenchPullRequest(repo,url.searchParams.get('run'),store.records,git));
     if (req.method === 'GET' && url.pathname === '/api/workbench-evidence') {
       const evidence=await approvedWorkbenchEvidence(repo,url.searchParams.get('run'),store.records,git);
       res.setHeader('Content-Disposition',`attachment; filename="branch-review-${evidence.commit}.json"`);
@@ -539,6 +542,7 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     if(req.method==='POST' && actions.has(url.pathname)) {
       if(req.headers.origin!==origin || req.headers['x-review-token']!==token) return json(res,403,{error:'Reload Branch Review before continuing.'});
       if(url.pathname==='/api/workbench-open') return json(res,200,{result:await apex.open()});
+      if(url.pathname==='/api/workbench-prepare') return json(res,200,{result:await apex.prepare()});
       if(url.pathname==='/api/workbench-install') {
         if(busy || jobs.rows.some(job=>job.status==='running')) return json(res,409,{error:'Wait for the active review operation before installing Workbench.'});
         busy=true;

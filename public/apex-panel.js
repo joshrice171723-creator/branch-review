@@ -4,6 +4,9 @@ export function apexPanel({api,getState,openBranch}) {
   const frame = byId('apex-panel-frame');
   const status = byId('apex-panel-status');
   const install = byId('install-apex-panel');
+  const retry=byId('retry-apex-panel');
+  const recovery=byId('apex-recovery');
+  const recoveryToggle=byId('apex-recovery-toggle');
   const drawer = byId('apex-handoff');
   const runPicker = byId('apex-completed');
   const handoffButton = byId('apex-handoff-toggle');
@@ -13,9 +16,12 @@ export function apexPanel({api,getState,openBranch}) {
   const download = byId('apex-evidence-download');
   const githubEvidence = byId('apex-github-evidence');
   const refresh = byId('apex-refresh-handoff');
+  const draft=byId('apex-pr-draft');
+  const draftPanel=byId('apex-pr-draft-panel');
+  const draftText=byId('apex-pr-draft-text');
   const review=byId('apex-review-run');
   const initialRun = new URLSearchParams(location.search).get('workbenchRun');
-  let selectedRun = initialRun, receipt, requestId=0;
+  let selectedRun=initialRun,receipt,requestId=0,pendingChat,chatReadyAddress,opening;
   function message(text) {status.textContent=text; status.hidden=!text;}
   async function action(button,fn) {
     button.disabled=true;
@@ -28,6 +34,7 @@ export function apexPanel({api,getState,openBranch}) {
     reviewState.hidden=true; checks.hidden=true; checks.replaceChildren();
     push.hidden=true; push.onclick=null;
     publish.hidden=true; publish.onclick=null;
+    draft.hidden=true; draft.onclick=null; draftPanel.hidden=true; draftText.value='';
     download.hidden=true; githubEvidence.hidden=true;
     byId('apex-findings').hidden=true;
     byId('apex-repair').hidden=true;
@@ -67,6 +74,15 @@ export function apexPanel({api,getState,openBranch}) {
       reviewState.textContent+=' · '+(destination ? destination+' / '+branch : handoff.pushMessage || 'Set a GitHub push remote.');
       if(pushed) reviewState.textContent+=' · Push confirmed';
       download.hidden=!handoff.evidenceUrl;download.href=handoff.evidenceUrl;
+      draft.hidden=false;
+      draft.onclick=()=>action(draft,async()=>{
+        const result=await api('/api/workbench-pr-draft?run='+encodeURIComponent(run));
+        if(request!==requestId) return;
+        draftText.value=result.title+'\n\n'+result.body;
+        draftPanel.hidden=false;
+        draftText.focus();
+        message('Draft ready. Attach the downloaded review evidence if your team needs the full results.');
+      });
       githubEvidence.hidden=!handoff.delivery?.github;
       if(!githubEvidence.hidden) {
         githubEvidence.href=handoff.delivery.github.evidenceUrl;
@@ -120,31 +136,84 @@ export function apexPanel({api,getState,openBranch}) {
     await showSelection();
   }
   async function open() {
+    if(opening) return opening;
+    opening=openPanel().finally(()=>{opening=null;});
+    return opening;
+  }
+  function sendChatContext() {
+    if(!pendingChat || chatReadyAddress!==frame.src || !dialog.open) return;
+    frame.contentWindow.postMessage({type:'workbench-chat-context',context:pendingChat},new URL(chatReadyAddress).origin);
+    pendingChat=null;
+    message('');
+  }
+  async function openPanel() {
     if(!dialog.open) dialog.showModal();
+    retry.hidden=true;
     message('Opening project Workbench…');
     try {
-      const details=await api('/api/workbench');
-      byId('apex-checkout').textContent='Project checkout · '+details.project;
-      const missing=!details.installed && !details.connected;
-      install.hidden=!missing && !details.upgradeAvailable;
-      install.textContent=details.upgradeAvailable?'Upgrade Workbench':'Install Workbench for this project';
-      if(missing) {
-        handoffButton.disabled=true; frame.hidden=true;
-        message('Install the Workbench runtime in this project to open the panel.');return;
-      }
+      const status=await api('/api/workbench');
+      byId('apex-checkout').textContent='Project checkout · '+status.project;
+      if(!status.installed && !status.connected) message('Preparing Workbench for this checkout…');
       const {result}=await api('/api/workbench-open',{});
       const address=new URL(result.src,location.origin).href;
-      if(frame.src!==address) frame.src=address;
+      if(frame.src!==address) {
+        chatReadyAddress=null;
+        frame.src=address;
+      }
       frame.hidden=false; handoffButton.disabled=false; message('');
+      install.hidden=!status.upgradeAvailable;
+      recoveryToggle.hidden=!result.managed;
+      const chatRequested=Boolean(pendingChat);
+      sendChatContext();
+      if(chatRequested && pendingChat){
+        const request=pendingChat;
+        message('Opening project chat…');
+        setTimeout(()=>{
+          if(pendingChat===request && dialog.open) message('Project chat did not open. Check for a Workbench upgrade or try again.');
+        },12000);
+      }
       selectedRun ||= getState().record?.identity.workbenchRun;
-      if(selectedRun || !drawer.hidden) await showHandoff().catch(error=>message(error.message));
-    } catch(error) {frame.hidden=true;message(error.message);}
+      if(!chatRequested && (selectedRun || !drawer.hidden)) await showHandoff().catch(error=>message(error.message));
+    } catch(error) {
+      frame.hidden=true;handoffButton.disabled=true;recoveryToggle.hidden=true;
+      chatReadyAddress=null;
+      frame.src='about:blank';
+      retry.hidden=false;
+      message(error.message);
+    }
   }
-  byId('open-apex-panel').onclick=open;
-  byId('close-apex-panel').onclick=()=>dialog.close();
+  byId('open-apex-panel').onclick=()=>open();
+  byId('close-apex-panel').onclick=()=>{pendingChat=null;dialog.close();};
+  retry.onclick=()=>open();
+  recoveryToggle.onclick=()=>{
+    recovery.hidden=!recovery.hidden;
+    recoveryToggle.setAttribute('aria-expanded',String(!recovery.hidden));
+  };
+  const cleanup=byId('apex-cleanup-preview');
+  cleanup.onclick=()=>action(cleanup,async()=>{
+    const status=byId('apex-cleanup-status'),list=byId('apex-cleanup-files');
+    list.replaceChildren();
+    status.textContent='Reading managed scratch and temporary files…';
+    try {
+      const result=await api('/api/workbench-cleanup-preview');
+      const count=result.entries.length;
+      status.textContent=count?`${count} entries · ${result.bytes.toLocaleString()} bytes`:'No managed files to clean.';
+      for(const item of result.entries.slice(0,100)){
+        const row=document.createElement('li');
+        row.textContent=item.type==='directory'?item.path+'/':item.path+' · '+item.size.toLocaleString()+' bytes';
+        list.append(row);
+      }
+      if(count>100) status.textContent+=' · Showing the first 100 entries.';
+    } catch(error){status.textContent=error.message;}
+  });
+  byId('apex-pr-draft-copy').onclick=async()=>{
+    try {await navigator.clipboard.writeText(draftText.value);message('Copied pull request draft.');}
+    catch {draftText.select();message('Copy the selected draft.');}
+  };
   install.onclick=()=>action(install,async()=>{
     message(install.textContent==='Upgrade Workbench'?'Upgrading Workbench…':'Installing Workbench…');
     await api('/api/workbench-install',{});
+    chatReadyAddress=null;
     frame.src='about:blank';
     await open();
   });
@@ -160,8 +229,11 @@ export function apexPanel({api,getState,openBranch}) {
     catch(error){message(error.message);}
   };
   window.addEventListener('message',async event=>{
-    if(event.source!==frame.contentWindow || !frame.src || event.origin!==new URL(frame.src).origin ||
-       event.data?.type!=='workbench-review-run' || !/^\d{8}T\d{12}-[a-f0-9]{8}$/.test(event.data.runId))return;
+    if(event.source!==frame.contentWindow || !frame.src || event.origin!==new URL(frame.src).origin)return;
+    if(event.data?.type==='workbench-chat-ready'){
+      chatReadyAddress=frame.src;sendChatContext();return;
+    }
+    if(!dialog.open || event.data?.type!=='workbench-review-run' || !/^\d{8}T\d{12}-[a-f0-9]{8}$/.test(event.data.runId))return;
     try{
       selectedRun=event.data.runId;
       await showHandoff();
@@ -192,5 +264,12 @@ export function apexPanel({api,getState,openBranch}) {
     byId('apex-repair').hidden=true;
     message('Created '+result.task_id+'. Open Live run to confirm its scope.');
   });
-  return {open};
+  return {open,prepare:()=>api('/api/workbench-prepare',{}),openReview:()=>{
+    selectedRun=getState().record?.identity.workbenchRun || selectedRun;
+    return open();
+  },openChat:context=>{
+    pendingChat=context;
+    drawer.hidden=true;handoffButton.setAttribute('aria-expanded','false');
+    return open();
+  }};
 }

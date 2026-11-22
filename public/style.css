@@ -1126,8 +1126,11 @@ html[data-theme="dark"] #change-composer{background:#22252a;color:#f1f3f5;border
 #apex-checkout {overflow-wrap:anywhere;}
 #apex-panel-frame {position:static; inset:auto; display:block; border:0; flex:1 1 0; min-height:0; height:auto; width:100%;}
 #apex-panel-dialog [hidden] {display:none;}
-#apex-panel-status, #install-apex-panel {margin:12px 18px; align-self:flex-start;}
+#apex-panel-status, #install-apex-panel, #retry-apex-panel {margin:12px 18px; align-self:flex-start;}
 #apex-handoff {padding:12px 18px; overflow:auto; max-height:42vh;}
+#apex-recovery {padding:12px 18px; overflow:auto; max-height:26vh;}
+#apex-pr-draft-panel {margin-block:12px;}
+#apex-pr-draft-text {display:block; width:min(100%, 750px); margin-block:6px;}
 #apex-handoff select {max-width: min(480px,100%); margin:0 8px;}
 #apex-finding-choices label {display:block; margin:6px 0;}
 #apex-review-checks img {display:block; max-width: min(100%, 560px); height:auto; margin:8px 0;}

@@ -13,7 +13,7 @@ const policyFile='workbench-quality.json';
 const execute = promisify(execFile);
 
 async function cli(root,...args) {
-  const result = await execute('ruby',[path.join(root,'.harness','bin','harness'),...args,'--project',root],
+  const result = await execute(process.env.HARNESS_RUBY || 'ruby',[path.join(root,'.harness','bin','harness'),...args,'--project',root],
     {cwd:root, windowsHide:true, maxBuffer:32*1024*1024, timeout:120000});
   return JSON.parse(result.stdout);
 }
@@ -364,6 +364,28 @@ export async function approvedWorkbenchEvidence(repository,runId,records,git) {
     findings:record.issues.map(issue=>({...findingDetails(issue),resolution:issue.resolution,
       resolvedCommit:issue.resolvedCommit,resolvedAt:issue.resolvedAt}))};
   return {...result,evidenceHash:digest(result),delivery:review.delivery};
+}
+
+export async function draftWorkbenchPullRequest(repository,runId,records,git) {
+  const evidence=await approvedWorkbenchEvidence(repository,runId,records,git);
+  const handoff=await readHandoff(repository,runId);
+  const cleanTitle=handoff.title.replace(/\s+/g,' ').trim();
+  const passed=evidence.checklist.filter(item=>item.status==='passed').length;
+  const excluded=evidence.checklist.length-passed;
+  const summary=evidence.slices.map(slice=>'- '+slice.title.replace(/\s+/g,' ').trim());
+  const quality=evidence.quality;
+  const body=[
+    '## Summary','',...(summary.length?summary:[cleanTitle || 'Review the changes for this Workbench run.']),'',
+    '## Review evidence','',
+    '- Commit: '+evidence.commit,'- Base: '+evidence.base,
+    '- Manual review: '+passed+' passed, '+excluded+' not applicable.',
+    '- Checklist fingerprint: '+evidence.checklistHash,
+    quality.revision?'- Workbench Quality policy: '+quality.revision:'- Workbench Quality policy: No policy recorded.',
+    ...quality.benchmarks.map(row=>'- Benchmark '+row.check+': '+row.status),
+    '- Evidence fingerprint: '+evidence.evidenceHash,
+    ...(evidence.delivery?.github ? ['- GitHub evidence: '+evidence.delivery.github.evidenceUrl] : [])
+  ].join('\n');
+  return {title:cleanTitle.slice(0,200) || 'Reviewed Workbench changes',body,commit:evidence.commit};
 }
 
 async function pinnedQuality(repository,handoff) {
