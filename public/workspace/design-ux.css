@@ -114,11 +114,23 @@
 }
 
 #project-conversation-form,
+#mockup-reference-controls,
 #conversation-mockup,
 .conversation-proposal {
   display: grid;
   gap: 8px;
   min-width: 0;
+}
+
+#mockup-reference-controls[hidden],
+#mockup-reference-image[hidden] {
+  display: none;
+}
+
+#mockup-reference-image {
+  width: 100%;
+  max-height: 8rem;
+  object-fit: contain;
 }
 
 .conversation-proposal pre {

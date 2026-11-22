@@ -241,16 +241,25 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     try {
       const state = await read();
       revision(state, payload);
-      checkMode(state, payload);
       const text = sentence(payload.message, 'a mockup request');
+      const {target, screenshot, keep} = payload;
+      if (target !== undefined && !['Plan', 'Preview', 'Build'].includes(target)) throw Error('Choose a target screen.');
+      if (target && (typeof screenshot !== 'string' || screenshot.length > 8_000_000 ||
+          !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(screenshot))) throw Error('Attach a screenshot of the target screen.');
+      const reference = target ? Buffer.from(screenshot.slice('data:image/png;base64,'.length), 'base64') : undefined;
       const profile = await store.getProfile();
       const provider = selectedProfile(profile)?.stages.plan.provider;
       const previous = payload.asset ? await files.path((await asset(state, payload.asset)).file) : undefined;
-      const data = await image({provider, previous, prompt: JSON.stringify({request: text, ...contextOf(state)})});
+      const prompt = target
+        ? 'Edit the attached screenshot. Preserve the visible layout and controls outside the requested change. Do not add navigation or sample conversation.\n' +
+          JSON.stringify({target, request: text, keep: typeof keep === 'string' ? keep.slice(0, 3000) : '', plan: state.plan})
+        : JSON.stringify({request: text, ...contextOf(state)});
+      const data = await image({provider, previous, reference, prompt});
       const key = id();
       return edit(async current => {
         await files.write('.harness/design/assets/' + key + '.png', data);
-        current.assets.push({id: key, parent: payload.asset ?? null, prompt: text, time: now()});
+        current.assets.push({id: key, parent: payload.asset ?? null, prompt: text, time: now(),
+          ...(target && {target, planRevision: state.revision})});
         current.messages.push({id: id(), author: 'user', text, time: now()},
           {id: id(), author: 'agent', text: 'Mockup generated.', asset: key, time: now()});
       });

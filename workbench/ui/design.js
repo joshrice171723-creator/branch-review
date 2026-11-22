@@ -206,6 +206,7 @@ function designPanel(initialState) {
   const settings = {branch: null, host: null};
   const previewDraft = {};
   const reviewDrafts = new Map();
+  let previewPlanCleanup = false;
   let readiness, readinessKey, buildStamp, runControls, refreshing = false;
   function rememberDraft() {
     persistDesignDraft(draftKey, localDraft);
@@ -453,7 +454,8 @@ function designPanel(initialState) {
     const generate = button("Plan a mockup", () => projectConversation.openMockup());
     if (!assets.length) return box("Mockup versions", generate);
     if (!assets.some(a => a.id === selectedAsset)) selectedAsset = assets.at(-1).id;
-    const choices = select(selectedAsset, assets.map((a, i) => [a.id, "Version " + (i + 1) + " · " + a.prompt]),
+    const choices = select(selectedAsset, assets.map((a, i) => [a.id, "Version " + (i + 1) + " · " +
+      (a.target ? a.target + " · Plan revision " + a.planRevision : a.prompt)]),
       id => { selectedAsset = id; draw(); return true; });
     const revise = element("textarea");
     revise.dataset.designFocus = "mockup";
@@ -1006,7 +1008,10 @@ function designPanel(initialState) {
       next = [label, () => goBuild()];
     } else if (state.question || state.plannerRetry) next = ["Resolve the planning decision", () => projectConversation.open()];
     else if (localDraft.plan) next = ["Save the local draft", focus("plan-save")];
-    else if (!state.plan.trim()) next = ["Draft a plan", () => projectConversation.open()];
+    else if (!state.plan.trim()) {
+      if (previewPlanCleanup) { nextAction.replaceChildren(); return; }
+      next = ["Draft a plan", () => projectConversation.open()];
+    }
     else if (state.approved !== state.revision) next = ["Approve the saved plan", focus("plan-approve")];
     else if (problem) next = actions[problem.id] || ["Review build readiness", () => goBuild()];
     else next = [readiness?.ready ? "Set up the build" : "Check build readiness", () => goBuild()];
@@ -1041,7 +1046,10 @@ function designPanel(initialState) {
     }));
     const layout = layoutSetting("panes") || "beside";
     body.replaceChildren(tab === "Plan" ? element("div","design-stack",
-      element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), editor()),
+      ...(previewPlanCleanup ? [
+        box("Plan preview", button("Show original", () => { previewPlanCleanup = false; draw(); })),
+        editor()
+      ] : [element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), editor())]),
       progressPanel(() => openTab("Build"), syncProgress)) :
       tab === "Mockups" ? mockups() : tab === "Preview" ? preview() : buildPanel());
     guideNext();
@@ -1135,6 +1143,11 @@ function designPanel(initialState) {
       }
       openTab("Build");
       if (!await change("continue", {build}, {wait: "Starting repair…"})) throw Error(status.textContent);
+    };
+    projectConversation.previewCleanup = () => {
+      previewPlanCleanup = true;
+      if (tab === "Plan") draw();
+      else openTab("Plan");
     };
     projectConversation.goToDesign = (next, focus) => {
       tab = next;

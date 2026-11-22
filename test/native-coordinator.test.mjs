@@ -127,12 +127,13 @@ test('keeps a planning question until it has distinct suggestions and applies pr
     {message: 'Here is the proposal.', proposal: {kind: 'plan', title: 'Edit title', plan: 'Revised plan'}}
   ];
   let prompt, requestedModel, requestedEffort;
+  let mockupRequest;
   const coordinator = await createCoordinator({repository, store, git, invoke: async request => {
     prompt = request.prompt;
     requestedModel = request.model;
     requestedEffort = request.effort;
     return {text: JSON.stringify(replies.shift())};
-  }});
+  }, image: async request => { mockupRequest = request; return Buffer.from('mockup bytes'); }});
   const action = (name, data) => coordinator.dispatch(name, data, {method: 'POST'});
   let state = await action('design/draft', {revision: 0, mode: 'task', title: 'Update greeting', plan: ''});
   state = await action('design/chat', {revision: state.revision, mode: 'task', message: 'Draft the greeting change.'});
@@ -153,5 +154,13 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   assert.match(state.plan, /Use Welcome/);
   assert.equal(state.messages.at(-1).proposal.plan, 'Revised plan');
   assert.equal(state.messages.at(-1).proposal.before.plan, state.plan);
+  const mockup = {revision: state.revision, target: 'Plan', message: 'Remove the shortcuts.', keep: 'Plan editor'};
+  await assert.rejects(action('design/image', mockup), /Attach a screenshot/);
+  const image = Buffer.from('reference bytes');
+  state = await action('design/image', {...mockup, screenshot: 'data:image/png;base64,' + image.toString('base64')});
+  assert.deepEqual(mockupRequest.reference, image);
+  assert.match(mockupRequest.prompt, /"target":"Plan"/);
+  assert.match(mockupRequest.prompt, /"keep":"Plan editor"/);
+  assert.equal(state.assets.at(-1).planRevision, mockup.revision);
 });
 

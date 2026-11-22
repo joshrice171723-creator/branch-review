@@ -50,8 +50,22 @@
     </form>
     <div id="conversation-mockup">
       <div class="field"><label for="conversation-mockup-source">Mockup context</label><select id="conversation-mockup-source">
-        <option value="screen">Current screen</option><option value="slice">Selected slice</option><option value="brief">Written brief</option>
+        <option value="screen">Existing screen</option><option value="slice">Selected slice</option><option value="brief">New concept</option>
       </select></div>
+      <div id="mockup-reference-controls">
+        <label class="field"><span>Target screen</span><select id="mockup-target">
+          <option>Plan</option><option>Preview</option><option>Build</option>
+        </select></label>
+        <div class="actions">
+          <button class="button" type="button" id="capture-mockup-reference">Capture screen</button>
+          <button class="button" type="button" id="upload-mockup-reference">Upload screenshot</button>
+        </div>
+        <input type="file" id="mockup-reference-file" accept="image/png,image/jpeg,image/webp" hidden>
+        <img id="mockup-reference-image" alt="Screenshot reference" hidden>
+        <label class="field"><span>Keep</span><input id="mockup-keep" placeholder="Controls and layout to preserve"></label>
+        <button class="button" type="button" id="preview-plan-cleanup">Preview removing the two Plan shortcuts</button>
+      </div>
+      <p id="mockup-reference-status" role="status"></p>
       <button class="button" id="generate-conversation-mockup" type="button">Generate mockup</button>
     </div>
   </aside>

@@ -1,5 +1,5 @@
 import {execFile, spawn} from 'node:child_process';
-import {lstat, mkdtemp, readdir, readFile, realpath, rm} from 'node:fs/promises';
+import {lstat, mkdtemp, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {createInterface} from 'node:readline';
 import os from 'node:os';
 import path from 'node:path';
@@ -173,12 +173,15 @@ function validPng(data) {
   throw Error('The provider returned an incomplete PNG.');
 }
 
-export async function generateMockup({provider, prompt, previous, providerOptions, signal, invoke = runProvider}) {
+export async function generateMockup({provider, prompt, previous, reference, providerOptions, signal, invoke = runProvider}) {
   if (provider !== 'Codex') throw Error('This planner provider does not support mockup generation.');
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'branch-review-mockup-'));
   try {
+    const screenshot = path.join(cwd, 'reference.png');
+    if (reference) await writeFile(screenshot, validPng(reference));
     const result = await invoke({stage: 'mockup', provider, cwd, image: true, signal, providerOptions,
-      model: 'gpt-6.2-sol', effort: 'low', output: path.join(cwd, 'reply.txt'), images: previous ? [previous] : [],
+      model: 'gpt-6.2-sol', effort: 'low', output: path.join(cwd, 'reply.txt'),
+      images: [reference ? screenshot : null, previous].filter(Boolean),
       prompt: 'Use the image generation tool to create one PNG project mockup. Use the attached reference when provided. Return only the resulting PNG path. Do not run shell commands.\n' + prompt});
     if (!uuid.test(result.threadId ?? '')) throw Error('The provider did not return an image session.');
     const home = await realpath(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
