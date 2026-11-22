@@ -103,4 +103,13 @@ test('explicit push sends only the approved commit to its branch',async t=>{
   await git('commit','--allow-empty','-m','Next revision');
   await assert.rejects(push(),/Approve/);
   assert.equal(await git('ls-remote','--heads',url),commit+'\t'+ref);
+  const next=await git('rev-parse','HEAD'), nextId='20261122T024853906396-dddddddd';
+  const remoteChange=await git('commit-tree',await git('rev-parse','HEAD^{tree}'),'-p',commit,'-m','Independent remote change');
+  await git('push',url,remoteChange+':'+ref);
+  await writeFile(path.join(directory,nextId+'.json'),JSON.stringify({kind:'apex-branch-review',version:1,
+    runId:nextId,ref,commit:next,sourceHash:'b'.repeat(64),title:'Next revision'}));
+  const nextIdentity={...identity,workbenchRun:nextId,source:next,changed:next};
+  const nextRecord={...record,identity:nextIdentity,approval:{...record.approval,identity:digest(nextIdentity),commit:next}};
+  await assert.rejects(pushWorkbenchReview(repository,nextId,next,[nextRecord],git),/rejected|non-fast-forward/i);
+  assert.equal(await git('ls-remote','--heads',url),remoteChange+'\t'+ref);
 });
