@@ -25,6 +25,10 @@ test('switching branches never displays another branch preview or published stat
   assert.equal(failure.record,null);assert.equal(failure.status,'error');assert.equal(failure.error,'Merge conflict');
   const ready={...old,record:{identity:{ref:'new',source:'bbb'}},changed:{sha:'candidate'}};
   assert.equal(selectedReviewState(ready,{...choice,starting:false}),ready);
+  assert.equal(selectedReviewState(ready,{...choice,workbenchRun:'new-run'}).record,null);
+  const runState={...ready,record:{identity:{...ready.record.identity,workbenchRun:'new-run'}}};
+  assert.equal(selectedReviewState(runState,{...choice,workbenchRun:'new-run'}),runState);
+  assert.equal(selectedReviewState(runState,{...choice,workbenchRun:'other-run'}).record,null);
   assert.equal(selectedReviewState({...ready,busy:true},{...choice,starting:false}).record,null);
   assert.equal(selectedReviewState({...ready,record:{identity:{ref:'new',source:'older'}}},{...choice,starting:false}).record,null);
 });

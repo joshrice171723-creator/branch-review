@@ -6,7 +6,7 @@ import {onboarding} from './onboarding.js';
 import {projectSetup} from './project-setup.js';
 import {activity} from './activity.js';
 import { workflow } from './workflow.js';
-import { reviewShortcut, refreshedSelection, selectedReviewState } from './shortcuts.js';
+import { matchesReview, reviewShortcut, refreshedSelection, selectedReviewState } from './shortcuts.js';
 import {workbench} from './workbench.js';
 import {apexPanel} from './apex-panel.js';
 import {evidenceTools} from './evidence-tools.js';
@@ -321,9 +321,11 @@ async function select(branch,reveal=false) {
 async function openBranch(branch, workbenchRun) {
   if(workbenchRun) await poll();
   if(currentState.busy || openingSelection?.starting)return false;
-  if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha && (!branch.fixJob || currentState.record.fixComparison))return true;
+  const selection={...branch,workbenchRun};
+  if(currentState.status==='ready' && matchesReview(currentState.record?.identity,selection) &&
+    (!branch.fixJob || currentState.record.fixComparison))return true;
   if(!await reviewWorkflow.flush())return false;
-  openingSelection={...branch,starting:true};selected=branch;selectedComparison=null;
+  openingSelection={...selection,starting:true};selected=branch;selectedComparison=null;
   openingSummary.textContent=`${branchTitle(branch)} · ${branch.name} · ${branch.sha.slice(0,7)}`;
   try{sessionStorage.setItem('branch-review:opening',JSON.stringify(openingSelection));}catch{}
   $('frames').hidden=true;$('frames').replaceChildren();frameKey='';
