@@ -1,0 +1,63 @@
+<header class="compact-nav">
+    <div class="brand"><div class="brand-mark" aria-hidden="true">W</div><div>Workbench</div></div>
+    <nav aria-label="Workspace">
+      <button data-view="workflow" aria-current="page"><span aria-hidden="true">⌘</span> Design</button>
+      <button data-view="quality">Quality</button>
+      <button data-view="live"><span aria-hidden="true">▷</span> Live run</button>
+      <button data-view="history"><span aria-hidden="true">◷</span> History</button>
+      <details class="workspace-tools">
+        <summary>Configure</summary>
+        <div class="workspace-tools-menu">
+          <button data-view="stages">Stage designer</button>
+          <button data-view="documents">Documents</button>
+          <button data-view="rules">Shared rules</button>
+        </div>
+      </details>
+    </nav>
+  </header>
+  <div class="workspace">
+    <header class="topbar">
+      <div class="location"><strong id="project-name">Project</strong><small id="engine-version" hidden></small></div>
+      <button class="button" id="open-project-conversation" aria-controls="project-conversation" aria-expanded="false" hidden>Project conversation</button>
+      <div class="actions" id="profile-actions"><button class="button primary" id="apply-profile">Apply profile</button><button class="button" id="import">Import</button><button class="button" id="export">Export profile</button></div>
+    </header>
+    <main>
+      <div class="titlebar">
+        <div><h1 id="view-title">Design</h1><p id="view-description">Plan, build, and review project slices.</p></div>
+        <div id="profile-group"><span id="profile-label">Build profile</span><div class="profiles" role="group" aria-labelledby="profile-label">
+          <button data-profile="audited" aria-pressed="true">Audited</button>
+          <button data-profile="fast" aria-pressed="false"><span aria-hidden="true">ϟ</span> Fast</button>
+        </div></div>
+      </div>
+      <div id="content"></div>
+    </main>
+  </div>
+  <aside id="project-conversation" aria-labelledby="project-conversation-title" hidden>
+    <div class="section-row">
+      <div><h2 id="project-conversation-title">Project conversation</h2><p id="project-conversation-context"></p></div>
+      <button class="button icon-button" id="close-project-conversation" aria-label="Close project conversation">×</button>
+    </div>
+    <ol class="conversation" id="project-conversation-messages" aria-label="Conversation"></ol>
+    <div id="project-conversation-pending"></div>
+    <form id="project-conversation-form">
+      <label class="field"><span>Message</span><textarea id="project-conversation-message" rows="3"></textarea></label>
+      <div class="actions">
+        <button class="button primary" id="send-project-conversation" type="submit">Send</button>
+        <button class="button" id="update-plan-with-conversation" type="button" hidden>Ask planner to update draft</button>
+      </div>
+    </form>
+    <div id="conversation-mockup">
+      <div class="field"><label for="conversation-mockup-source">Mockup context</label><select id="conversation-mockup-source">
+        <option value="screen">Current screen</option><option value="slice">Selected slice</option><option value="brief">Written brief</option>
+      </select></div>
+      <button class="button" id="generate-conversation-mockup" type="button">Generate mockup</button>
+    </div>
+    <p id="project-conversation-status" role="status"></p>
+  </aside>
+  <input type="file" id="profile-file" accept=".json,application/json" hidden>
+  <input type="file" id="document-files" accept=".md,.txt,.json,.yaml,.yml,.toml" multiple hidden>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <div class="dialog-heading"><h2 id="dialog-title"></h2><button class="button icon-button" id="close-dialog" aria-label="Close">×</button></div>
+    <div id="dialog-content"></div>
+  </dialog>
+  <div id="notice" role="status" aria-live="polite" hidden></div>

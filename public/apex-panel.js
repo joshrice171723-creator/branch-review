@@ -1,5 +1,5 @@
 export function apexPanel({api, getState, openBranch, flush, reportError,
-    loadPanel = address => import(new URL('mount.js', address).href)}) {
+    loadPanel = source => import(source)}) {
   const byId = id => document.getElementById(id);
   const workspace = byId('change-workspace');
   const factory = byId('factory-view');
@@ -192,18 +192,18 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
         const info = await api('/api/workbench');
         if (!info.installed || info.upgradeAvailable) {
           install.hidden = false;
-          message(info.installed ? 'Update the project runtime to open the change workspace.' : 'Prepare this project to start a change.');
+          message('Prepare this project to start a change.');
           return null;
         }
         message('Opening the change workspace…');
         const {result} = await api('/api/workbench-open', {});
         const address = new URL(result.src, location.origin);
-        if (address.origin !== location.origin || address.pathname !== '/__workbench/') {
-          throw Error('Select the local project runtime to use the change workspace.');
+        if (address.origin !== location.origin || address.pathname !== '/workspace/') {
+          throw Error('Open the workspace for the selected project.');
         }
-        const {mount} = await loadPanel(address);
+        const {mount} = await loadPanel(new URL('/workspace.js',address).href);
         panel = await mount(factory, {
-          base:address.href, initialView:'workflow', onReview:inspect, onStageChange:showStage,
+          initialView:'workflow', onReview:inspect, onStageChange:showStage,
           workingFiles:base=>api('/api/changes?'+new URLSearchParams({base,working:'1'})),
           workingDiff:(base,file)=>api('/api/diff?'+new URLSearchParams({base,file,working:'1'})),
           openEditor:window.desktop?.openEditor,
@@ -231,7 +231,7 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
 
   async function repair(record, findings) {
     const runtime = await load();
-    if (!runtime) throw Error('Prepare the project runtime to start a repair.');
+    if (!runtime) throw Error('Open the project workspace to start a repair.');
     const runId = record.identity.workbenchRun;
     const handoff = await api('/api/workbench-review?run=' + encodeURIComponent(runId));
     if (handoff.reviewId !== record.id || handoff.commit !== record.identity.changed || !handoff.taskBuild) {
@@ -253,15 +253,55 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
   recoveryToggle.onclick=()=>{
     recovery.hidden=!recovery.hidden;
     recoveryToggle.setAttribute('aria-expanded',String(!recovery.hidden));
+    if (!recovery.hidden) void readEnvironment();
   };
+  async function readEnvironment() {
+    const output = byId('workspace-environment-status');
+    output.textContent='Reading project environment…';
+    try {
+      const details = await api('/api/workspace/environment');
+      output.textContent = details.prepared ?
+        'Project prepared. '+details.checks.length+' configured checks.' :
+        'Prepare the project to discover check and preview commands.';
+    } catch (error) { output.textContent=error.message; }
+  }
+  const prepareEnvironment = byId('workspace-prepare');
+  prepareEnvironment.onclick=()=>action(prepareEnvironment,async()=>{
+    await api('/api/workbench-prepare',{});
+    panel?.dispose();
+    panel=null;
+    await load();
+    await readEnvironment();
+  });
+  byId('workspace-copy-mcp').onclick=async()=>{
+    try {
+      await navigator.clipboard.writeText(new URL('/api/workspace/mcp',location.origin).href);
+      byId('workspace-environment-status').textContent='MCP endpoint copied.';
+    } catch (error) { byId('workspace-environment-status').textContent=error.message; }
+  };
+  let cleanupReceipt;
+  const applyCleanup=byId('apex-cleanup-apply');
+  applyCleanup.onclick=()=>action(applyCleanup,async()=>{
+    if (!cleanupReceipt || !confirm('Clean the listed managed files?')) return;
+    const result = await api('/api/workspace/cleanup',{previewId:cleanupReceipt});
+    cleanupReceipt=null;
+    byId('apex-cleanup-files').replaceChildren();
+    byId('apex-cleanup-status').textContent='Cleaned '+result.removed+' entries.';
+    applyCleanup.hidden=true;
+  });
   const cleanup=byId('apex-cleanup-preview');
   cleanup.onclick=()=>action(cleanup,async()=>{
     const status=byId('apex-cleanup-status'),list=byId('apex-cleanup-files');
     list.replaceChildren();
+    cleanupReceipt=null;
+    applyCleanup.hidden=true;
+    status.hidden=false;
     status.textContent='Reading managed scratch and temporary files…';
     try {
       const result=await api('/api/workbench-cleanup-preview');
       const count=result.entries.length;
+      cleanupReceipt=result.previewId;
+      applyCleanup.hidden=!count || !cleanupReceipt;
       status.textContent=count?`${count} entries · ${result.bytes.toLocaleString()} bytes`:'No managed files to clean.';
       for(const item of result.entries.slice(0,100)){
         const row=document.createElement('li');

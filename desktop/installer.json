@@ -9,11 +9,9 @@
   "files": [
     "*.mjs",
     "*.rb",
-    "workbench-install.py",
-    "workbench-release/*",
+    "workbench/**/*",
     "public/**/*",
     "desktop/main.cjs",
-    "desktop/windows-runtime.cjs",
     "desktop/local-origin.cjs",
     "desktop/welcome.html",
     "desktop/welcome.js",
@@ -31,8 +29,7 @@
     "target": "nsis",
     "icon": "desktop/icon.ico",
     "signExecutable": false,
-    "artifactName": "Branch-Review-${version}-Windows-x64-Payload.${ext}",
-    "extraResources": [{"from": "${env.BRANCH_REVIEW_RUNTIME_STAGE}", "to": "runtime"}]
+    "artifactName": "Branch-Review-${version}-Windows-x64-Payload.${ext}"
   },
   "nsis": {
     "oneClick": false,

@@ -6,7 +6,8 @@ import {setupChecks} from './setup-checks.mjs';
 import {applyWorkbenchRubric, approvedWorkbenchEvidence, completedRuns, createRepair, designChecklist, taskChecklist, draftWorkbenchPullRequest, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, rubricComplete, validateWorkbenchPreview, workbenchComparison, workbenchMockup, workbenchReview, workbenchRubric} from './workbench-handoff.mjs';
 import {githubApi, publishWorkbenchCheck} from './workbench-github.mjs';
 import localOrigin from './desktop/local-origin.cjs';
-import {projectPanel} from './apex-panel.mjs';
+import {createWorkspace} from './workbench/workspace.mjs';
+import {workspaceRenderer} from './workbench/renderer.mjs';
 import {npmEntry} from './web-project.mjs';
 import http from 'node:http';
 import { once } from 'node:events';
@@ -483,16 +484,53 @@ actions.add('/api/release-key-text');actions.add('/api/new-change');actions.add(
 for(const endpoint of ['/api/version-preview','/api/version-latest','/api/version-restore','/api/fix-apply'])actions.add(endpoint);
 longActions.add('/api/version-restore');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
-async function handleRequest(req,res,{origin,host,apex,previewOrigins}) {
+async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
   try {
     if(req.headers.host!==host) return json(res,403,{error:'Invalid host'});
-    if(apex.handle(req,res)) return;
     // Loopback cookies cross ports; retire old revisions before their headers grow too large.
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
-    if (req.method === 'GET' && url.pathname === '/api/workbench') return json(res,200,await apex.status());
-    if (req.method === 'GET' && url.pathname === '/api/workbench-cleanup-preview') return json(res,200,await apex.cleanupPreview());
+    if (url.pathname.startsWith('/api/workspace/')) {
+      if (req.headers.origin && req.headers.origin!==origin) return json(res,403,{error:'Invalid origin'});
+      const route=url.pathname.slice('/api/workspace/'.length);
+      const verified=req.headers['x-review-token']===token;
+      if (route==='mcp' && req.method==='POST') {
+        if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || '')) return json(res,415,{error:'Use application/json.'});
+        const reply=await workspace.mcp(await body(req),verified);
+        return reply ? json(res,200,reply) : res.writeHead(202).end();
+      }
+      if (req.method!=='GET' && req.method!=='POST') return json(res,405,{error:'Use GET or POST.'});
+      if (req.method==='GET' && route==='quality/routes' && url.searchParams.get('runtime')==='true' && !verified)
+        return json(res,403,{error:'Authorize this client to run project route discovery.'});
+      if (req.method==='POST' && (!verified || req.headers.origin!==origin))
+        return json(res,403,{error:'Reload Branch Review before continuing.'});
+      const result=await workspace.dispatch(req.method,route,req.method==='POST'?await body(req):{},url.searchParams);
+      if (Buffer.isBuffer(result?.bytes)) {
+        res.writeHead(200,{'Content-Type':result.type,'Content-Length':result.bytes.length,'Cache-Control':'no-store',
+          'X-Content-Type-Options':'nosniff',...(result.download && {'Content-Disposition':'attachment; filename="'+result.download+'"'})});
+        return res.end(result.bytes);
+      }
+      return json(res,200,result);
+    }
+    if (req.method==='GET' && url.pathname==='/workspace.js') {
+      const rendered=await workspaceRenderer();
+      if (req.headers['if-none-match']===rendered.etag) return res.writeHead(304,{ETag:rendered.etag}).end();
+      res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache',
+        'ETag':rendered.etag,'X-Content-Type-Options':'nosniff'});
+      return res.end(rendered.source);
+    }
+    if (req.method==='GET' && url.pathname==='/workspace-profile.js') {
+      res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'});
+      return res.end(await readFile(path.join(root,'workbench','profile.mjs')));
+    }
+    if (req.method==='GET' && /^\/workspace-assets\/(styles|design-progress|design-ux|quality)\.css$/.test(url.pathname)) {
+      res.writeHead(200,{'Content-Type':'text/css; charset=utf-8','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'});
+      return res.end(await readFile(path.join(root,'public','workspace',path.basename(url.pathname))));
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/workbench') return json(res,200,await workspace.status());
+    if (req.method === 'GET' && url.pathname === '/api/workbench-cleanup-preview') return json(res,200,await workspace.cleanupPreview());
     if (req.method === 'GET' && url.pathname === '/api/workbench-runs') return json(res,200,await completedRuns(repo));
     if (req.method === 'GET' && url.pathname === '/api/workbench-review') return json(res,200,
       await workbenchReview(repo,url.searchParams.get('run'),store.records,git));
@@ -511,7 +549,7 @@ async function handleRequest(req,res,{origin,host,apex,previewOrigins}) {
     if (req.method === 'GET' && url.pathname === '/api/workbench-handoff') {
       return json(res, 200, await readHandoff(repo, url.searchParams.get('run')));
     }
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await readRecipe(local).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,workspaceBusy:workspace.busy(),qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await readRecipe(local).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await consolidateFixBranches(groupedBranches(await branches(),jobs.rows,store.records),git));
     if(req.method==='GET' && url.pathname==='/api/qa-review')return json(res,200,store.get(url.searchParams.get('id')));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
@@ -551,12 +589,12 @@ async function handleRequest(req,res,{origin,host,apex,previewOrigins}) {
     if(req.method==='GET' && /^\/recordings\/[a-f0-9-]{36}\.webm$/.test(url.pathname)){const clip=await readFile(path.join(local,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':'video/webm','Content-Length':clip.length,'Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'"});return res.end(clip);}
     if(req.method==='POST' && actions.has(url.pathname)) {
       if(req.headers.origin!==origin || req.headers['x-review-token']!==token) return json(res,403,{error:'Reload Branch Review before continuing.'});
-      if(url.pathname==='/api/workbench-open') return json(res,200,{result:await apex.open()});
-      if(url.pathname==='/api/workbench-prepare') return json(res,200,{result:await apex.prepare()});
+      if(url.pathname==='/api/workbench-open') return json(res,200,{result:await workspace.open()});
+      if(url.pathname==='/api/workbench-prepare') return json(res,200,{result:await workspace.prepare()});
       if(url.pathname==='/api/workbench-install') {
-        if(busy || jobs.rows.some(job=>job.status==='running')) return json(res,409,{error:'Wait for the active review operation before installing Workbench.'});
+        if(busy || jobs.rows.some(job=>job.status==='running')) return json(res,409,{error:'Wait for the active review operation before preparing the project.'});
         busy=true;
-        try {return json(res,200,{result:await apex.install()});} finally {busy=false;}
+        try {return json(res,200,{result:await workspace.prepare()});} finally {busy=false;}
       }
       if(url.pathname==='/api/job-cancel')return json(res,200,{result:await jobs.cancel((await body(req)).jobId)});
       if(busy) return json(res,409,{error:'Another operation is still running.'});
@@ -569,7 +607,7 @@ async function handleRequest(req,res,{origin,host,apex,previewOrigins}) {
     }
     if(req.method!=='GET'||!['/','/app.js','/apex-panel.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/photo-markup.js','/branch-history.js','/batch-review.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css','/theme.js'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
-    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' "+[apex.frameOrigin,...previewOrigins,'http://127.0.0.1:*','http://localhost:*','https:'].filter(Boolean).join(' ')+"; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
+    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' "+[...previewOrigins,'http://127.0.0.1:*','http://localhost:*','https:'].filter(Boolean).join(' ')+"; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
   }catch(error){if(!res.headersSent)json(res,400,{error:error.message});else res.end();}
 }
@@ -592,7 +630,7 @@ async function bindLoopback(server, port, allowFallback) {
 export async function startServer({allowPortFallback=false,preferredPort} = {}) {
   const controllerFallback = allowPortFallback && !localOrigin.hasPortOverride;
   const requestedPort = controllerFallback && localOrigin.isControllerPort(preferredPort) ? preferredPort : localOrigin.port;
-  let context, apex;
+  let context, workspace;
   const server = http.createServer({maxHeaderSize:128*1024},(req,res)=>{
     if (!context) return json(res,503,{error:'Branch Review is starting.'});
     void handleRequest(req,res,context);
@@ -602,7 +640,16 @@ export async function startServer({allowPortFallback=false,preferredPort} = {}) 
     const port = await bindLoopback(server,requestedPort,controllerFallback);
     const host = `127.0.0.1:${port}`;
     const origin = `http://${host}`;
-    apex = projectPanel(repo,process.env.APEX_WORKBENCH_URL,origin);
+    workspace = await createWorkspace({repository:repo,local,git,origin,token,selectedAgent,
+      providerOptions:()=>Object.fromEntries(Object.entries(agentSettings.executables || {}).map(([provider,executable])=>[provider,{executable}])),
+      review:run=>workbenchReview(repo,run,store.records,git),
+      push:async data=>{
+        if (busy) throw Error('Wait for the current review operation.');
+        busy=true;
+        try {return await mutate('/api/workbench-push',data);}
+        finally {busy=false;}
+      }
+    });
     const previewOrigins = [];
     for (const [runtime,slot] of Object.entries(slots)) {
       const proxy = previewProxy('changed',slot,()=>{
@@ -625,8 +672,8 @@ export async function startServer({allowPortFallback=false,preferredPort} = {}) 
     const preparedSlot = slots[state.prepared?.runtime];
     if (preparedSlot && state.prepared.proxy !== undefined) state.prepared.proxy = preparedSlot.proxy;
     await activate().catch(error=>{state.status='error';state.error=error.message;});
-    context = {origin,host,apex,previewOrigins};
-    process.once('exit',()=>apex.close());
+    context = {origin,host,workspace,previewOrigins};
+    process.once('exit',()=>workspace.close());
     let checkingMuse=false;
     setInterval(async()=>{
       if(busy || checkingMuse)return;checkingMuse=true;
@@ -638,7 +685,7 @@ export async function startServer({allowPortFallback=false,preferredPort} = {}) 
     return {origin,port};
   } catch (error) {
     for (const listener of listeners) if (listener.listening) listener.close();
-    apex?.close();
+    workspace?.close();
     throw error;
   }
 }

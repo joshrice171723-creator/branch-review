@@ -1,33 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createServer} from 'node:http';
-import {access,mkdtemp,realpath,rm} from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import {projectPanel} from '../apex-panel.mjs';
 import {apexPanel} from '../public/apex-panel.js';
-
-test('external Workbench opens only when it serves the selected project',async t=>{
-  const checkout=await realpath(await mkdtemp(path.join(os.tmpdir(),'workbench-external-')));
-  t.after(()=>rm(checkout,{recursive:true,force:true}));
-  const panelPath='/__workbench/p/0123456789abcdef0123/';
-  let connectedProject=checkout;
-  const external=createServer((req,res)=>{
-    if(req.url==='/__workbench/') return res.writeHead(302,{Location:panelPath}).end();
-    if(req.url===panelPath) return res.end('Workbench');
-    if(req.url===panelPath+'api/state') return res.end(JSON.stringify({project:{path:connectedProject}}));
-    res.writeHead(404).end();
-  });
-  t.after(()=>new Promise(resolve=>external.close(resolve)));
-  await new Promise(resolve=>external.listen(0,'127.0.0.1',resolve));
-  const origin='http://127.0.0.1:'+external.address().port;
-  const panel=projectPanel(checkout,origin+'/__workbench/');
-  assert.equal((await panel.prepare()).installed,false);
-  assert.deepEqual(await panel.open(),{src:origin+panelPath,project:checkout,managed:false});
-  await assert.rejects(access(path.join(checkout,'.harness')));
-  connectedProject=path.dirname(checkout);
-  await assert.rejects(panel.open(),/serves a different project/);
-});
+import {workspaceRenderer} from '../workbench/renderer.mjs';
 
 test('the project workspace mounts once and retains conversation during Branch Review', async t => {
   const origin='http://127.0.0.1:4310';
@@ -42,21 +16,21 @@ test('the project workspace mounts once and retains conversation during Branch R
   globalThis.window={};
   t.after(()=>{delete globalThis.document;delete globalThis.window;delete globalThis.location;});
   const panel=apexPanel({getState:()=>({}),openBranch:async()=>true,flush:async()=>true,
-    loadPanel:async()=>({mount:async(node,options)=>{
-      mounts.push({node,options});
+    loadPanel:async(source)=>({mount:async(node,options)=>{
+      mounts.push({node,options,source});
       return {setVisible:value=>visibility.push(value),openConversation:input=>messages.push(input)};
     }}),
     api:async(route)=>{
       calls.push(route);
       if(route==='/api/workbench') return {project:'/trusted/project',installed:true};
-      if(route==='/api/workbench-open') return {result:{src:'/__workbench/',managed:true}};
+      if(route==='/api/workbench-open') return {result:{src:'/workspace/',managed:true}};
       throw Error('Unexpected route '+route);
     }});
   const context={kind:'branch-review',commit:'a'.repeat(40),ref:'refs/heads/design',scenarioId:'example'};
   await Promise.all([panel.open(),panel.openChat(context)]);
   assert.deepEqual(calls,['/api/workbench','/api/workbench-open']);
   assert.equal(mounts[0].node,element('factory-view'));
-  assert.equal(mounts[0].options.base,origin+'/__workbench/');
+  assert.equal(mounts[0].source,origin+'/workspace.js');
   assert.deepEqual(messages,[context]);
   assert.equal(element('review-workspace').hidden,true);
   element('open-project-qa').onclick();
@@ -66,4 +40,11 @@ test('the project workspace mounts once and retains conversation during Branch R
   assert.equal(mounts.length,1);
   assert.deepEqual(visibility,[true,false,true]);
   assert.deepEqual(messages,[context,context]);
+});
+
+test('the native workspace module binds only Branch Review routes',async()=>{
+  const {source}=await workspaceRenderer();
+  assert.match(source,/export async function mount/);
+  assert.match(source,/api\/workspace/);
+  assert.doesNotMatch(source,/__workbench\/|window\.parent\.postMessage/);
 });

@@ -31,7 +31,11 @@
         <button id="apex-recovery-toggle" type="button" aria-expanded="false" aria-controls="apex-recovery" hidden>Workspace files</button>
       </div>
       <section id="apex-recovery" hidden aria-label="Managed workspace files">
+        <p id="workspace-environment-status" role="status"></p>
+        <button id="workspace-prepare" type="button">Prepare project</button>
+        <button id="workspace-copy-mcp" type="button">Copy MCP endpoint</button>
         <button id="apex-cleanup-preview" type="button">Preview cleanup</button>
+        <button id="apex-cleanup-apply" type="button" hidden>Clean listed files</button>
         <p id="apex-cleanup-status" role="status" hidden></p>
         <ul id="apex-cleanup-files" aria-label="Managed files"></ul>
       </section>

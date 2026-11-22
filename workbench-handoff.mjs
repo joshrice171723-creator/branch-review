@@ -5,18 +5,13 @@ import {link, lstat, mkdir, readFile, readdir, readlink, realpath, stat, unlink,
 import path from 'node:path';
 import {digest} from './reviews.mjs';
 import {canApprove, itemStatus} from './public/review-model.js';
+import {createStore} from './workbench/store.mjs';
 
 const runPattern = /^\d{8}T\d{12}-[0-9a-f]{8}$/;
 const commitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const hashPattern = /^[0-9a-f]{64}$/;
 const policyFile='workbench-quality.json';
 const execute = promisify(execFile);
-
-async function cli(root,...args) {
-  const result = await execute(process.env.HARNESS_RUBY || 'ruby',[path.join(root,'.harness','bin','harness'),...args,'--project',root],
-    {cwd:root, windowsHide:true, maxBuffer:32*1024*1024, timeout:120000});
-  return JSON.parse(result.stdout);
-}
 
 async function inbox(root,parts) {
   let directory=await realpath(root);
@@ -40,17 +35,21 @@ async function immutableJson(directory,filename,value,match) {
 
 export async function completedRuns(repository) {
   const root=await realpath(repository);
-  const {runs}=await cli(root,'runs','list');
+  const {runs}=await createStore(root).listRuns();
   return runs.filter(row=>row.lifecycle?.status==='completed').map(({id,action})=>({id,title:action}));
 }
 
 export async function exportHandoff(repository,runId,git) {
   if(typeof runId!=='string' || !runPattern.test(runId)) throw Error('Choose a completed Workbench run.');
   const root=await realpath(repository);
-  const current=await cli(root,'task','status','--id',runId);
+  const runs=createStore(root);
+  const current=await runs.status(runId);
   const digest=current.lifecycle?.snapshot_sha256;
   if(current.lifecycle?.status!=='completed' || !/^[0-9a-f]{64}$/.test(digest) ||
       current.snapshot_sha256!==digest) throw Error('This checkout differs from the completed run.');
+  const run=await runs.getRun(runId);
+  if (run.task?.harness_version==='0.3.0-native' && (current.verdict!=='pass' || run.ledger.verdict!=='pass'))
+    throw Error('Verify the completed Workbench evidence before review.');
   const evidence=path.join(root,'.harness','tasks',runId,'snapshots');
   let snapshot;
   for(const name of [digest.slice(0,20),digest]) {
@@ -560,7 +559,7 @@ export async function createRepair(repository,{runId,receipt,action,scope},git) 
   if(await git('rev-parse','HEAD')!==run.commit || await git('symbolic-ref','--quiet','HEAD')!==run.ref) {
     throw Error('Check out the reviewed project branch and commit before creating its repair task.');
   }
-  const current=await cli(root,'task','status','--id',runId);
+  const current=await createStore(root).status(runId);
   if(current.lifecycle?.status!=='completed' || current.snapshot_sha256!==run.sourceHash) {
     throw Error('The project source changed after review. Select a run for the current source.');
   }
@@ -568,7 +567,8 @@ export async function createRepair(repository,{runId,receipt,action,scope},git) 
       typeof scope!=='string' || !scope.trim() || scope.length>16000) throw Error('Enter an action and scope within the displayed limits.');
   await accessProfile(root);
   const reference='.harness/branch-review/incoming/'+runId+'/'+receipt+'.json';
-  return cli(root,'feature','--action',action.trim(),'--scope',scope.trim()+'\nReview evidence: '+reference,'--answer-channel','form');
+  return createStore(root).startTask({mode:'feature',action:action.trim(),
+    scope:scope.trim()+'\nReview evidence: '+reference,channel:'form'});
 }
 
 async function accessProfile(root) {

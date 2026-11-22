@@ -1,71 +1,116 @@
 import assert from 'node:assert/strict';
-import {access,readdir,mkdtemp,mkdir,readFile,realpath,writeFile} from 'node:fs/promises';
-import {execFile} from 'node:child_process';
-import {createServer} from 'node:http';
-import {createRequire} from 'node:module';
+import {access, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile} from 'node:fs/promises';
+import {execFile, spawn} from 'node:child_process';
+import {createInterface} from 'node:readline';
 import {promisify} from 'node:util';
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-const root=path.resolve(process.argv[2]);
-const run=promisify(execFile);
-const require=createRequire(import.meta.url);
-assert.ok(process.versions.electron,'Run using the installed Electron executable');
-for(const file of ['desktop/main.cjs','desktop/preload.cjs','desktop/repository.cjs','desktop/setup-help.cjs','desktop/browser-qa.cjs','desktop/icon.ico'])await access(path.join(root,file));
-for(const forbidden of ['.local','.git','.harness','test','.env','__pycache__'])assert.equal(await access(path.join(root,forbidden)).then(()=>true,()=>false),false,forbidden+' leaked into installer');
-assert.deepEqual((await readdir(path.join(root,'node_modules'))).filter(name=>!name.startsWith('.')),['axe-core']);
-const {detectProject,npmEntry}=await import(pathToFileURL(path.join(root,'web-project.mjs')));
-const {probeProvider}=await import(pathToFileURL(path.join(root,'providers.mjs')));
-const fixture=await mkdtemp(path.join(os.tmpdir(),'installed-review-'));
-const empty=path.join(fixture,'empty');await mkdir(empty);
-const systemPath=path.join(process.env.SystemRoot || 'C:\\Windows','System32');
-process.env.PATH=systemPath;
-process.env.LOCALAPPDATA=empty;process.env.USERPROFILE=empty;process.env.HOME=empty;
-for(const name of ['APEX_WORKBENCH_URL','HARNESS_PYTHON','HARNESS_RUBY','HARNESS_NODE','BRANCH_REVIEW_CODEX','BRANCH_REVIEW_CLAUDE'])delete process.env[name];
-const runtime=path.join(path.dirname(root),'runtime');
-const {configureBundledRuntimes}=require(path.join(root,'desktop/windows-runtime.cjs'));
-const tools=configureBundledRuntimes(runtime);
-assert.equal(process.env.PATH.split(path.delimiter)[0],systemPath);
-const locked=JSON.parse(await readFile(path.join(runtime,'windows-runtimes.json'),'utf8'));
-const versions={python:['-c','import sqlite3, ssl, sys; print(sys.version.split()[0])'],
-  ruby:['-e','require "json"; require "openssl"; print RUBY_VERSION'],node:['-p','process.versions.node']};
-for(const [name,executable] of Object.entries(tools)){
-  assert.equal(process.env['HARNESS_'+name.toUpperCase()],executable);
-  assert.equal((await run(executable,versions[name],{cwd:fixture,windowsHide:true,timeout:120000})).stdout.trim(),locked[name].version);
+
+const run = promisify(execFile);
+assert.ok(process.versions.electron, 'Run using the installed Electron executable.');
+assert.ok(process.argv[2] && path.isAbsolute(process.argv[3] || ''), 'Supply the packaged app directory and absolute Git executable.');
+const root = path.resolve(process.argv[2]);
+const git = process.argv[3];
+for (const file of ['server.mjs', 'workbench/renderer.mjs', 'public/index.html', 'desktop/main.cjs', 'desktop/preload.cjs',
+  'desktop/repository.cjs', 'desktop/setup-help.cjs', 'desktop/browser-qa.cjs', 'desktop/icon.ico']) {
+  await access(path.join(root, file));
 }
-const npm=await npmEntry();
-assert.equal(await realpath(npm),await realpath(path.join(runtime,'node/node_modules/npm/bin/npm-cli.js')));
-assert.match((await run(tools.node,[npm,'--version'],{cwd:fixture,windowsHide:true})).stdout,/^\d+\.\d+\.\d+/);
-await writeFile(path.join(fixture,'package.json'),JSON.stringify({name:'independent',devDependencies:{vite:'1'}}));
-await writeFile(path.join(fixture,'package-lock.json'),'{}');
-assert.equal((await detectProject(fixture)).kind,'vite');
-const {projectPanel}=await import(pathToFileURL(path.join(root,'apex-panel.mjs')));
-const panel=projectPanel(await realpath(fixture));
-assert.equal((await panel.status()).installed,false);
-let workbench=await panel.install();
-assert.equal(workbench.installed,true);
-assert.equal(workbench.runtimeRevision,workbench.availableRevision);
-if(process.env.BRANCH_REVIEW_EXPECTED_WORKBENCH_REVISION){
-  assert.equal(workbench.runtimeRevision,process.env.BRANCH_REVIEW_EXPECTED_WORKBENCH_REVISION);
+for (const file of ['.local', '.git', '.harness', 'test', '.env', '__pycache__', 'workbench-install.py', 'workbench-release']) {
+  await assert.rejects(access(path.join(root, file)), {code:'ENOENT'}, file + ' leaked into the package.');
 }
-const record=path.join(fixture,'.harness','pilot-record.json');
-await writeFile(record,'{"layout":"Design"}');
-await writeFile(path.join(fixture,'.harness','MANIFEST.sha256'),'outdated manifest');
-assert.equal((await panel.status()).upgradeAvailable,true);
-workbench=await panel.install();
-assert.equal(workbench.upgradeAvailable,false);
-assert.equal(await readFile(record,'utf8'),'{"layout":"Design"}');
+await assert.rejects(access(path.join(path.dirname(root), 'runtime')), {code:'ENOENT'});
+assert.deepEqual((await readdir(path.join(root, 'node_modules'))).filter(name => !name.startsWith('.')), ['axe-core']);
+
+const temporary = await realpath(os.tmpdir());
+const fixture = await mkdtemp(path.join(temporary, 'installed-review-'));
+let child, closed, timer;
 try {
-  const mounted=await panel.open();
-  assert.equal(mounted.src,'/__workbench/');
-  assert.equal((await panel.status()).mounted,true);
-  const proxy=createServer((request,response)=>{if(!panel.handle(request,response))response.writeHead(404).end();});
-  try {
-    await new Promise((resolve,reject)=>proxy.once('error',reject).listen(0,'127.0.0.1',resolve));
-    const response=await fetch(`http://127.0.0.1:${proxy.address().port}${mounted.src}api/bootstrap`,{signal:AbortSignal.timeout(15000)});
-    assert.equal(response.status,200);
-    assert.equal((await response.json()).installed,true);
-  } finally { await new Promise(resolve=>proxy.close(resolve)); }
-} finally { panel.close(); }
-for(const provider of ['codex','claude'])assert.equal((await probeProvider(provider)).status,'missing');
-console.log('Installed runtime passed on a restricted PATH: private Python, Ruby, Node and npm, Workbench install, record-preserving upgrade and mounted bootstrap.');
+  const home = path.join(fixture, 'workspace');
+  const project = path.join(fixture, 'project');
+  const remote = path.join(fixture, 'origin.git');
+  const profile = path.join(fixture, 'profile');
+  await Promise.all([mkdir(home), mkdir(project), mkdir(profile)]);
+  const env = {...process.env, HOME:profile, USERPROFILE:profile, LOCALAPPDATA:profile,
+    BRANCH_REVIEW_HOME:home, BRANCH_REVIEW_DESKTOP_REPOSITORY:project, ELECTRON_RUN_AS_NODE:'1',
+    GIT_CONFIG_NOSYSTEM:'1', GIT_CONFIG_GLOBAL:path.join(profile, 'gitconfig')};
+  for (const name of ['BRANCH_REVIEW_PORT', 'APEX_WORKBENCH_URL', 'HARNESS_PYTHON', 'HARNESS_RUBY', 'HARNESS_NODE',
+    'BRANCH_REVIEW_CODEX', 'BRANCH_REVIEW_CLAUDE', 'BRANCH_REVIEW_MUSE', 'META_CLINIC_REPO']) delete env[name];
+  const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH') || 'PATH';
+  if (process.platform === 'win32') {
+    const systemPath = path.join(env.SystemRoot || 'C:\\Windows', 'System32');
+    env[pathKey] = [path.dirname(git), systemPath].join(path.delimiter);
+  } else {
+    await symlink(git, path.join(profile, 'git'));
+    env[pathKey] = profile;
+  }
+  const options = {cwd:project, env, windowsHide:true, timeout:20000};
+  for (const executable of ['node', 'python', 'ruby']) {
+    await assert.rejects(run(executable, ['--version'], options), {code:'ENOENT'});
+  }
+  await run(git, ['init', '-b', 'main'], options);
+  await writeFile(path.join(project, 'index.html'), '<!doctype html><title>Branch Review smoke project</title>');
+  await run(git, ['add', 'index.html'], options);
+  await run(git, ['-c', 'user.name=Smoke Test', '-c', 'user.email=smoke@example.invalid', 'commit', '-m', 'Initial fixture'], options);
+  await run(git, ['init', '--bare', '-b', 'main', remote], options);
+  await run(git, ['remote', 'add', 'origin', remote], options);
+  await run(git, ['push', '-u', 'origin', 'main'], options);
+  const entry = pathToFileURL(path.join(root, 'server.mjs')).href;
+  const command = 'const {startServer}=await import(process.argv[1]); await startServer({allowPortFallback:true});';
+  child = spawn(process.execPath, ['--input-type=module', '--eval', command, entry], {
+    cwd:project, env, windowsHide:true, stdio:['ignore', 'pipe', 'pipe']
+  });
+  closed = new Promise(resolve => child.once('close', resolve));
+  let errors = '';
+  child.stderr.on('data', chunk => { errors = (errors + chunk).slice(-10000); });
+  const lines = createInterface({input:child.stdout});
+  const origin = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', code => reject(Error(`Controller exited ${code}. ${errors}`)));
+    timer = setTimeout(() => reject(Error('Controller did not start. ' + errors)), 30000);
+    lines.on('line', line => {
+      const match = /^Branch Review: (http:\/\/127\.0\.0\.1:\d+)$/.exec(line);
+      if (match) resolve(match[1]);
+    });
+  });
+  clearTimeout(timer);
+  const page = await fetch(origin + '/', {signal:AbortSignal.timeout(15000)});
+  assert.ok(page.ok, 'The packaged desktop page failed to load.');
+  assert.match(await page.text(), /<title>Branch Review<\/title>/);
+  const renderer = await fetch(origin + '/workspace.js', {signal:AbortSignal.timeout(15000)});
+  assert.ok(renderer.ok, 'The packaged workspace renderer failed to load.');
+  assert.match(await renderer.text(), /export async function mount\(/);
+
+  async function get(route) {
+    const result = await fetch(origin + route, {signal:AbortSignal.timeout(15000)});
+    assert.ok(result.ok, route + ' returned ' + result.status);
+    return result.json();
+  }
+  const {token} = await get('/api/state');
+  async function post(route, body) {
+    const result = await fetch(origin + route, {method:'POST', signal:AbortSignal.timeout(15000),
+      headers:{Origin:origin, 'X-Review-Token':token, 'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const data = await result.json();
+    assert.ok(result.ok, route + ' returned ' + result.status + ' ' + JSON.stringify(data));
+    return data;
+  }
+  assert.equal((await get('/api/workbench')).engine, 'native');
+  await post('/api/workbench-prepare', {});
+  const bootstrap = await get('/api/workspace/bootstrap');
+  assert.equal(bootstrap.project.path, project);
+  assert.equal(bootstrap.installed, true);
+  const rpc = await post('/api/workspace/mcp', {jsonrpc:'2.0', id:1, method:'initialize',
+    params:{protocolVersion:'2024-11-05', capabilities:{}, clientInfo:{name:'installed-smoke', version:'1'}}});
+  assert.equal(rpc.id, 1);
+  assert.ok(rpc.result?.protocolVersion);
+  console.log('Installed Electron started the native workspace and MCP using Git on a restricted PATH.');
+} finally {
+  clearTimeout(timer);
+  if (child) {
+    child.kill();
+    await closed;
+  }
+  if (path.dirname(fixture) === temporary && await realpath(fixture) === fixture) {
+    await rm(fixture, {recursive:true, force:true, maxRetries:3});
+  }
+}

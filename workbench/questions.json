@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "questions": [
+    {
+      "id": "scope_confirmed",
+      "text": "Confirm the task action and affected scope.",
+      "required": true,
+      "options": [
+        "confirmed"
+      ],
+      "suggested_answer": "confirmed",
+      "suggestion_is_permission": false,
+      "option_details": [
+        {
+          "id": "confirmed",
+          "label": "Confirm this scope",
+          "effect": "Use the stated task boundary."
+        }
+      ],
+      "default": "No permission until an explicit user decision is recorded."
+    },
+    {
+      "id": "code_changes",
+      "text": "May this task change application code within its agreed scope?",
+      "required": true,
+      "options": [
+        "deny",
+        "allow_scoped"
+      ],
+      "suggested_answer": "deny",
+      "recommended_by_mode": {
+        "audit": "deny",
+        "refactor": "allow_scoped",
+        "feature": "allow_scoped",
+        "build": "allow_scoped"
+      },
+      "suggestion_is_permission": false,
+      "option_details": [
+        {
+          "id": "deny",
+          "label": "Do not change app code",
+          "effect": "Inspect and report only."
+        },
+        {
+          "id": "allow_scoped",
+          "label": "Allow scoped code changes",
+          "effect": "Change only the agreed components and behavior."
+        }
+      ],
+      "default": "No permission until an explicit user decision is recorded."
+    },
+    {
+      "id": "migrations",
+      "text": "May this task add, change, or remove migrations or schema files?",
+      "required": true,
+      "options": [
+        "deny",
+        "allow"
+      ],
+      "suggested_answer": "deny",
+      "suggestion_is_permission": false,
+      "option_details": [
+        {
+          "id": "deny",
+          "label": "Keep schema files unchanged",
+          "effect": "Do not add, edit, or delete migrations or schema files."
+        },
+        {
+          "id": "allow",
+          "label": "Allow owned schema work",
+          "effect": "Change only app-owned schema within the task. External schemas stay fixed."
+        }
+      ],
+      "default": "No permission until an explicit user decision is recorded."
+    },
+    {
+      "id": "dependencies",
+      "text": "May this task change dependency manifests or locks?",
+      "required": true,
+      "options": [
+        "deny",
+        "allow"
+      ],
+      "suggested_answer": "deny",
+      "suggestion_is_permission": false,
+      "option_details": [
+        {
+          "id": "deny",
+          "label": "Keep dependencies unchanged",
+          "effect": "Do not edit dependency manifests or lock files."
+        },
+        {
+          "id": "allow",
+          "label": "Allow justified dependency work",
+          "effect": "Change dependencies only when the agreed task requires it."
+        }
+      ],
+      "default": "No permission until an explicit user decision is recorded."
+    },
+    {
+      "id": "engine_integration",
+      "text": "Confirm the configured coding harness is installed and used by the implementing agent.",
+      "required": true,
+      "options": [
+        "confirmed"
+      ],
+      "suggested_answer": "confirmed",
+      "suggestion_is_permission": false,
+      "option_details": [
+        {
+          "id": "confirmed",
+          "label": "Confirm engine integration",
+          "effect": "The implementing agent reads and uses the configured coding engine."
+        }
+      ],
+      "default": "No permission until an explicit user decision is recorded."
+    },
+    {
+      "id": "notes",
+      "text": "Record additional task context.",
+      "required": false,
+      "custom": true
+    }
+  ]
+}

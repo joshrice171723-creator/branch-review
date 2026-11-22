@@ -4,18 +4,16 @@ import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import {panelAddress} from '../apex-panel.mjs';
-import {taskChecklist, applyWorkbenchRubric,approvedWorkbenchEvidence,draftWorkbenchPullRequest,readHandoff,returnFindings,selectHandoffBranch,verifyCommittedSources,workbenchComparison,workbenchMockup,workbenchReview,workbenchRubric,pushWorkbenchReview} from '../workbench-handoff.mjs';
+import {completedRuns, taskChecklist, applyWorkbenchRubric,approvedWorkbenchEvidence,draftWorkbenchPullRequest,readHandoff,returnFindings,selectHandoffBranch,verifyCommittedSources,workbenchComparison,workbenchMockup,workbenchReview,workbenchRubric,pushWorkbenchReview} from '../workbench-handoff.mjs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {digest} from '../reviews.mjs';
 
-test('project panels accept canonical loopback workspace and bound server links',()=>{
-  assert.ok(panelAddress('http://127.0.0.1:8794/__workbench/p/0123456789abcdef0123/'));
-  assert.ok(panelAddress('http://localhost:8792/__workbench/'));
-  for(const url of ['https://example.com/__workbench/','http://localhost:8792/api/','http://u:p@localhost/__workbench/']) {
-    assert.throws(()=>panelAddress(url),/loopback/);
-  }
+test('native history can open a clean checkout without installing a runner', async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'native-review-history-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  assert.deepEqual(await completedRuns(root),[]);
+  assert.deepEqual(await readdir(root),[]);
 });
 
 test('only the exact source commit and selected open findings enter the project inbox',async t=>{

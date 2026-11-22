@@ -10,6 +10,17 @@ test('first-run diagnostics reuse automatic setup and expose actionable independ
  const rows=await setupChecks(config);assert.deepEqual(rows.filter(row=>!row.ok).map(row=>row.name),['Remote','Preview setup','Codex connection']);assert.match(rows.find(row=>row.name==='Remote').message,/origin/);
  config.project={kind:'custom',needsSetup:true};config.recipe=async()=>({start:['node','server.mjs']});assert.equal((await setupChecks(config)).find(row=>row.name==='Preview setup').ok,true);
 });
+test('Meta Clinic previews diagnose missing host Python and Ruby', async () => {
+ const config = options();
+ config.project = {kind:'meta-clinic'};
+ config.run = async command => {
+   if (command !== 'git') throw Error('missing');
+   return 'git version';
+ };
+ const setup = (await setupChecks(config)).find(row => row.name === 'Preview setup');
+ assert.equal(setup.ok, false);
+ assert.match(setup.message, /Install Python and Ruby for Meta Clinic previews/);
+});
 test('invalid folder can be corrected or cancelled without replacing the current project',async()=>{
  let selections=0,notices=0;
  const dialog={showOpenDialog:async()=>({filePaths:[++selections===1?'invalid':'valid']}),showMessageBox:async()=>{notices++;return {response:0};}};

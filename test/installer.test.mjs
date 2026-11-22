@@ -18,6 +18,10 @@ test('installer includes only application source and preserves user data',async(
   assert.equal(config.nsis.perMachine,false);assert.equal(config.nsis.deleteAppDataOnUninstall,false);assert.equal(config.nsis.runAfterFinish,true);
   assert.ok(config.files.includes('desktop/project-discovery.cjs'));assert.ok(config.files.includes('desktop/welcome-agent.cjs'));
   assert.ok(!config.files.includes('**/*'));assert.ok(!config.files.some(file=>file.startsWith('.local')));
+  assert.ok(config.files.includes('workbench/**/*'));assert.ok(config.files.includes('public/**/*'));
+  assert.ok(!config.files.some(file=>file.startsWith('workbench-')));
+  assert.equal(config.win.extraResources,undefined);
+  assert.equal(config.linux.target,'AppImage');
 });
 test('Claude npm entry discovery and signed-out probe use actionable guidance',async()=>{
   const root=await mkdtemp(path.join(os.tmpdir(),'claude-discovery-')),entry=path.join(root,'node_modules/@anthropic-ai/claude-code/cli.js');

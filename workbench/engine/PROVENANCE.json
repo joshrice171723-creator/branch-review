@@ -1,0 +1,13 @@
+{
+  "engine_version": "generic-2.10.6.3.1-derived-0.2.0",
+  "source_family": "V2.10.6.3.1",
+  "method": "Generic standards curated from the listed instruction files. Product-specific examples, briefs, assets, and fixed application checks are excluded.",
+  "sources": {
+    "TASK_EXECUTION_STANDARD.md": "efd3cac4518910db255d2cd0b0f63a90385a9f6c7de367da90894b3fc5f883f2",
+    "CODING_STANDARDS.md": "daaea058706659c1ab10ac61d0342597a783c33bd9ff3d9607fa165813fd76da",
+    "ARCHITECTURE_GUARDRAILS.md": "979712c23983a7ec6e79a17d9c452d61301f0d2629a22db2b59877b1df35470b",
+    "PERFORMANCE.md": "0d3dbb40304c1f46e8dbc3fbd0819cd71df1c47f701030cc8dbcf6ef7f17c057",
+    "REVIEW_RUBRIC.md": "cd3829f432e44b75a36ad2ea61475022235f7a680cc985419a3f029258bbabfa",
+    "AI_LOOP.md": "461cfb5114a976fad2d71c5409a4f7d9210913d0576104e438163529f60ede34"
+  }
+}

@@ -1,34 +1,21 @@
 # Branch Review
 
-Select **Open Workbench** during project setup, or select **Workbench** in the toolbar.
-The desktop app prepares the bundled runtime for the trusted repository you open.
-Use Design, Quality, Live run, and History in the embedded panel.
-Apply a build profile in Workbench. Choose checks and publish a Quality policy before starting a Design build.
-Use **Upgrade Workbench** when an upgrade is available.
+Open a Git project to start in Design. Describe one change, review its plan, and start the build.
+Open Configure to choose models, stage instructions, and audit return paths.
+Use Quality to prepare route checks, run trial benchmarks, and publish grading rules.
+Project settings provide environment setup, managed file cleanup, and the local MCP endpoint.
 
-Use **Review handoff** to select a completed run. Select **Review this commit** to inspect it.
-For Design runs, Original uses the base commit recorded for the group. Changed uses the completed commit.
-Complete the checklist and enter your name to approve. Required Workbench Quality criteria must pass.
-To repair a Design group, select the findings and affected slices in Design.
-For other runs, select unresolved findings and use **Prepare repair task**.
+Select Review changes when the build has a checked commit. Branch Review compares that commit with the original.
+Complete the checklist and enter your name to approve the reviewed commit.
+Send a finding back to the change when you need a repair. Review the new commit before delivery.
 
-After approval, select **Download review evidence** to save the exact commits, checklist, approval, and recorded Quality results.
-Select **Draft pull request** to preview and copy a title and description with the evidence fingerprints.
-Select **Push to GitHub** to push the reviewed commit to its branch. New branches default to `origin`.
-If the branch moves or the Design group reopens, complete a new review before pushing.
+After approval, you can download evidence, draft a pull request, or push the reviewed commit to its branch.
+To publish the review result on an existing pull request, authenticate the GitHub CLI and use Publish GitHub PR check.
 
-To publish a check, open one GitHub pull request in the destination repository for the pushed branch.
-Install GitHub CLI and run `gh auth login` with access to publish comments and commit statuses.
-Select **Publish GitHub PR check** in Review handoff.
-GitHub records the signed-in publisher. The downloaded evidence records the local reviewer separately.
-The check links to a PR comment with the exact commit, result, and evidence fingerprints.
-Use **Chat about this review** to open the project conversation with the selected review context.
-Use **Workspace files** and **Preview cleanup** to inspect managed scratch and temporary files.
-
-Set `APEX_WORKBENCH_URL` to a running project-bound panel to reuse its service. Branch Review checks the project identity before opening it.
-Set `BRANCH_REVIEW_PORT` to choose a different controller port.
-The installed app reuses its last automatic controller port when available.
-It selects free loopback ports when a controller or preview port is occupied.
+The workflow runs in Branch Review’s Node server. The installer supplies Electron.
+Install the selected project’s toolchain when its commands require one.
+The installed app selects free loopback ports when the controller or a preview port is occupied.
+Set `BRANCH_REVIEW_PORT` to choose the controller port explicitly.
 
 A local desktop workspace for reviewing changes in Git projects: choose a branch, compare isolated versions, report findings, ask Codex for a fix, and retest within the same review.
 

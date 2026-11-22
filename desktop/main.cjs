@@ -1,7 +1,6 @@
 const {chooseRepository,availableRepository}=require('./repository.cjs');
 const {setupUrl,gitAvailable,requireGit}=require('./setup-help.cjs');
 const {askProjectAgent,suggestPreviewRecipe}=require('./welcome-agent.cjs');
-const {configureBundledRuntimes}=require('./windows-runtime.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
 const { readFile, writeFile, appendFile, mkdir, realpath, stat } = require('node:fs/promises');
 const { execFile, spawn } = require('node:child_process');
@@ -65,9 +64,6 @@ async function firstProject(detectProject) {
   });
 }
 async function launch() {
-  if (app.isPackaged && process.platform === 'win32') {
-    configureBundledRuntimes(path.join(process.resourcesPath, 'runtime'));
-  }
   const root = path.dirname(__dirname);
   const {detectProject}=await import(pathToFileURL(path.join(root,'web-project.mjs')).href);
   const settingsPath = path.join(app.getPath('userData'), 'desktop.json');
@@ -122,7 +118,7 @@ async function launch() {
       if (input.type !== 'keyDown' || !(input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r'))) return;
       event.preventDefault();
       const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
-      if (!state || state.busy || state.jobsRunning || state.qaRunning) {
+      if (!state || state.busy || state.workspaceBusy || state.jobsRunning || state.qaRunning) {
         await dialog.showMessageBox(window, {message:'Wait for the current operation to finish before refreshing.'}); return;
       }
       const choice = await dialog.showMessageBox(window, {type:'question',buttons:['Keep working','Refresh'],defaultId:0,cancelId:0,message:'Refresh the development window?',detail:'Save any unsaved form edits first. Saved reviews remain available.'});
@@ -177,7 +173,7 @@ async function launch() {
   ipcMain.handle('review:setup-help',async(event,key)=>{trusted(event);await shell.openExternal(setupUrl(key));});
   async function control(endpoint, data = {}) {
     const state = await fetch(origin + '/api/state').then(r => r.json());
-    if (state.busy) { const error=new Error('Wait for the current operation to finish.');error.retryable=true;throw error; }
+    if (state.busy || state.workspaceBusy) { const error=new Error('Wait for the current operation to finish.');error.retryable=true;throw error; }
     const response = await fetch(origin + endpoint, { method: 'POST', headers: { Origin: origin, 'X-Review-Token': state.token, 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
     const result = await response.json(); if (!response.ok) { const error=new Error(result.error);error.retryable=response.status===409;throw error; }
     return result;
@@ -275,7 +271,7 @@ async function launch() {
     if (closing) return;
     event.preventDefault();
     const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
-    if (state?.busy || state?.jobsRunning || state?.qaRunning) { await dialog.showMessageBox(window, {message:'Wait for jobs to finish or stop browser QA before closing Branch Review.'}); return; }
+    if (state?.busy || state?.workspaceBusy || state?.jobsRunning || state?.qaRunning) { await dialog.showMessageBox(window, {message:'Finish or cancel active builds, jobs, and browser QA before closing Branch Review.'}); return; }
     const result=await dialog.showMessageBox(window, { type: 'question', buttons: ['Keep working', 'Close app'], defaultId: 0, cancelId: 0,
       message: 'Close Branch Review?', detail: 'Reviews stay saved. Generic preview processes stop when the app closes. Meta Clinic previews remain available until you stop them.' });
     if(result.response===1){

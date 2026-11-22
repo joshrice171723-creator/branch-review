@@ -1,0 +1,19 @@
+.run-map-task{margin:0;padding:0 20px 14px;color:var(--muted,#58646d);overflow-wrap:anywhere}
+.run-map-body{display:grid;grid-template-columns:minmax(260px,1.15fr) minmax(235px,1fr);gap:22px;padding:0 20px 20px;align-items:start}
+.run-map-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.run-map-card{min-width:0;min-height:54px;text-align:left;gap:9px}
+.run-map-card .stage-name,.run-map-card .stage-meta{display:block}
+.run-map-card[aria-current=step]{border-color:#147d75}
+.run-map-detail{border-inline-start:1px solid #d1d9dc;padding-inline-start:18px;min-width:0;overflow-wrap:anywhere}
+.run-map-detail h3{margin:0}
+.run-map-detail details{margin:12px 0}
+.run-map-steps{list-style:none;margin:12px 0;padding:0}
+.run-map-steps li{display:flex;align-items:center;gap:7px;padding:8px 0;border-bottom:1px solid #d7dfe1}
+.run-map-steps li small{margin-inline-start:auto;color:var(--muted,#58646d)}
+.run-map .runtime-spinner{display:inline-block;flex:none;width:16px;height:16px;margin:0;border:2px solid #a9c9c4;border-top-color:#09665c;border-radius:50%;animation:workbench-stage-turn .9s linear infinite}
+.run-map-steps .runtime-spinner{width:12px;height:12px}
+.run-map-event{margin:10px 0}
+@keyframes workbench-stage-turn{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.run-map .runtime-spinner{animation:none}}
+@media(max-width:800px){.run-map-body{grid-template-columns:1fr}.run-map-detail{border:0;padding:0}.run-map-task{padding-inline:14px}.run-map-body{padding-inline:14px}}
+@media(max-width:410px){.run-map-grid{grid-template-columns:1fr 1fr}.run-map-card{padding:5px}.run-map-card .stage-icon{display:none}}
