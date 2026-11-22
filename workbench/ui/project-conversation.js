@@ -222,13 +222,13 @@ function connectProjectConversation(initial) {
   }
   function proposalCard(item) {
     const proposal = item.proposal;
-    const fields = proposal.kind === "plan" ? planFields(proposal) :
-      proposal.kind === "quality" ? proposal.definition : proposal.fields;
+    const preview = proposal.kind === "plan" ? proposal.plan :
+      JSON.stringify(proposal.kind === "quality" ? proposal.definition : proposal.fields, null, 2);
     const action = accepted[item.id] ? button("Undo", () => perform("Undoing proposal…", () => revise(item, true))) :
       button(proposal.kind === "plan" ? "Save and review plan" : "Apply",
         () => perform("Applying proposal…", () => revise(item, false)), "button primary");
     return element("div", "conversation-proposal", element("strong", "", proposal.title),
-      element("details", "", element("summary", "", "Proposed changes"), element("pre", "", JSON.stringify(fields, null, 2))),
+      element("details", "", element("summary", "", "Proposed changes"), element("pre", "", preview)),
       element("div", "actions", action, button("Edit", () => edit(proposal))));
   }
   function renderMessages() {
@@ -240,14 +240,14 @@ function connectProjectConversation(initial) {
       messages.replaceChildren(...state.messages.filter(item => !item.decision || item.decision !== state.question?.id)
       .map(item => {
         const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Project agent"),
-          element("p", "", item.text));
+          element("p", "conversation-text", item.text));
         if (item.asset) row.append(assetImage(item.asset, "Generated mockup"));
         if (item.proposal) row.append(proposalCard(item));
         if (item.choices) row.append(element("div", "answer-choices", ...item.choices.map(choice =>
           button(choice, () => { editComposer(choice); composer.focus(); }))));
         return row;
       }), ...(outgoing ? [element("li", "user", element("small", "", "You · Working"),
-        element("p", "", outgoing))] : []));
+        element("p", "conversation-text", outgoing))] : []));
       if (scrollEnd) messages.scrollTop = messages.scrollHeight;
     }
     const question = state.question;

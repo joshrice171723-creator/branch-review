@@ -108,6 +108,11 @@
   align-content: start;
 }
 
+.conversation-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 #project-conversation-form,
 #conversation-mockup,
 .conversation-proposal {
