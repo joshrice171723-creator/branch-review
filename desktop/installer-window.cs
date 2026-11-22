@@ -24,18 +24,108 @@ class InstallerWindow : Window {
   double completedAt;
 
   [STAThread] static int Main(string[] args) {
-    if (args.Any(a => a.Equals("/S", StringComparison.OrdinalIgnoreCase))) { try { return Install(args); } catch { return 1; } }
+    if (args.Any(a => a.Equals("/S", StringComparison.OrdinalIgnoreCase))) { try { return Install(args, null); } catch { return 1; } }
     var app = new Application(); app.Run(new InstallerWindow(args.Contains("--preview-animation"))); return 0;
   }
-  static int Install(string[] args) {
+  internal sealed class SetupProgress {
+    internal readonly string Message;
+    internal readonly int? Percent;
+    internal SetupProgress(string message, int? percent = null) {
+      Message = message;
+      Percent = percent;
+    }
+  }
+
+  internal static void CopyPayload(Stream source, Stream target, Action<int> update) {
+    var buffer = new byte[1024 * 1024];
+    var clock = Stopwatch.StartNew();
+    long total = source.Length;
+    long written = 0;
+    int count;
+    int previous = 0;
+    if (update != null) update(0);
+    while ((count = source.Read(buffer, 0, buffer.Length)) > 0) {
+      target.Write(buffer, 0, count);
+      written += count;
+      int percent = total > 0 ? Math.Min(99, (int)(100.0 * written / total)) : 0;
+      if (update != null && percent > previous && clock.ElapsedMilliseconds >= 200) {
+        update(percent);
+        previous = percent;
+        clock.Restart();
+      }
+    }
+    target.Flush();
+    if (update != null) update(100);
+  }
+
+  internal static SetupProgress NativeProgress(string line) {
+    if (line == "apply") return new SetupProgress("3 of 3 · Applying installation changes…");
+    if (line == "prepare") return new SetupProgress("1 of 3 · Preparing the installation folder…");
+    var fields = (line ?? "").Split('|');
+    long written, total;
+    if (fields.Length != 3 || fields[0] != "unpack" ||
+        !Int64.TryParse(fields[1], NumberStyles.None, CultureInfo.InvariantCulture, out written) ||
+        !Int64.TryParse(fields[2], NumberStyles.None, CultureInfo.InvariantCulture, out total) ||
+        total <= 0 || written > total) return null;
+    return new SetupProgress("2 of 3 · Unpacking app files", (int)(100.0 * written / total));
+  }
+
+  internal static string ReadProgress(string path) {
+    try {
+      using (var source = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                        FileShare.ReadWrite | FileShare.Delete)) {
+        long offset = Math.Max(0, source.Length - 512);
+        source.Seek(offset, SeekOrigin.Begin);
+        var tail = new byte[512];
+        int count = source.Read(tail, 0, tail.Length);
+        string text = System.Text.Encoding.ASCII.GetString(tail, 0, count);
+        int end = text.LastIndexOf('\n');
+        if (end < 1) return null;
+        int start = text.LastIndexOf('\n', end - 1);
+        if (start < 0 && offset != 0) return null;
+        return text.Substring(start + 1, end - start - 1).TrimEnd('\r');
+      }
+    } catch (IOException) { return null; }
+    catch (UnauthorizedAccessException) { return null; }
+  }
+
+  static int Install(string[] args, IProgress<SetupProgress> updates) {
     string dir = Path.Combine(Path.GetTempPath(), "branch-review-setup-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(dir);
     try {
       string payload = Path.Combine(dir, "installer.exe");
-      using (Stream source = Assembly.GetExecutingAssembly().GetManifestResourceStream("installer.exe"))
-      using (FileStream target = File.Create(payload)) { if (source == null) throw new IOException("Installer payload is missing."); source.CopyTo(target); }
+      using (Stream source = Assembly.GetExecutingAssembly().GetManifestResourceStream("installer.exe")) {
+        if (source == null) throw new IOException("Installer payload is missing.");
+        using (var target = new FileStream(payload, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                                           1024 * 1024, FileOptions.SequentialScan)) {
+          CopyPayload(source, target, updates == null ? null :
+            new Action<int>(percent => updates.Report(new SetupProgress("1 of 3 · Preparing Setup", percent))));
+        }
+      }
       string command = String.Join(" ", args.Select(a => a.StartsWith("/D=", StringComparison.OrdinalIgnoreCase) ? a : (a.IndexOf(' ') >= 0 ? "\"" + a.Replace("\"", "\\\"") + "\"" : a)));
-      using (Process child = Process.Start(new ProcessStartInfo(payload, command) { UseShellExecute = false, CreateNoWindow = true })) { child.WaitForExit(); return child.ExitCode; }
+      var start = new ProcessStartInfo(payload, command) { UseShellExecute = false, CreateNoWindow = true };
+      string progressPath = Path.Combine(dir, "progress.txt");
+      start.EnvironmentVariables.Remove("BRANCH_REVIEW_INSTALL_PROGRESS");
+      if (updates != null) {
+        using (File.Create(progressPath)) {}
+        start.EnvironmentVariables["BRANCH_REVIEW_INSTALL_PROGRESS"] = progressPath;
+        updates.Report(new SetupProgress("1 of 3 · Preparing the installation folder…"));
+      }
+      using (Process child = Process.Start(start)) {
+        if (updates == null) child.WaitForExit();
+        else {
+          string previous = null;
+          while (!child.WaitForExit(300)) {
+            string line = ReadProgress(progressPath);
+            if (line == previous) continue;
+            var update = NativeProgress(line);
+            if (update == null) continue;
+            previous = line;
+            updates.Report(update);
+          }
+        }
+        return child.ExitCode;
+      }
     } finally { try { Directory.Delete(dir, true); } catch { } }
   }
   InstallerWindow(bool previewAnimation) {
@@ -50,12 +140,12 @@ class InstallerWindow : Window {
     var brand = new TextBlock { Text = "BRANCH REVIEW", Foreground = Brush("#DCD5FF"), FontFamily = new FontFamily("Segoe UI"), FontSize = 12, FontWeight = FontWeights.SemiBold };
     overlay.Children.Add(brand);
     var bottom = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Width = 360 }; Grid.SetRow(bottom, 2); overlay.Children.Add(bottom);
-    var title = new TextBlock { Text = "A clearer way to review.", TextAlignment = TextAlignment.Center, FontFamily = new FontFamily("Georgia"), Foreground = Brushes.White, FontSize = 27, Margin = new Thickness(0, 0, 0, 10) }; bottom.Children.Add(title);
+    var title = new TextBlock { Text = "Install Branch Review", TextAlignment = TextAlignment.Center, FontFamily = new FontFamily("Georgia"), Foreground = Brushes.White, FontSize = 27, Margin = new Thickness(0, 0, 0, 10) }; bottom.Children.Add(title);
     status.Text = "Your workspace is ready to install."; status.TextAlignment = TextAlignment.Center; status.Foreground = Brush("#C7C0E4"); status.FontSize = 13; status.TextWrapping = TextWrapping.Wrap; status.Margin = new Thickness(0, 0, 0, 20); bottom.Children.Add(status);
-    progress.Height = 4; progress.IsIndeterminate = true; progress.Visibility = Visibility.Collapsed; progress.Margin = new Thickness(0, 0, 0, 16); bottom.Children.Add(progress);
+    progress.Height = 4; progress.IsIndeterminate = false; progress.Visibility = Visibility.Collapsed; progress.Margin = new Thickness(0, 0, 0, 16); bottom.Children.Add(progress);
     action.Content = "Install Branch Review"; action.Height = 46; action.Background = Brush("#F3EAFF"); action.Foreground = Brush("#28194C"); action.BorderThickness = new Thickness(0); action.FontWeight = FontWeights.SemiBold; action.Cursor = System.Windows.Input.Cursors.Hand; action.Click += BeginInstall; bottom.Children.Add(action);
     if (preview) { action.Content = "Preview opening animation"; status.Text = "Animation preview - nothing will be installed."; }
-    timer.Interval = TimeSpan.FromMilliseconds(16); timer.Tick += Tick; timer.Start();
+    timer.Interval = TimeSpan.FromMilliseconds(33); timer.Tick += Tick; timer.Start();
     Closing += (sender, e) => { if (installing && !complete) e.Cancel = true; };
   }
   static SolidColorBrush Brush(string value) { return (SolidColorBrush)new BrushConverter().ConvertFromString(value); }
@@ -75,24 +165,42 @@ class InstallerWindow : Window {
     }
     return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Branch Review", "Branch Review.exe");
   }
+  void ShowProgress(SetupProgress update) {
+    if (!installing || complete) return;
+    progress.IsIndeterminate = !update.Percent.HasValue;
+    progress.Value = update.Percent.GetValueOrDefault();
+    status.Text = update.Percent.HasValue ? update.Message + " · " + update.Percent + "%" : update.Message;
+    System.Windows.Automation.AutomationProperties.SetName(progress, status.Text);
+  }
+
   async void BeginInstall(object sender, RoutedEventArgs e) {
-    installing = true; action.Visibility = Visibility.Collapsed; progress.Visibility = Visibility.Visible; status.Text = preview ? "Previewing the animation…" : "Installing Branch Review…";
+    installing = true;
+    action.Visibility = Visibility.Collapsed;
+    progress.Visibility = Visibility.Visible;
+    ShowProgress(preview ? new SetupProgress("Previewing the animation…") : new SetupProgress("1 of 3 · Preparing Setup", 0));
+    if (!preview) timer.Stop();
     try {
       int code;
-      if (preview) { await Task.Delay(1600); code = 0; } else code = await Task.Run(() => Install(new string[] { "/S" }));
+      if (preview) { await Task.Delay(1600); code = 0; }
+      else {
+        var updates = new Progress<SetupProgress>(ShowProgress);
+        code = await Task.Run(() => Install(new string[] { "/S" }, updates));
+      }
       if (code != 0) throw new Exception("The installer returned error " + code + ".");
-      complete = true; progress.Visibility = Visibility.Collapsed; completedAt = clock.Elapsed.TotalSeconds; status.Text = preview ? "Opening animation…" : "Installed. Opening Branch Review…";
+      if (!preview) ShowProgress(new SetupProgress("Installation complete", 100));
+      else progress.Visibility = Visibility.Collapsed;
+      complete = true; completedAt = clock.Elapsed.TotalSeconds; timer.Start();
     } catch (Exception error) {
-      installing = false; progress.Visibility = Visibility.Collapsed; status.Text = "Installation didn't finish. " + error.Message; action.Content = "Try again"; action.Visibility = Visibility.Visible;
+      installing = false; timer.Start(); progress.Visibility = Visibility.Collapsed; status.Text = "Installation didn't finish. " + error.Message; action.Content = "Try again"; action.Visibility = Visibility.Visible;
     }
   }
   void Tick(object sender, EventArgs e) {
-    scene.Time = clock.Elapsed.TotalSeconds; scene.Open = complete ? Math.Min(1, (scene.Time - completedAt) / 4.2) : 0; overlay.Opacity = launchAttempted ? 1 : 1 - Math.Min(1, scene.Open * 3); scene.InvalidateVisual();
+    scene.Time = clock.Elapsed.TotalSeconds; scene.Open = complete ? Math.Min(1, (scene.Time - completedAt) / (preview ? 4.2 : 1.0)) : 0; overlay.Opacity = launchAttempted ? 1 : 1 - Math.Min(1, scene.Open * 3); scene.InvalidateVisual();
     if (complete && !launchAttempted && scene.Open >= 1) {
       launchAttempted = true;
       if (preview) { complete = false; installing = false; launchAttempted = false; action.Visibility = Visibility.Visible; status.Text = "Animation preview - nothing was installed."; return; }
       try { Process.Start(InstalledApp()); Close(); }
-      catch (Exception error) { installing = false; status.Text = "Installed, but couldn't open the app. " + error.Message; action.Content = "Close"; action.Visibility = Visibility.Visible; action.Click -= BeginInstall; action.Click += (s, a) => Close(); }
+      catch (Exception error) { installing = false; timer.Stop(); status.Text = "Installed, but couldn't open the app. " + error.Message; action.Content = "Close"; action.Visibility = Visibility.Visible; action.Click -= BeginInstall; action.Click += (s, a) => Close(); }
     }
   }
 }

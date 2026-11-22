@@ -23,9 +23,11 @@ async function build(){
   const stage=await stageWindowsRuntimes(sameDrive ? temporary : path.dirname(root));
   try {
     const stagedPath=path.relative(root,stage.bundle).split(path.sep).join('/');
-    run(process.execPath,[path.join(root,'node_modules/electron-builder/cli.js'),'--config','desktop/installer.json',
+    run(process.execPath,['--require',path.join(__dirname,'nsis-progress.cjs'),
+      path.join(root,'node_modules/electron-builder/cli.js'),'--config','desktop/installer.json',
       '--config.directories.output='+output,...localElectronOptions(),'--win','nsis','--x64','--publish','never'],
-      {...process.env,BRANCH_REVIEW_RUNTIME_STAGE:stagedPath});
+      {...process.env,BRANCH_REVIEW_RUNTIME_STAGE:stagedPath,
+        BRANCH_REVIEW_NSIS_TEMPLATE_STAGE:path.join(path.dirname(stage.bundle),'nsis-progress')});
     const bundled=path.join(output,'win-unpacked','resources','runtime');
     if(!fs.readFileSync(path.join(bundled,'windows-runtimes.json')).equals(fs.readFileSync(path.join(__dirname,'windows-runtimes.json')))){
       throw Error('The packaged runtime lock differs from the build lock.');

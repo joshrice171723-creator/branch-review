@@ -14,6 +14,10 @@ The installer includes the desktop runtime. It does not include your project, ac
 Claude Code 2.1.259 or later supports the flags used for restricted agent jobs.
 
 The Windows installer includes private Python 3.13.17, Ruby 3.4.13, Node.js 24.19.0, and npm.
+
+Current Setup builds show measured percentages while preparing Setup and unpacking app files.
+Applying installation changes covers the final file copy and Windows registration.
+The status reaches 100% installed when the native installer finishes successfully.
 Workbench uses these runtimes without changing your system PATH.
 5. Fix flagged setup items and select Check again. The guide can fetch remote branches. Choose Start reviewing, then a branch. If you have no branch yet, choose Make changes and describe what you want; the agent creates an isolated branch from the latest remote default branch. Compare Original and Changed before approving anything.
 
