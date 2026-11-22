@@ -123,6 +123,27 @@ export async function workbenchReview(repository, runId, records, git) {
     approval:approved ? {reviewer:record.approval.reviewer, at:record.approval.at} : null};
 }
 
+export async function pushWorkbenchReview(repository, runId, expectedCommit, records, git) {
+  const review = await workbenchReview(repository,runId,records,git);
+  if (review.status !== 'approved' || review.commit !== expectedCommit)
+    throw Error('Approve the current source commit in Branch Review before pushing.');
+  const branch = review.ref.slice('refs/heads/'.length);
+  await git('check-ref-format','--branch',branch);
+  // Push the branch named on the review. Use its configured push remote, or origin for new branches.
+  const readSetting = async key => (await git('config','--get',key).catch(() => '')).trim();
+  const remote = await readSetting('branch.'+branch+'.pushRemote') || await readSetting('remote.pushDefault') ||
+    await readSetting('branch.'+branch+'.remote') || 'origin';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(remote)) throw Error('Configure a GitHub push remote for this branch.');
+  const address = (await git('remote','get-url','--push','--all',remote)).trim();
+  if (!/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)[\w.-]+\/[\w.-]+\/?$/i.test(address))
+    throw Error('Select a remote with one GitHub push URL.');
+  await git('push','--no-follow-tags','--recurse-submodules=no','--',address,expectedCommit+':'+review.ref);
+  const observed=(await git('ls-remote','--refs','--',address,review.ref)).trim().split(/\s+/);
+  if(observed[0]!==expectedCommit || observed[1]!==review.ref)
+    throw Error('GitHub has not confirmed this commit. Check the remote branch before retrying.');
+  return {reviewId:review.reviewId,commit:expectedCommit,ref:review.ref,remote};
+}
+
 export async function returnFindings(repository, runId, record, selectedIds) {
   const handoff = await readHandoff(repository, runId);
   if (record.identity.source !== handoff.commit || record.identity.ref !== handoff.ref ||

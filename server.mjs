@@ -3,7 +3,7 @@ import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
-import {completedRuns, createRepair, exportHandoff, readHandoff, returnFindings, selectHandoffBranch, workbenchReview} from './workbench-handoff.mjs';
+import {completedRuns, createRepair, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, selectHandoffBranch, workbenchReview} from './workbench-handoff.mjs';
 import localOrigin from './desktop/local-origin.cjs';
 import {projectPanel} from './apex-panel.mjs';
 import {npmEntry} from './web-project.mjs';
@@ -191,6 +191,11 @@ const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>read
 async function mutate(endpoint, data) {
   if (endpoint === '/api/workbench-export') return exportHandoff(repo,data.runId,git);
   if (endpoint === '/api/workbench-repair') return createRepair(repo,data,git);
+  if (endpoint === '/api/workbench-push') {
+    const receipt=await pushWorkbenchReview(repo,data.runId,data.commit,store.records,git);
+    await store.event(store.get(receipt.reviewId),'workbench-branch-pushed',{runId:data.runId,...receipt});
+    return receipt;
+  }
   if (endpoint === '/api/workbench-findings') {
     return returnFindings(repo, data.runId, store.get(data.reviewId), data.findings);
   }
@@ -391,6 +396,7 @@ const longActions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','
 actions.add('/api/published-review');
 actions.add('/api/tools-settings');
 actions.add('/api/workbench-findings');
+actions.add('/api/workbench-push');
 for (const endpoint of ['/api/workbench-open','/api/workbench-install','/api/workbench-export','/api/workbench-repair']) actions.add(endpoint);
 actions.add('/api/fix-commit');
 actions.add('/api/retry-muse');

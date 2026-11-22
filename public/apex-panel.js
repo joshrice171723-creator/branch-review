@@ -8,6 +8,7 @@ export function apexPanel({api,getState,openBranch}) {
   const runPicker = byId('apex-completed');
   const handoffButton = byId('apex-handoff-toggle');
   const choiceList = byId('apex-finding-choices');
+  const push = byId('apex-push');
   const initialRun = new URLSearchParams(location.search).get('workbenchRun');
   let selectedRun = initialRun, receipt;
   function message(text) {status.textContent=text; status.hidden=!text;}
@@ -19,6 +20,7 @@ export function apexPanel({api,getState,openBranch}) {
   async function showSelection() {
     const reviewState=byId('apex-review-state'), checks=byId('apex-review-checks');
     reviewState.hidden=true; checks.hidden=true; checks.replaceChildren();
+    push.hidden=true; push.onclick=null;
     byId('apex-findings').hidden=true;
     byId('apex-repair').hidden=true;
     choiceList.replaceChildren();
@@ -35,6 +37,15 @@ export function apexPanel({api,getState,openBranch}) {
       'different-preview':'The preview shows a different commit. Review the source commit to approve this run.'};
     reviewState.textContent=statuses[handoff.status]+' · '+handoff.commit.slice(0,8);
     reviewState.hidden=false;
+    if(handoff.status==='approved'){
+      const branch=handoff.ref.slice('refs/heads/'.length);
+      reviewState.textContent+=' · '+branch;
+      push.hidden=false;
+      push.onclick=()=>action(push,async()=>{
+        const {result}=await api('/api/workbench-push',{runId:run,commit:handoff.commit});
+        message('Pushed '+result.commit.slice(0,8)+' to '+result.remote+'/'+branch+'.');
+      });
+    }
     for(const item of handoff.checklist) {
       const row=document.createElement('li'); row.textContent=item.title+' · '+item.status.replaceAll('-',' '); checks.append(row);
     }

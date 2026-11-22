@@ -4,7 +4,9 @@ import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {panelAddress} from '../apex-panel.mjs';
-import {readHandoff,returnFindings,selectHandoffBranch,workbenchReview} from '../workbench-handoff.mjs';
+import {readHandoff,returnFindings,selectHandoffBranch,workbenchReview,pushWorkbenchReview} from '../workbench-handoff.mjs';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {digest} from '../reviews.mjs';
 
 test('project panels accept canonical loopback workspace and bound server links',()=>{
@@ -66,4 +68,39 @@ test('Workbench reads the human decision for the current source and checklist',a
   record.issues=[];
   record.identity.changed='c'.repeat(40);
   assert.equal((await state()).status,'different-preview');
+});
+
+test('explicit push sends only the approved commit to its branch',async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'workbench-push-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const repository=path.join(root,'notes'), remote=path.join(root,'remote.git');
+  const runId='20261122T024853906396-cccccccc',ref='refs/heads/notes';
+  const url='https://github.com/workbench-tests/notes.git';
+  const exec=promisify(execFile);
+  await mkdir(repository);
+  // Translate only transport calls to the disposable remote. Network protocols are disabled.
+  const call=async(args,cwd=repository)=>(await exec('git',args,{cwd,windowsHide:true,
+    env:{...process.env,GIT_ALLOW_PROTOCOL:'file',GIT_TERMINAL_PROMPT:'0'}})).stdout.trim();
+  const git=(...args)=>call(['push','ls-remote'].includes(args[0])?args.map(arg=>arg===url?remote:arg):args);
+  await git('init','-b','notes'); await call(['init','--bare',remote],root);
+  await git('config','user.name','Fixture'); await git('config','user.email','fixture@example.invalid');
+  await git('commit','--allow-empty','-m','Notes'); await git('remote','add','origin',url);
+  const commit=await git('rev-parse','HEAD');
+  const directory=path.join(repository,'.harness','branch-review','outgoing');
+  await mkdir(directory,{recursive:true});
+  await writeFile(path.join(directory,runId+'.json'),JSON.stringify({kind:'apex-branch-review',version:1,
+    runId,ref,commit,sourceHash:'a'.repeat(64),title:'Notes'}));
+  const identity={repository,workbenchRun:runId,source:commit,changed:commit,ref};
+  const record={id:'notes',identity,manifest:{scenarios:[{id:'count',title:'Count',steps:['Count notes']}]},
+    checks:{'count:0':true},issues:[],approval:null};
+  const push=()=>pushWorkbenchReview(repository,runId,commit,[record],git);
+  await assert.rejects(push(),/Approve/);
+  assert.equal(await git('ls-remote','--heads',url),'');
+  record.approval={identity:digest(identity),commit,reviewer:'Fixture',at:'2026-11-22'};
+  const result=await push();
+  assert.equal(result.ref,ref);assert.equal(result.commit,commit);
+  assert.equal(await git('ls-remote','--heads',url),commit+'\t'+ref);
+  await git('commit','--allow-empty','-m','Next revision');
+  await assert.rejects(push(),/Approve/);
+  assert.equal(await git('ls-remote','--heads',url),commit+'\t'+ref);
 });
