@@ -1,13 +1,15 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {isDeepStrictEqual, promisify} from 'node:util';
-import {link, lstat, mkdir, readFile, readlink, realpath, stat, unlink, writeFile} from 'node:fs/promises';
+import {link, lstat, mkdir, readFile, readdir, readlink, realpath, stat, unlink, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {digest} from './reviews.mjs';
 import {canApprove, itemStatus} from './public/review-model.js';
 
 const runPattern = /^\d{8}T\d{12}-[0-9a-f]{8}$/;
 const commitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const hashPattern = /^[0-9a-f]{64}$/;
+const policyFile='workbench-quality.json';
 const execute = promisify(execFile);
 
 async function cli(root,...args) {
@@ -59,11 +61,15 @@ export async function exportHandoff(repository,runId,git) {
   const ref=await git('symbolic-ref','--quiet','HEAD');
   const commit=await git('rev-parse','HEAD');
   if(!ref.startsWith('refs/heads/') || !commitPattern.test(commit)) throw Error('Check out the committed branch for this run.');
+  const design=await reviewGroup(root,{runId,ref,commit},git);
   await verifyCommittedSources(root,Object.keys(snapshot.files),git,{runId,ref,commit,files:snapshot.files});
   if(await git('rev-parse','HEAD')!==commit || await git('symbolic-ref','--quiet','HEAD')!==ref) throw Error('The checkout changed during handoff.');
-  const record={kind:'apex-branch-review',version:1,runId,ref,commit,sourceHash:digest,title:current.action};
+  const record={kind:'apex-branch-review',version:1,runId,ref,commit,sourceHash:digest,title:current.action,
+    ...(design && {design:design.identity}),...(current.quality_revision && {qualityRevision:current.quality_revision})};
   const directory=await inbox(root,['.harness','branch-review','outgoing']);
-  await immutableJson(directory,runId+'.json',record,old=>old.commit===commit && old.ref===ref && old.sourceHash===digest);
+  await immutableJson(directory,runId+'.json',record,old=>old.commit===commit && old.ref===ref && old.sourceHash===digest &&
+    (!old.design || isDeepStrictEqual(old.design,record.design)) &&
+    (!old.qualityRevision || old.qualityRevision===record.qualityRevision));
   return record;
 }
 
@@ -99,7 +105,17 @@ async function designBaseline(root,{runId,ref,commit}) {
     if (!runPattern.test(first)) return null;
     const task=await ownedFile(root,path.join('.harness','tasks',first,'task.json'),64_000_000);
     if (task.id!==first || !task.initial_snapshot?.files) return null;
-    return {status:mark.preserved,index:mark.preserved_index,files:task.initial_snapshot.files};
+    const files={...task.initial_snapshot.files};
+    const policyPinned=Object.hasOwn(mark.preserved,policyFile);
+    if(policyPinned){
+      const hash=mark.preservedPolicySha;
+      if((hash!==null && !hashPattern.test(hash)) || hash!==build.preservedPolicySha) {
+        throw Error('The Design build lacks a matching record of its uncommitted policy file.');
+      }
+      if(hash===null) delete files[policyFile];
+      else files[policyFile]=hash;
+    }
+    return {status:mark.preserved,index:mark.preserved_index,files,policyPinned};
   } catch (error) {
     if (error.code==='ENOENT' || error instanceof SyntaxError) return null;
     throw error;
@@ -116,7 +132,8 @@ async function verifyDesignBaseline(root,baseline,files) {
   if (!isDeepStrictEqual(await readStatus(),baseline.status)) throw changed();
   for (const [name,status] of Object.entries(baseline.status)) {
     const expected=Object.hasOwn(baseline.files,name)?baseline.files[name]:undefined;
-    const completed=Object.hasOwn(files,name)?files[name]:undefined;
+    const completed=baseline.policyPinned && name===policyFile?expected:
+      Object.hasOwn(files,name)?files[name]:undefined;
     if (expected!==completed) throw changed();
     const file=path.join(root,name);
     const entry=await lstat(file).catch(error=>{if(error.code!=='ENOENT') throw error; return null;});
@@ -154,14 +171,15 @@ export async function readHandoff(repository, runId) {
   try {
     handoff = await ownedFile(root, path.join('.harness', 'branch-review', 'outgoing', runId + '.json'));
   } catch (error) {
-    if (error.code === 'ENOENT') throw new Error('Open the repository that exported this Workbench run.');
+    if (error.code === 'ENOENT') throw Object.assign(new Error('Open Branch Review for this completed run first.'),{code:'HANDOFF_MISSING'});
     throw error;
   }
   if (handoff.kind !== 'apex-branch-review' || handoff.version !== 1 || handoff.runId !== runId ||
       !commitPattern.test(handoff.commit) || !/^[a-f0-9]{64}$/.test(handoff.sourceHash) ||
       typeof handoff.ref !== 'string' || !handoff.ref.startsWith('refs/heads/') ||
       typeof handoff.title !== 'string') throw new Error('This Workbench handoff is incomplete.');
-  return {runId, ref:handoff.ref, commit:handoff.commit, sourceHash:handoff.sourceHash, title:handoff.title};
+  return {runId, ref:handoff.ref, commit:handoff.commit, sourceHash:handoff.sourceHash, title:handoff.title,
+    ...(handoff.design && {design:handoff.design}),...(handoff.qualityRevision && {qualityRevision:handoff.qualityRevision})};
 }
 
 export function selectHandoffBranch(handoff, inventory) {
@@ -171,47 +189,242 @@ export function selectHandoffBranch(handoff, inventory) {
 }
 
 export async function workbenchReview(repository, runId, records, git) {
-  const handoff = await readHandoff(repository, runId);
+  let handoff;
+  try {handoff=await readHandoff(repository,runId);}
+  catch(error) {
+    if(error.code==='HANDOFF_MISSING') return {runId,status:'not-exported',message:error.message};
+    throw error;
+  }
+  const result={runId,ref:handoff.ref,commit:handoff.commit,status:'waiting',slices:[],checklist:[],findings:[]};
+  let design,tipMatches;
+  try {[design,tipMatches]=await Promise.all([reviewGroup(repository,handoff,git),currentTip(handoff,git)]);}
+  catch(error) {
+    if(error.code==='DESIGN_STALE') return {...result,status:'design-stale',message:error.message};
+    throw error;
+  }
+  result.slices=design?.slices || [];
+  result.base=design?.identity.base || null;
+  if (!tipMatches) return {...result,status:'branch-changed'};
   const record = records.findLast(({identity}) => identity.workbenchRun === runId &&
-    identity.repository === repository && identity.ref === handoff.ref && identity.source === handoff.commit);
-  const tip = await git('rev-parse','--verify',handoff.ref).catch(() => null);
-  const slices=await reviewSlices(repository,handoff);
-  const result = {runId, ref:handoff.ref, commit:handoff.commit, status:'waiting', slices, checklist:[], findings:[]};
-  if (tip !== handoff.commit) return {...result, status:'branch-changed'};
+    identity.repository === repository && identity.ref === handoff.ref && identity.source === handoff.commit &&
+    (!design || identity.base === result.base));
   if (!record) return result;
   const reviewedCommit = record.identity.changed;
   const checklist = record.manifest.scenarios.map(item => ({id:item.id, title:item.title, status:itemStatus(record,item)}));
-  const findings = record.issues.filter(issue => issue.status !== 'resolved').map(({id,scenario,actual,expected}) => ({id,scenario,actual,expected}));
+  const findings = record.issues.filter(issue => issue.status !== 'resolved').map(findingDetails);
+  const rubric=await workbenchRubric(repository,runId);
   const approved = reviewedCommit === handoff.commit && record.approval?.commit === reviewedCommit &&
-    record.approval.identity === digest(record.identity) && canApprove(record);
+    record.approval.identity === digest(record.identity) && canApprove(record) && rubricComplete(record,rubric);
   const status = findings.length ? 'changes-requested' : approved ? 'approved' :
     reviewedCommit === handoff.commit ? 'reviewing' : 'different-preview';
-  const destination=approved ? await githubTarget(git,handoff.ref).catch(()=>null) : null;
+  let destination,pushMessage;
+  if(approved) {
+    try {destination=await githubTarget(git,handoff.ref);}
+    catch(error){pushMessage=error.message;}
+  }
+  let delivery=record.workbenchDelivery?.commit===reviewedCommit ? record.workbenchDelivery : null;
+  if(delivery?.github && delivery.githubApprovalHash!==digest(record.approval)) delivery={...delivery,github:null};
   return {...result, status, reviewId:record.id, reviewedCommit, checklist, findings,
-    pushTarget:destination?.repository || null,
+    base:record.identity.base,pushTarget:destination?.repository || null,pushMessage,delivery,
+    evidenceUrl:approved ? '/api/workbench-evidence?'+new URLSearchParams({run:runId}) : null,
     approval:approved ? {reviewer:record.approval.reviewer, at:record.approval.at} : null};
 }
 
-async function reviewSlices(repository,handoff) {
+function currentTip(handoff,git) {
+  return git('rev-parse','--verify',handoff.ref).then(tip=>tip===handoff.commit,()=>false);
+}
+
+function staleDesign() {
+  return Object.assign(Error('This Design group changed. Complete the current group and review its commit.'),{code:'DESIGN_STALE'});
+}
+
+async function reviewGroup(repository,handoff,git) {
   const root=await realpath(repository);
-  let groupData;
-  try {groupData=await ownedFile(root,path.join('.harness','loops',handoff.runId,'design.json'));}
-  catch(error){if(error.code==='ENOENT')return [];throw error;}
-  const workspace=await ownedFile(root,path.join('.harness','design','workspace.json'),32_000_000);
-  const build=workspace.builds.find(b=>b.id===groupData.build);
-  const attempt=build?.attempts.findLast(a=>a.task===handoff.runId && a.outcome==='completed');
-  const group=build?.groups.find(g=>g.sha===handoff.commit && g.slices.includes(attempt?.slice));
-  if(!group)return [];
+  let marker,workspace;
+  try {
+    marker=await ownedFile(root,path.join('.harness','loops',handoff.runId,'design.json'));
+    workspace=await ownedFile(root,path.join('.harness','design','workspace.json'),32_000_000);
+  } catch(error) {
+    if(error.code==='ENOENT' && !marker && !handoff.design) return null;
+    if(error.code==='ENOENT') throw staleDesign();
+    throw error;
+  }
+  const build=workspace.builds?.find(b=>b.id===marker.build);
+  if(!build || build.retired || build.status==='retired' || !Number.isSafeInteger(build.revision) ||
+      workspace.approved!==build.revision || workspace.revision!==build.revision ||
+      marker.branch!==build.branch || handoff.ref!=='refs/heads/'+build.branch) throw staleDesign();
+  const attempt=build.attempts.find(a=>a.task===handoff.runId && a.outcome==='completed');
+  const group=attempt && build.groups.find(g=>g.slices.includes(attempt.slice));
+  const final=group && build.attempts.findLast(a=>a.outcome==='completed' && group.slices.includes(a.slice));
+  if(!group || final?.task!==handoff.runId || group.sha!==handoff.commit || group.pending?.length!==0 ||
+      group.findings?.some(finding=>!finding.repaired) ||
+      !commitPattern.test(group.base) || group.base===handoff.commit) throw staleDesign();
+  const identity={build:build.id,base:group.base,slices:group.slices};
+  if(handoff.design && !isDeepStrictEqual(handoff.design,identity)) throw staleDesign();
+  try {
+    if(await git('merge-base',group.base,handoff.commit)!==group.base) throw staleDesign();
+  } catch {throw staleDesign();}
   const slices=build.roadmap.flatMap(m=>m.slices);
-  return group.slices.map(id=>{
+  return {identity,slices:group.slices.map(id=>{
     const asset=build.attachments?.[id];
     return {id,title:slices.find(slice=>slice.id===id)?.title || id,mockup:/^[a-f0-9]{32}$/.test(asset)?asset:null};
+  })};
+}
+
+export async function workbenchComparison(repository,runId,git) {
+  const handoff=await readHandoff(repository,runId);
+  if(!await currentTip(handoff,git)) throw Error('The branch moved. Review the current commit.');
+  const design=await reviewGroup(repository,handoff,git);
+  let base=design?.identity.base;
+  if(!base) {
+    const defaultRef=await git('symbolic-ref','--quiet','refs/remotes/origin/HEAD').catch(()=>null);
+    for(const ref of [defaultRef,'refs/remotes/origin/main','refs/remotes/origin/master','refs/heads/main','refs/heads/master']) {
+      if(!ref || ref===handoff.ref) continue;
+      base=await git('merge-base',ref,handoff.commit).catch(()=>null);
+      if(base && base!==handoff.commit) break;
+    }
+    if(!base || base===handoff.commit) base=await git('rev-parse','--verify',handoff.commit+'^').catch(()=>null);
+    if(!base) throw Error('This commit needs a local comparison base. Add its parent history and retry.');
+  }
+  const subject=await git('show','-s','--format=%s',handoff.commit);
+  const branch={ref:handoff.ref,sha:handoff.commit,subject,name:handoff.ref.slice('refs/heads/'.length),aliases:[],remote:false};
+  return {handoff,branch,base,design};
+}
+
+export function designChecklist(slices) {
+  return {version:2,title:'Design group review',summary:'Review each approved slice against the recorded base.',
+    source:'Approved Workbench Design slices',scenarios:slices.map(({title},index)=>({
+      id:'slice-'+(index+1),title:title.slice(0,160),path:'/',expected:title.slice(0,2000),
+      steps:['Compare the changed behavior with the Original preview.',
+        'Check that the Changed preview meets the slice requirements.']
+    }))};
+}
+
+export async function workbenchRubric(repository,runId) {
+  const handoff=await readHandoff(repository,runId);
+  const quality=await pinnedQuality(repository,handoff);
+  const rubric=quality?.definition.rubrics?.find(row=>row.actor==='human' && row.stage==='branch_review');
+  if(!rubric) return [];
+  return rubric.criteria.map(({id,description,required},index)=>({
+    criterionId:id,required,scenario:{
+      id:'quality-criterion-'+(index+1),title:description.slice(0,160).trim(),expected:description,path:'/',
+      steps:['Confirm this criterion in the Changed preview.']
+    }
+  }));
+}
+
+export function applyWorkbenchRubric(plan,rubric) {
+  if(!Array.isArray(plan?.scenarios)) throw Error('Enter a valid review checklist.');
+  const byId=new Map(rubric.map(({scenario})=>[scenario.id,scenario]));
+  const scenarios=plan.scenarios.filter(item=>!byId.has(item.id));
+  for(const {scenario} of rubric) {
+    const route=plan.scenarios.find(item=>item.id===scenario.id)?.path;
+    scenarios.push({...scenario,path:route || scenario.path});
+  }
+  return {...plan,scenarios};
+}
+
+export function rubricComplete(record,rubric) {
+  return rubric.every(({scenario,required})=>{
+    const item=record.manifest.scenarios.find(item=>item.id===scenario.id);
+    return item?.title===scenario.title && item?.expected===scenario.expected &&
+      isDeepStrictEqual(item.steps,scenario.steps) && (!required || itemStatus(record,item)==='passed');
   });
 }
 
-export async function workbenchMockup(repository,runId,sliceId) {
+export async function validateWorkbenchPreview(repository,identity,git) {
+  const handoff=await readHandoff(repository,identity.workbenchRun);
+  if(identity.source!==handoff.commit || identity.changed!==handoff.commit || identity.ref!==handoff.ref ||
+      !await currentTip(handoff,git)) throw Error('The branch moved. Review the current commit.');
+  const design=await reviewGroup(repository,handoff,git);
+  if(design && design.identity.base!==identity.base) throw Error('Open this group again to review its recorded base commit.');
+}
+
+export async function approvedWorkbenchEvidence(repository,runId,records,git) {
+  const review=await workbenchReview(repository,runId,records,git);
+  if(review.status!=='approved') {
+    throw Error(review.message || 'Approve this exact Workbench commit before exporting its evidence.');
+  }
   const handoff=await readHandoff(repository,runId);
-  const slice=(await reviewSlices(repository,handoff)).find(s=>s.id===sliceId);
+  const record=records.find(item=>item.id===review.reviewId);
+  const checklist=record.manifest.scenarios.map(item=>({
+    id:item.id,title:item.title,route:item.path,status:itemStatus(record,item),
+    reason:record.items?.[item.id]?.reason || '',
+    steps:item.steps.map((text,index)=>({text,passed:record.checks[`${item.id}:${index}`]===true}))
+  }));
+  const checklistHash=digest(record.manifest);
+  const quality=await workbenchQualityEvidence(repository,handoff);
+  const rubric=(await workbenchRubric(repository,runId)).map(({criterionId,required,scenario})=>({
+    criterionId,required,checklistItem:scenario.id
+  }));
+  const result={kind:'branch-review-evidence',version:1,runId,reviewId:review.reviewId,ref:handoff.ref,
+    base:review.base,commit:review.commit,sourceHash:handoff.sourceHash,checklistHash,quality,rubric,
+    result:'approved',approval:review.approval,checklist,
+    slices:review.slices.map(({id,title})=>({id,title})),
+    findings:record.issues.map(issue=>({...findingDetails(issue),resolution:issue.resolution,
+      resolvedCommit:issue.resolvedCommit,resolvedAt:issue.resolvedAt}))};
+  return {...result,evidenceHash:digest(result),delivery:review.delivery};
+}
+
+async function pinnedQuality(repository,handoff) {
+  const root=await realpath(repository);
+  const directory=path.join('.harness','tasks',handoff.runId);
+  let task;
+  try {task=await ownedFile(root,path.join(directory,'task.json'),64_000_000);}
+  catch(error){if(error.code!=='ENOENT') throw error;}
+  if(!task?.quality && !handoff.qualityRevision) return null;
+  const quality=task?.quality;
+  if(task?.id!==handoff.runId || !hashPattern.test(quality?.revision) ||
+      (handoff.qualityRevision && handoff.qualityRevision!==quality.revision) ||
+      !Array.isArray(quality.definition?.benchmarks) || !Array.isArray(quality.definition?.checks)) {
+    throw Error('The review lacks its pinned Workbench Quality receipt.');
+  }
+  return quality;
+}
+
+async function workbenchQualityEvidence(repository,handoff) {
+  const quality=await pinnedQuality(repository,handoff);
+  if(!quality) return {status:'not-recorded',benchmarks:[]};
+  const root=await realpath(repository);
+  const directory=path.join('.harness','tasks',handoff.runId);
+  const benchmarks=[];
+  for(const definition of quality.definition.benchmarks) {
+    const id=definition.check_id;
+    if(typeof id!=='string' || !/^[\w-]{1,80}$/.test(id)) throw Error('Invalid pinned benchmark ID.');
+    const check=quality.definition.checks.find(check=>check.id===id);
+    const phases=check?.phases || ['baseline','after'];
+    if(!phases.includes('after')) continue;
+    const relative=path.join(directory,'results',id,'after');
+    const folder=path.join(root,relative);
+    let entries=[];
+    try {
+      if(await realpath(folder)!==folder) throw Error('Invalid Workbench benchmark receipt.');
+      entries=(await readdir(folder)).filter(entry=>runPattern.test(entry)).sort().reverse();
+    } catch(error){if(error.code!=='ENOENT') throw error;}
+    let receipt;
+    for(const entry of entries) {
+      try {receipt=await ownedFile(root,path.join(relative,entry,'result.json'));}
+      catch(error){if(error.code==='ENOENT') continue;throw error;}
+      if(receipt.check===id && receipt.phase==='after' && receipt.quality_revision===quality.revision &&
+          receipt.source_before_sha256===handoff.sourceHash && receipt.source_after_sha256===handoff.sourceHash &&
+          receipt.source_changed===false) break;
+      receipt=null;
+    }
+    const measurement=receipt?.measurement;
+    benchmarks.push({
+      check:id,phase:'after',status:receipt ? (receipt.exit_code===0 && measurement?.status==='passed'?'passed':'failed') : 'missing',
+      benchmarkContractHash:receipt?.benchmark_contract_sha256 || null,
+      metrics:(measurement?.metrics || []).map(({id,unit,aggregate,value,samples})=>({id,unit,aggregate,value,samples})),
+      thresholds:(measurement?.thresholds || []).map(({metric,op,value,actual,passed})=>({metric,op,value,actual,passed}))
+    });
+  }
+  return {status:'recorded',revision:quality.revision,benchmarks};
+}
+
+export async function workbenchMockup(repository,runId,sliceId,git) {
+  const handoff=await readHandoff(repository,runId);
+  const design=await reviewGroup(repository,handoff,git);
+  const slice=design?.slices.find(s=>s.id===sliceId);
   if(!slice?.mockup)throw Error('No mockup is attached to this reviewed slice.');
   const root=await realpath(repository);
   const file=path.join(root,'.harness','design','assets',slice.mockup+'.png');
@@ -239,10 +452,12 @@ async function githubTarget(git,ref) {
 export async function pushWorkbenchReview(repository,runId,expectedCommit,records,git,expectedTarget) {
   const review=await workbenchReview(repository,runId,records,git);
   if(review.status!=='approved' || review.commit!==expectedCommit)
-    throw Error('Approve the current source commit in Branch Review before pushing.');
+    throw Error(review.message || 'Approve the current source commit in Branch Review before pushing.');
   const target=await githubTarget(git,review.ref);
   if(!expectedTarget || target.repository!==expectedTarget)
     throw Error('The GitHub destination changed. Refresh the review and confirm its destination.');
+  await validateWorkbenchPreview(repository,{workbenchRun:runId,ref:review.ref,source:expectedCommit,
+    changed:expectedCommit,base:review.base},git);
   const {address,remote}=target;
   await git('push','--no-follow-tags','--recurse-submodules=no','--',address,expectedCommit+':'+review.ref);
   const observed=(await git('ls-remote','--refs','--',address,review.ref)).trim().split(/\s+/);
@@ -251,12 +466,18 @@ export async function pushWorkbenchReview(repository,runId,expectedCommit,record
   return {reviewId:review.reviewId,commit:expectedCommit,ref:review.ref,remote,repository:target.repository};
 }
 
-export async function returnFindings(repository, runId, record, selectedIds) {
+function findingDetails({id,scenario,actual,expected,side,location,commit,status}) {
+  return {id,scenario,actual,expected,side,location:location || '',commit,status};
+}
+
+export async function returnFindings(repository, runId, record, selectedIds, git) {
   const handoff = await readHandoff(repository, runId);
-  if (record.identity.source !== handoff.commit || record.identity.ref !== handoff.ref ||
-      (record.identity.workbenchRun && record.identity.workbenchRun !== runId)) {
-    throw new Error('The review must match the branch and source commit from Workbench.');
+  if (record.identity.source !== handoff.commit || record.identity.changed !== handoff.commit ||
+      record.identity.ref !== handoff.ref || record.identity.workbenchRun !== runId) {
+    throw new Error('Open the exact Workbench review for this branch and commit to return findings.');
   }
+  if(await reviewGroup(repository,handoff,git)) throw Error('Select the findings and affected slices in Design to repair this group.');
+  if(!await currentTip(handoff,git)) throw Error('The branch moved. Review the current commit.');
   if (!Array.isArray(selectedIds) || !selectedIds.length || selectedIds.length > 100 ||
       !selectedIds.every(id => typeof id === 'string') || new Set(selectedIds).size !== selectedIds.length) {
     throw new Error('Select between 1 and 100 distinct findings.');
@@ -264,8 +485,7 @@ export async function returnFindings(repository, runId, record, selectedIds) {
   const findings = [...selectedIds].sort().map(id => {
     const issue = record.issues.find(row => row.id === id && row.status !== 'resolved');
     if (!issue) throw new Error('A selected finding changed. Refresh the review and select it again.');
-    return {id:issue.id, expected:issue.expected, actual:issue.actual, scenario:issue.scenario,
-      side:issue.side, location:issue.location || '', commit:issue.commit, status:issue.status};
+    return findingDetails(issue);
   });
   const payload = {kind:'branch-review-findings', version:1, runId, sourceHash:handoff.sourceHash,
     ref:handoff.ref, commit:handoff.commit, reviewId:record.id, reviewedCommit:record.identity.changed, findings};
@@ -282,9 +502,14 @@ export async function returnFindings(repository, runId, record, selectedIds) {
 export async function createRepair(repository,{runId,receipt,action,scope},git) {
   const root=await realpath(repository);
   const run=await readHandoff(root,runId);
+  if(await reviewGroup(root,run,git)) throw Error('Select the findings and affected slices in Design to repair this group.');
   if(!/^[a-f0-9]{64}$/.test(receipt)) throw Error('Select a saved group of findings.');
   const incoming=await ownedFile(root,path.join('.harness','branch-review','incoming',runId,receipt+'.json'));
-  if(incoming.id!==receipt || incoming.runId!==runId || incoming.commit!==run.commit) throw Error('This receipt belongs to another run.');
+  const {id,createdAt,...payload}=incoming;
+  if(id!==receipt || digest(payload)!==receipt || incoming.runId!==runId || incoming.commit!==run.commit ||
+      incoming.reviewedCommit!==run.commit || incoming.ref!==run.ref || incoming.sourceHash!==run.sourceHash) {
+    throw Error('Prepare the selected findings again for this run.');
+  }
   if(await git('rev-parse','HEAD')!==run.commit || await git('symbolic-ref','--quiet','HEAD')!==run.ref) {
     throw Error('Check out the reviewed project branch and commit before creating its repair task.');
   }

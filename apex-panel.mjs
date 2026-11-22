@@ -1,4 +1,5 @@
 import {execFile} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {access, mkdir, readFile, realpath, rename, unlink, writeFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
@@ -26,7 +27,7 @@ export function projectPanel(repository, configured = process.env.APEX_WORKBENCH
   const root = path.resolve(repository);
   const entry = path.join(root, '.harness', 'portable', 'mount.cjs');
   const installer = fileURLToPath(new URL('./workbench-install.py', import.meta.url));
-  let starting, owned;
+  let starting, owned, installing, opened = false;
 
   async function externalAddress() {
     let target = remote;
@@ -53,6 +54,21 @@ export function projectPanel(repository, configured = process.env.APEX_WORKBENCH
   async function available() {
     return await access(entry).then(()=>true,()=>false);
   }
+  async function info() {
+    const bundled = JSON.parse(await readFile(new URL('./workbench-release/release.json', import.meta.url),'utf8'));
+    const home = path.join(root,'.harness');
+    const read = async name => readFile(path.join(home,name)).catch(error=>{
+      if(error.code==='ENOENT') return null;
+      throw error;
+    });
+    const [installed,manifest,record] = await Promise.all([available(),read('MANIFEST.sha256'),read('workbench-runtime.json')]);
+    const actual = manifest && createHash('sha256').update(manifest).digest('hex');
+    const known = record && JSON.parse(record.toString('utf8'));
+    const current = Boolean(actual && actual === bundled.manifestSha256);
+    return {project:root,installed,connected:Boolean(remote),mounted:Boolean(owned),
+      availableRevision:bundled.revision,runtimeRevision:current?bundled.revision:known?.revision || null,
+      upgradeAvailable:Boolean(installed && !remote && bundled.manifestSha256 && !current)};
+  }
   async function register() {
     if (!origin || !await available()) return;
     const home=path.join(await realpath(root),'.harness');
@@ -67,33 +83,67 @@ export function projectPanel(repository, configured = process.env.APEX_WORKBENCH
     await writeFile(temp,record,{flag:'wx'});
     try {await rename(temp,file);} finally {await unlink(temp).catch(error=>{if(error.code!=='ENOENT') throw error;});}
   }
+  async function mount() {
+    if (installing) throw Error('Workbench is updating. Try again when it finishes.');
+    if (!await available()) throw Error('Install Workbench for this project first.');
+    if (!starting) {
+      const runtime = require(entry);
+      const request = runtime.mountWorkbench(root,{onExit:()=>{
+        if(starting===request) { starting=null; owned=null; }
+      }}).then(panel=>{
+        if(panel.active===false) throw Error('Workbench stopped before opening.');
+        return owned=panel;
+      }).catch(error=>{ if(starting===request) starting=null; throw error; });
+      starting=request;
+    }
+    return starting;
+  }
+  async function upgrade() {
+    if (starting) await starting;
+    if (owned) {
+      if (!origin) throw Error('Close the Workbench panel before updating.');
+      const reply = await fetch(origin+prefix+'api/state',{signal:AbortSignal.timeout(15000),redirect:'error'});
+      if (!reply.ok) throw Error('Check Workbench run status before updating.');
+      const state = await reply.json();
+      if (state.jobs.some(job=>['created','starting','running','cancelling'].includes(job.state)))
+        throw Error('Finish or pause the running task before updating Workbench.');
+      owned.close();
+      owned=null;
+      starting=null;
+    }
+    await execute(process.env.HARNESS_PYTHON || 'python', [installer, root],
+      {cwd:root,windowsHide:true,timeout:120000,maxBuffer:512*1024});
+    if (!await available()) throw Error('The installation did not supply a portable panel.');
+    delete require.cache[require.resolve(entry)];
+    return info();
+  }
   return {
     frameOrigin: remote?.origin || '',
-    async status() {
-      return {project:root, installed:await available(), connected:Boolean(remote), mounted:Boolean(owned)};
-    },
+    status: info,
     async install() {
-      if (owned || remote) throw Error('Close the active Workbench service before installing a runtime.');
-      await execute(process.env.HARNESS_PYTHON || 'python', [installer, root],
-        {cwd:root,windowsHide:true,timeout:120000,maxBuffer:512*1024});
-      if (!await available()) throw Error('The installation did not supply a portable panel.');
-      return this.status();
+      if (remote) throw Error('Update the configured Workbench service from its project picker.');
+      if (!installing) installing=upgrade().finally(()=>{installing=null;});
+      return installing;
     },
     async open() {
       if (remote) {
         const src=await externalAddress();
         await register();return {src,project:root};
       }
-      if (!await available()) throw Error('Install Apex Workbench for this project first.');
-      if (!starting) starting = require(entry).mountWorkbench(root).then(panel => owned = panel)
-        .catch(error => {starting = null; throw error;});
-      await starting;
+      await mount();
       await register();
+      opened=true;
       return {src:prefix, project:root};
     },
     handle(req,res) {
       if (!req.url.startsWith(prefix)) return false;
       if (owned) return owned.handle(req,res);
+      if (opened && !installing && req.method==='GET') {
+        mount().then(panel=>panel.handle(req,res)).catch(error=>{
+          res.writeHead(503,{'Content-Type':'application/json'}).end(JSON.stringify({error:error.message}));
+        });
+        return true;
+      }
       res.writeHead(409,{'Content-Type':'text/plain; charset=utf-8'}).end('Open Workbench from the Branch Review toolbar.');
       return true;
     },

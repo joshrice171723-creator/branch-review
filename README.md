@@ -4,17 +4,21 @@ Open **Workbench** in the toolbar to use the selected repository’s Apex harnes
 For a new project, select **Install Workbench for this project**. The bundled release requires Ruby, Python, and Node.
 The panel operates on the displayed project checkout. Branch Review keeps its isolated comparison previews.
 
-Use **Review handoff** to select a completed run on its committed branch. Open **Review this commit** to inspect it.
-After review, select unresolved findings and choose **Prepare repair task**. Review the action and scope, then create the new task.
-The handoff records the completed run, source fingerprint, Git commit, review ID, and selected findings.
+Use **Review handoff** to select a completed run. Select **Review this commit** to inspect it.
+For Design runs, Original uses the base commit recorded for the group. Changed uses the completed commit.
+Complete the checklist and enter your name to approve. Required Workbench Quality criteria must pass.
+To repair a Design group, select the findings and affected slices in Design.
+For other runs, select unresolved findings and use **Prepare repair task**.
 
-The handoff checklist shows the status of each item for this run. Check the source preview and record your decision.
-After approval, open **Review handoff** and select **Push to GitHub** to push the reviewed commit to its branch.
-The button uses the branch's configured push remote. New branches default to `origin`.
-If the branch moves, review its new commit before pushing.
+After approval, select **Download review evidence** to save the exact commits, checklist, approval, and recorded Quality results.
+Select **Push to GitHub** to push the reviewed commit to its branch. New branches default to `origin`.
+If the branch moves or the Design group reopens, complete a new review before pushing.
 
-The project host exposes `GET /api/workbench-review?run=<run-id>` for the current checklist, commit, findings, and human decision.
-The explicit push action uses the host's authenticated `POST /api/workbench-push` endpoint with `runId` and `commit`.
+To publish a check, open one GitHub pull request in the destination repository for the pushed branch.
+Install GitHub CLI and run `gh auth login` with access to publish comments and commit statuses.
+Select **Publish GitHub PR check** in Review handoff.
+GitHub records the signed-in publisher. The downloaded evidence records the local reviewer separately.
+The check links to a PR comment with the exact commit, result, and evidence fingerprints.
 
 Set `APEX_WORKBENCH_URL` to a running project-bound panel to reuse its service. Branch Review checks the project identity before opening it.
 Set `BRANCH_REVIEW_PORT` to use another local port. The three preview ports remain reserved for branch comparisons.

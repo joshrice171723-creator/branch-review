@@ -115,6 +115,9 @@ export function guided({api,getState,poll,error,onSelect}) {
     $('review-fixes').textContent=`Review fixes (${counts['ready-to-retest']+counts['needs-fixes']+counts.blocked})`;
     $('review-fixes').disabled=!enabled || !(counts['ready-to-retest']+counts['needs-fixes']+counts.blocked);
     $('item-reason-wrap').hidden=!$('item-outcome').value;
+    const required=r.workbenchRequiredCriteria?.includes(current.id)===true;
+    $('item-not-applicable').hidden=required;
+    $('item-not-applicable').disabled=required;
     $('item-number').hidden=items.length<2;$('item-previous').hidden=items.length<2;
     $('item-number').textContent=`ITEM ${index+1} OF ${items.length}`;
     $('item-title').textContent=current.title.startsWith('Verify reported fix on ')?'Check the update':current.title;$('item-description').textContent=current.description || r.manifest.summary || 'Compare this behavior in Original and Changed.';

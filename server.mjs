@@ -3,7 +3,8 @@ import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
-import {completedRuns, createRepair, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, selectHandoffBranch, workbenchMockup, workbenchReview} from './workbench-handoff.mjs';
+import {applyWorkbenchRubric, approvedWorkbenchEvidence, completedRuns, createRepair, designChecklist, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, rubricComplete, validateWorkbenchPreview, workbenchComparison, workbenchMockup, workbenchReview, workbenchRubric} from './workbench-handoff.mjs';
+import {githubApi, publishWorkbenchCheck} from './workbench-github.mjs';
 import localOrigin from './desktop/local-origin.cjs';
 import {projectPanel} from './apex-panel.mjs';
 import {npmEntry} from './web-project.mjs';
@@ -98,7 +99,7 @@ async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRu
   delete state.previewVersion;
   if(project.error)throw Error(project.error);
   if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
-  previousReviewId ||= store.records.findLast(record=>record.identity.ref===ref)?.id;
+  if(!workbenchRun) previousReviewId ||= store.records.findLast(record=>record.identity.ref===ref)?.id;
   const checking=workbenchRun?Promise.resolve(null):readyFix(ref,previousReviewId);
   const sourceCheck=expectedCommit?git('rev-parse',ref).then(sha=>{if(sha!==expectedCommit)throw Error('Choose an unchanged, committed fix job before retesting.');}):Promise.resolve();
   const pending=workbenchRun?null:preparedFix;
@@ -109,29 +110,31 @@ async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRu
   }
   const [warmed]=await Promise.all([checking.catch(()=>null),sourceCheck]);
   if(!warmed)preparedFix=null;
-  state.status=warmed?'preview-ready':'preparing';state.recordId=null;if(!warmed)state.manifest=null;progress(warmed?'Opening your prepared review':'Checking changes against the remote default branch');
-  const selected=warmed?.selected || await comparison(ref,'main');
+  state.status=warmed?'preview-ready':'preparing';state.recordId=null;if(!warmed)state.manifest=null;
+  progress(warmed?'Opening your prepared review':workbenchRun?'Checking the Workbench comparison commits':'Checking changes against the remote default branch');
+  const pinned=workbenchRun && await workbenchComparison(repo,workbenchRun,git);
+  const rubric=pinned ? await workbenchRubric(repo,workbenchRun) : [];
+  const selected=pinned ? {branch:pinned.branch,base:pinned.base,baseline:'commit',baselineCommit:pinned.base} :
+    warmed?.selected || await comparison(ref,'main');
   if (expectedCommit && selected.branch.sha !== expectedCommit) throw new Error('The selected branch changed before its review opened.');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
-  let integration;
-  if(workbenchRun){
-    const {main,source}=await delivery.refs({identity:{ref,source:expectedCommit}});
-    const baseline=await git('merge-base',main,source);
-    integration={main:baseline,source,sha:source,sourceOnly:true,workbenchRun};
-  }else integration=warmed?.integration || await delivery.prepare(ref,expectedCommit || selected.branch.sha,previous);
+  const integration=pinned ? {main:pinned.base,source:pinned.handoff.commit,sha:pinned.handoff.commit,sourceOnly:true,workbenchRun} :
+    warmed?.integration || await delivery.prepare(ref,expectedCommit || selected.branch.sha,previous);
   const combined=warmed?.combined || await candidateComparison(git,selected,integration);
   const prior=previousReviewId?store.get(previousReviewId):null;
   const fixFiles=prior?(await git('diff','--name-only','-z',prior.identity.changed,integration.sha,'--')).split('\0').filter(Boolean):[];
   const sameBranch=prior?.identity.ref===ref;
   if(prior){combined.base=sameBranch?(prior.branchBaseline || reviewRoot(prior,store.records).identity.base):prior.identity.changed;combined.baseline='commit';combined.baselineCommit=combined.base;combined.fixReview={previousId:prior.id,files:fixFiles};}
-  if(!combined.files.length && !sameBranch)throw Error('This branch has no application changes left to review against the remote default branch. Its old checklist is no longer part of the code.');
-  const planKey=prior?digest({before:prior.identity.changed,after:integration.sha}):integration.sha;
+  if(!combined.files.length && !sameBranch)throw Error(pinned?'This Workbench commit has no application changes against its recorded base.':
+    'This branch has no application changes left to review against the remote default branch. Its old checklist is no longer part of the code.');
+  const planKey=pinned ? workbenchPlanKey(integration) : prior?digest({before:prior.identity.changed,after:integration.sha}):integration.sha;
   if(!warmed)state.manifest=prior?{...prior.manifest,scenarios:[...prior.manifest.scenarios].sort((a,b)=>Number(b.id===prior.cursor?.itemId)-Number(a.id===prior.cursor?.itemId))}:combined.plan;
   if(warmed){Object.assign(state,{comparison:combined,integration,original:warmed.original,changed:warmed.changed});}
   else combined.plan=await prepareTogether(
     async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior && !sameBranch});if(state.status==='error')throw Error(state.error);},
     async()=>{
       let plan=await plans.get(planKey);
+      if(!plan && pinned?.design) plan=designChecklist(pinned.design.slices);
       if(!plan && prior && !fixFiles.length)plan=structuredClone(prior.manifest);
       if(!plan && prior){
         plan=await appearanceFixPlan(git,prior,integration.sha,fixFiles,integration.main) || await colorFixPlan(git,prior,integration.sha,fixFiles,integration.main);
@@ -145,7 +148,8 @@ async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRu
       }
       if(prior && fixFiles.length && combined.files.length)plan=mergeFixPlan(prior.manifest,{...plan,scenarios:plan.scenarios.filter(item=>item.files?.some(file=>fixFiles.includes(file)))},fixFiles);
       if(sameBranch)plan=branchPlan(plan);
-      await plans.save(planKey,plan);await plans.save(integration.sha,plan);return plan;
+      if(rubric.length) plan=applyWorkbenchRubric(plan,rubric);
+      await plans.save(planKey,plan);if(!pinned)await plans.save(integration.sha,plan);return plan;
     }
   );
   state.status='ready';progress('Checklist and previews are ready');
@@ -161,13 +165,29 @@ async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRu
   }
   preparedFix=null;
 }
+const workbenchPlanKey=integration=>digest({run:integration.workbenchRun,base:integration.main,commit:integration.sha});
 async function activate(previousReviewId) {
   if (state.status !== 'ready') return;
-  const manifest = await manifestFor(state.changed.sha);
+  let manifest,rubric=[];
+  if(state.integration?.workbenchRun){
+    const key=workbenchPlanKey(state.integration);
+    manifest=await plans.get(key);
+    if(!manifest){
+      await validateWorkbenchPreview(repo,{...state.integration,ref:state.comparison.branch.ref,
+        base:state.original.sha,changed:state.changed.sha},git);
+      manifest=await plans.save(key,await manifestFor(state.changed.sha));
+    }
+    rubric=await workbenchRubric(repo,state.integration.workbenchRun);
+    if(rubric.length) manifest=applyWorkbenchRubric(manifest,rubric);
+  } else manifest=await manifestFor(state.changed.sha);
   const record = await store.open({...state, repository:repo, previousReviewId:previousReviewId || state.comparison?.fixReview?.previousId}, manifest, digest(project.kind==='meta-clinic'?await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8'):JSON.stringify({version:'web-preview-v2',recipe:await readRecipe(local)})));
   state.recordId = record.id; state.manifest = manifest;
   if(state.comparison?.fixReview){const parent=store.get(state.comparison.fixReview.previousId),root=reviewRoot(parent,store.records);record.reviewRootId=root.id;record.reviewTitle=root.title;}
-  if (state.integration?.sha === state.changed.sha) { record.integration = state.integration; await store.persist(); }
+  if (state.integration?.sha === state.changed.sha) {
+    record.integration=state.integration;
+    if(record.identity.workbenchRun) record.workbenchRequiredCriteria=rubric.filter(row=>row.required).map(row=>row.scenario.id);
+    await store.persist();
+  }
   await writeFile(path.join(local,'review.json'),JSON.stringify({comparison:state.comparison,original:state.original,changed:state.changed,integration:state.integration},null,2));
 }
 async function active(id, checkFresh = false) {
@@ -175,7 +195,8 @@ async function active(id, checkFresh = false) {
   if (state.status !== 'ready' || id !== state.recordId) throw new Error('Open this exact review before changing its results.');
   const record = store.get(id);
   if (checkFresh) {
-    await delivery.refs(record);
+    if(record.identity.workbenchRun) await validateWorkbenchPreview(repo,record.identity,git);
+    else await delivery.refs(record);
     for (const side of ['original','changed']) {
       const cwd = path.join(previewRoot,state[side].runtime || side);
       if (await run('git',['rev-parse','HEAD'],{cwd}) !== state[side].sha || await run('git',['status','--porcelain'],{cwd})) throw new Error('Preview source changed. Reopen the exact committed version before approval.');
@@ -193,11 +214,38 @@ async function mutate(endpoint, data) {
   if (endpoint === '/api/workbench-repair') return createRepair(repo,data,git);
   if (endpoint === '/api/workbench-push') {
     const receipt=await pushWorkbenchReview(repo,data.runId,data.commit,store.records,git,data.expectedTarget);
-    await store.event(store.get(receipt.reviewId),'workbench-branch-pushed',{runId:data.runId,...receipt});
-    return receipt;
+    const record=store.get(receipt.reviewId), previous=record.workbenchDelivery;
+    if(previous?.commit===receipt.commit && previous.repository===receipt.repository && previous.ref===receipt.ref) return previous;
+    record.workbenchDelivery={...receipt,pushedAt:new Date().toISOString()};
+    await store.event(record,'workbench-branch-pushed',{runId:data.runId,...receipt});
+    return record.workbenchDelivery;
+  }
+  if (endpoint === '/api/workbench-publish-check') {
+    const evidence=await approvedWorkbenchEvidence(repo,data.runId,store.records,git);
+    const record=store.get(evidence.reviewId);
+    const receipt=record.workbenchDelivery;
+    if(evidence.commit!==data.commit || !receipt || receipt.repository!==data.expectedTarget) {
+      throw Error('Push this reviewed commit to the confirmed GitHub repository first.');
+    }
+    const githubApprovalHash=digest(record.approval);
+    const validate=async()=>{
+      const current=await workbenchReview(repo,data.runId,store.records,git);
+      if(current.status!=='approved' || current.reviewId!==record.id || current.commit!==evidence.commit ||
+          digest(store.get(record.id).approval)!==githubApprovalHash) {
+        throw Error(current.message || 'The approval changed. Review this commit before publishing.');
+      }
+      if(current.pushTarget!==receipt.repository) throw Error('The GitHub destination changed. Refresh the review before publishing.');
+    };
+    const github=await publishWorkbenchCheck({evidence,delivery:receipt,api:githubApi(run,repo),validate});
+    if(receipt.github?.evidenceHash!==github.evidenceHash || receipt.github?.evidenceUrl!==github.evidenceUrl ||
+        receipt.github?.publisher!==github.publisher){
+      record.workbenchDelivery={...receipt,github,githubApprovalHash};
+      await store.event(record,'workbench-check-published',{runId:data.runId,...github});
+    }
+    return record.workbenchDelivery;
   }
   if (endpoint === '/api/workbench-findings') {
-    return returnFindings(repo, data.runId, store.get(data.reviewId), data.findings);
+    return returnFindings(repo,data.runId,await active(data.reviewId),data.findings,git);
   }
   if(qaRunning() && !['/api/browser-qa-result','/api/check','/api/item','/api/cursor','/api/issue'].includes(endpoint))throw Error('Stop browser QA before changing its review, settings or runtime.');
   if(['/api/version-preview','/api/version-latest','/api/version-restore'].includes(endpoint)){
@@ -269,9 +317,8 @@ async function mutate(endpoint, data) {
     let prior,expectedCommit;
     if (data.workbenchRun) {
       const handoff = await readHandoff(repo, data.workbenchRun);
-      selectHandoffBranch(handoff, await branches());
       if (handoff.ref !== data.ref) throw new Error('Select the exact branch from the Workbench run.');
-      expectedCommit = handoff.commit;
+      await startCandidate(data.ref,null,handoff.commit,data.workbenchRun);return;
     }
     const tip=await git('rev-parse',data.ref);
     const fixJob=data.fixJob || jobs.rows.findLast(row=>row.branch && data.ref==='refs/heads/'+row.branch && row.status==='succeeded' && row.resultCommit===tip)?.id;
@@ -286,7 +333,11 @@ async function mutate(endpoint, data) {
   }
   if (endpoint === '/api/stop') {delete state.previewVersion;return stopReview();}
   if (endpoint === '/api/fetch') return git('fetch','origin');
-  if (endpoint === '/api/retest') { const prior=store.get(data.id); await startCandidate(prior.identity.ref,prior.id); return; }
+  if (endpoint === '/api/retest') {
+    const prior=store.get(data.id), identity=prior.identity;
+    await startCandidate(identity.ref,identity.workbenchRun?null:prior.id,identity.workbenchRun?identity.source:undefined,identity.workbenchRun);
+    return;
+  }
   if(endpoint==='/api/release-key-text'){
     if(project.kind!=='meta-clinic')throw Error('Publishing is available for Meta Clinic only.');
     if(typeof data.privateKey!=='string' || data.privateKey.length>50000 || !/^-----BEGIN (?:OPENSSH |RSA |EC )?PRIVATE KEY-----/.test(data.privateKey.trim()) || !/-----END (?:OPENSSH |RSA |EC )?PRIVATE KEY-----$/.test(data.privateKey.trim()))throw Error('Paste a complete SSH private key.');
@@ -321,7 +372,10 @@ async function mutate(endpoint, data) {
   if(endpoint==='/api/browser-qa-result')return browserQaResult(store,local,record,data);
   if(endpoint==='/api/plan'){
     if(jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running job before editing the plan.');
-    await plans.save(record.identity.changed,data.manifest);await activate();return state.recordId;
+    const rubric=record.identity.workbenchRun?await workbenchRubric(repo,record.identity.workbenchRun):[];
+    const plan=rubric.length?applyWorkbenchRubric(data.manifest,rubric):data.manifest;
+    await plans.save(record.identity.workbenchRun?workbenchPlanKey(record.integration):record.identity.changed,plan);
+    await activate();return state.recordId;
   }
   if(endpoint==='/api/job'){if(data.batch && (!reviewAccountedFor(record) || !record.issues.some(i=>!['resolved','needs-retest'].includes(i.status))))throw Error('Finish reviewing every item and collect change requests before starting this batch.');return jobs.start(record,data.kind,data);}
   if(endpoint==='/api/fix-commit'){
@@ -357,12 +411,21 @@ async function mutate(endpoint, data) {
     else{issue.actual=data.actual.trim();issue.expected=data.expected.trim();}
     store.invalidate(record);return store.event(record,data.remove?'request-withdrawn':'request-edited',{issueId:issue.id,actual:issue.actual,expected:issue.expected});
   }
-  if (endpoint === '/api/item') return store.item(record.id,data.itemId,data);
+  if (endpoint === '/api/item') {
+    if(data.outcome==='not-applicable' && record.workbenchRequiredCriteria?.includes(data.itemId))
+      throw Error('Complete this required Workbench Quality criterion before approval.');
+    return store.item(record.id,data.itemId,data);
+  }
   if (endpoint === '/api/cursor') return store.cursor(record.id,data.itemId,data.view);
   if (endpoint === '/api/issue') return store.issue(record.id,data);
   if (endpoint === '/api/resolve') return store.resolve(record.id,data.issueId,data.note);
-  if (endpoint === '/api/approve') return store.approve(record.id,data.reviewer);
+  if (endpoint === '/api/approve') {
+    if(record.identity.workbenchRun && !rubricComplete(record,await workbenchRubric(repo,record.identity.workbenchRun)))
+      throw Error('Complete the pinned Workbench Quality criteria before approval.');
+    return store.approve(record.id,data.reviewer);
+  }
   if (endpoint === '/api/candidate') {
+    if(record.identity.workbenchRun) throw Error('Open the current Design run to update this Workbench comparison.');
     const candidate = await delivery.candidate(record);
     state.comparison = await candidateComparison(git,state.comparison,candidate);
     if (state.changed.sha === candidate.sha && state.original.sha === candidate.main) { state.integration=candidate; await activate(); return; }
@@ -397,6 +460,7 @@ actions.add('/api/published-review');
 actions.add('/api/tools-settings');
 actions.add('/api/workbench-findings');
 actions.add('/api/workbench-push');
+actions.add('/api/workbench-publish-check');
 for (const endpoint of ['/api/workbench-open','/api/workbench-install','/api/workbench-export','/api/workbench-repair']) actions.add(endpoint);
 actions.add('/api/fix-commit');
 actions.add('/api/retry-muse');
@@ -423,8 +487,13 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     if (req.method === 'GET' && url.pathname === '/api/workbench-runs') return json(res,200,await completedRuns(repo));
     if (req.method === 'GET' && url.pathname === '/api/workbench-review') return json(res,200,
       await workbenchReview(repo,url.searchParams.get('run'),store.records,git));
+    if (req.method === 'GET' && url.pathname === '/api/workbench-evidence') {
+      const evidence=await approvedWorkbenchEvidence(repo,url.searchParams.get('run'),store.records,git);
+      res.setHeader('Content-Disposition',`attachment; filename="branch-review-${evidence.commit}.json"`);
+      return json(res,200,evidence);
+    }
     if (req.method==='GET' && url.pathname==='/api/workbench-mockup'){
-      const data=await workbenchMockup(repo,url.searchParams.get('run'),url.searchParams.get('slice'));
+      const data=await workbenchMockup(repo,url.searchParams.get('run'),url.searchParams.get('slice'),git);
       res.writeHead(200,{'Content-Type':'image/png','Content-Length':data.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
       res.end(data);return;
     }

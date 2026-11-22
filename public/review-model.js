@@ -26,7 +26,8 @@ export function nextItem(record, current, mode='remaining') {
 export function canApprove(record) {
   return record.issues.every(issue=>issue.status==='resolved') && record.manifest.scenarios.every(item => {
     const status = itemStatus(record,item);
-    return status === 'passed' || (status === 'not-applicable' && !!record.items?.[item.id]?.reason?.trim());
+    return status === 'passed' || (status === 'not-applicable' && !record.workbenchRequiredCriteria?.includes(item.id) &&
+      !!record.items?.[item.id]?.reason?.trim());
   });
 }
 export function deliveryStep(record,configured=false) {

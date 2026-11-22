@@ -110,7 +110,9 @@ export async function defaultBranch(){
 }
 const branchFileLabels = new Map();
 export async function branches() {
-  const merged = new Set((await git('for-each-ref', '--merged=refs/remotes/origin/'+await defaultBranch(), '--format=%(refname)', 'refs/heads', 'refs/remotes/origin')).split('\n'));
+  const defaultName=await defaultBranch().catch(()=>null);
+  const merged=new Set(defaultName ? (await git('for-each-ref','--merged=refs/remotes/origin/'+defaultName,
+    '--format=%(refname)','refs/heads','refs/remotes/origin')).split('\n') : []);
   const output = await git(
     "for-each-ref",
     "--sort=-committerdate",

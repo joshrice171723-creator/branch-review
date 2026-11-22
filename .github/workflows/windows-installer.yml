@@ -13,6 +13,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - run: npm ci --ignore-scripts
       - run: node node_modules/electron/install.js
       - run: npm test

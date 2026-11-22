@@ -9,8 +9,13 @@ export function apexPanel({api,getState,openBranch}) {
   const handoffButton = byId('apex-handoff-toggle');
   const choiceList = byId('apex-finding-choices');
   const push = byId('apex-push');
+  const publish = byId('apex-github-check');
+  const download = byId('apex-evidence-download');
+  const githubEvidence = byId('apex-github-evidence');
+  const refresh = byId('apex-refresh-handoff');
+  const review=byId('apex-review-run');
   const initialRun = new URLSearchParams(location.search).get('workbenchRun');
-  let selectedRun = initialRun, receipt;
+  let selectedRun = initialRun, receipt, requestId=0;
   function message(text) {status.textContent=text; status.hidden=!text;}
   async function action(button,fn) {
     button.disabled=true;
@@ -18,56 +23,88 @@ export function apexPanel({api,getState,openBranch}) {
     finally {button.disabled=false;}
   }
   async function showSelection() {
+    const request=++requestId;
     const reviewState=byId('apex-review-state'), checks=byId('apex-review-checks');
     reviewState.hidden=true; checks.hidden=true; checks.replaceChildren();
     push.hidden=true; push.onclick=null;
+    publish.hidden=true; publish.onclick=null;
+    download.hidden=true; githubEvidence.hidden=true;
     byId('apex-findings').hidden=true;
     byId('apex-repair').hidden=true;
     choiceList.replaceChildren();
     receipt=null;
     selectedRun=runPicker.value;
     const run=selectedRun;
+    review.disabled=true;
     if(!run) return;
-    let handoff;
-    try {handoff=await api('/api/workbench-review?run='+encodeURIComponent(run));}
-    catch {return;} // A completed run can be selected before its first handoff.
-    if(handoff.runId!==selectedRun) return;
+    const handoff=await api('/api/workbench-review?run='+encodeURIComponent(run));
+    if(request!==requestId || handoff.runId!==selectedRun) return;
+    review.disabled=['design-stale','branch-changed'].includes(handoff.status);
     const statuses={waiting:'Ready for review', reviewing:'Review in progress', approved:'Approved',
       'changes-requested':'Changes requested', 'branch-changed':'Branch moved. Review the current commit.',
+      'not-exported':'Open this run in Branch Review.',
       'different-preview':'The preview shows a different commit. Review the source commit to approve this run.'};
-    reviewState.textContent=statuses[handoff.status]+' · '+handoff.commit.slice(0,8);
+    reviewState.textContent=[handoff.message || statuses[handoff.status],handoff.commit?.slice(0,8),
+      handoff.base && 'Base '+handoff.base.slice(0,8)].filter(Boolean).join(' · ');
     reviewState.hidden=false;
     for(const slice of handoff.slices || []){
       const row=document.createElement('li');
       row.textContent=slice.title;
       if(slice.mockup){
-        const link=document.createElement('a');
-        link.textContent='Open selected mockup';link.target='_blank';link.rel='noopener';
-        link.href='/api/workbench-mockup?'+new URLSearchParams({run,slice:slice.id});
-        row.append(' · ',link);
+        const details=document.createElement('details'),summary=document.createElement('summary');
+        summary.textContent='View mockup';
+        const mockup=document.createElement('img');
+        mockup.alt='Design mockup for '+slice.title;mockup.loading='lazy';
+        mockup.src='/api/workbench-mockup?'+new URLSearchParams({run,slice:slice.id});
+        details.append(summary,mockup);row.append(details);
       }
       checks.append(row);
     }
     if(handoff.status==='approved'){
       const branch=handoff.ref.slice('refs/heads/'.length);
-      reviewState.textContent+=handoff.pushTarget?' · '+handoff.pushTarget+' / '+branch:' · Configure a GitHub remote to push.';
-      push.hidden=!handoff.pushTarget;
+      const destination=handoff.pushTarget;
+      const pushed=handoff.delivery?.repository===destination;
+      reviewState.textContent+=' · '+(destination ? destination+' / '+branch : handoff.pushMessage || 'Set a GitHub push remote.');
+      if(pushed) reviewState.textContent+=' · Push confirmed';
+      download.hidden=!handoff.evidenceUrl;download.href=handoff.evidenceUrl;
+      githubEvidence.hidden=!handoff.delivery?.github;
+      if(!githubEvidence.hidden) {
+        githubEvidence.href=handoff.delivery.github.evidenceUrl;
+        reviewState.textContent+=' · PR check published by @'+handoff.delivery.github.publisher;
+      }
+      push.hidden=!destination || pushed;
       push.onclick=()=>action(push,async()=>{
-        const {result}=await api('/api/workbench-push',{runId:run,commit:handoff.commit,expectedTarget:handoff.pushTarget});
+        if(!confirm('Push '+handoff.commit+' to '+destination+'/'+branch+'?')) return;
+        message('Pushing the reviewed commit…');
+        const {result}=await api('/api/workbench-push',{runId:run,commit:handoff.commit,expectedTarget:destination});
+        await showSelection();
         message('Pushed '+result.commit.slice(0,8)+' to '+result.remote+'/'+branch+'.');
+      });
+      publish.hidden=!pushed || !githubEvidence.hidden;
+      publish.onclick=()=>action(publish,async()=>{
+        if(!confirm('Publish a manual review check and evidence summary for '+handoff.commit+' in '+destination+'?')) return;
+        message('Publishing the GitHub PR check…');
+        await api('/api/workbench-publish-check',{runId:run,commit:handoff.commit,expectedTarget:destination});
+        await showSelection();
+        message('GitHub confirmed the evidence comment and exact-commit check.');
       });
     }
     for(const item of handoff.checklist) {
       const row=document.createElement('li'); row.textContent=item.title+' · '+item.status.replaceAll('-',' '); checks.append(row);
     }
     checks.hidden=!checks.childElementCount;
+    if(handoff.slices?.length && handoff.findings?.length) {
+      reviewState.textContent+=' · Select the findings and affected slices in Design.';
+      return;
+    }
     const record=getState().record;
-    if(!record || handoff.commit!==record.identity.source || handoff.ref!==record.identity.ref) return;
-    for(const finding of record.issues.filter(item=>item.status!=='resolved')) {
+    if(!record || handoff.reviewId!==record.id || handoff.reviewedCommit!==handoff.commit) return;
+    for(const finding of handoff.findings) {
       const label=document.createElement('label');
       const choice=document.createElement('input');
       choice.type='checkbox'; choice.value=finding.id;
-      label.append(choice,document.createTextNode(' '+(finding.actual || finding.expected || finding.id)));
+      const location=finding.location || finding.scenario || finding.side;
+      label.append(choice,document.createTextNode(' '+location+' · '+finding.actual+' · Expected '+finding.expected));
       choiceList.append(label);
     }
     byId('apex-findings').hidden=!choiceList.childElementCount;
@@ -77,7 +114,7 @@ export function apexPanel({api,getState,openBranch}) {
     runPicker.replaceChildren();
     for(const run of runs) runPicker.add(new Option(run.title+' · '+run.id,run.id));
     if(selectedRun && runs.some(run=>run.id===selectedRun)) runPicker.value=selectedRun;
-    byId('apex-review-run').disabled=!runs.length;
+    refresh.disabled=!runs.length;
     drawer.hidden=false; handoffButton.setAttribute('aria-expanded','true');
     message(runs.length?'':'Complete a Workbench run to review its commit.');
     await showSelection();
@@ -88,8 +125,10 @@ export function apexPanel({api,getState,openBranch}) {
     try {
       const details=await api('/api/workbench');
       byId('apex-checkout').textContent='Project checkout · '+details.project;
-      install.hidden=details.installed || details.connected;
-      if(!install.hidden) {
+      const missing=!details.installed && !details.connected;
+      install.hidden=!missing && !details.upgradeAvailable;
+      install.textContent=details.upgradeAvailable?'Upgrade Workbench':'Install Workbench for this project';
+      if(missing) {
         handoffButton.disabled=true; frame.hidden=true;
         message('Install the Workbench runtime in this project to open the panel.');return;
       }
@@ -97,20 +136,29 @@ export function apexPanel({api,getState,openBranch}) {
       const address=new URL(result.src,location.origin).href;
       if(frame.src!==address) frame.src=address;
       frame.hidden=false; handoffButton.disabled=false; message('');
-      if(initialRun || !drawer.hidden) await showHandoff();
+      selectedRun ||= getState().record?.identity.workbenchRun;
+      if(selectedRun || !drawer.hidden) await showHandoff().catch(error=>message(error.message));
     } catch(error) {frame.hidden=true;message(error.message);}
   }
   byId('open-apex-panel').onclick=open;
   byId('close-apex-panel').onclick=()=>dialog.close();
   install.onclick=()=>action(install,async()=>{
-    message('Installing Workbench in the selected project…');
-    await api('/api/workbench-install',{});await open();
+    message(install.textContent==='Upgrade Workbench'?'Upgrading Workbench…':'Installing Workbench…');
+    await api('/api/workbench-install',{});
+    frame.src='about:blank';
+    await open();
   });
   handoffButton.onclick=()=>action(handoffButton,async()=>{
     if(!drawer.hidden) {drawer.hidden=true;handoffButton.setAttribute('aria-expanded','false');message('');}
     else await showHandoff();
   });
   runPicker.onchange=()=>void showSelection().catch(error=>message(error.message));
+  refresh.onclick=()=>action(refresh,async()=>{message('');await showHandoff();});
+  if(window.desktop?.openWorkbenchEvidence) githubEvidence.onclick=async event=>{
+    event.preventDefault();
+    try {await window.desktop.openWorkbenchEvidence(githubEvidence.href);}
+    catch(error){message(error.message);}
+  };
   window.addEventListener('message',async event=>{
     if(event.source!==frame.contentWindow || !frame.src || event.origin!==new URL(frame.src).origin ||
        event.data?.type!=='workbench-review-run' || !/^\d{8}T\d{12}-[a-f0-9]{8}$/.test(event.data.runId))return;
@@ -121,13 +169,11 @@ export function apexPanel({api,getState,openBranch}) {
       byId('apex-review-run').click();
     }catch(error){message(error.message);}
   });
-  const review=byId('apex-review-run');
   review.onclick=()=>action(review,async()=>{
     const {result}=await api('/api/workbench-export',{runId:selectedRun});
-    const inventory=await api('/api/branches');
-    const branch=inventory.find(row=>row.ref===result.ref || row.aliases?.includes(result.ref));
-    if(!branch || branch.sha!==result.commit) throw Error('The reviewed branch has moved. Choose a run for its current commit.');
-    if(await openBranch({...branch,ref:result.ref},selectedRun)) dialog.close();
+    const branch={ref:result.ref,sha:result.commit,name:result.ref.slice('refs/heads/'.length),
+      subject:result.title,aliases:[],base:result.design?.base};
+    if(await openBranch(branch,selectedRun)) dialog.close();
     else message('Finish the current review action or save pending changes, then try again.');
   });
   const prepare=byId('apex-pick-findings');

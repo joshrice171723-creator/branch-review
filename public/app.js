@@ -323,6 +323,7 @@ async function openBranch(branch, workbenchRun) {
   if(currentState.busy || openingSelection?.starting)return false;
   const selection={...branch,workbenchRun};
   if(currentState.status==='ready' && matchesReview(currentState.record?.identity,selection) &&
+    (!branch.base || currentState.record.identity.base===branch.base) &&
     (!branch.fixJob || currentState.record.fixComparison))return true;
   if(!await reviewWorkflow.flush())return false;
   openingSelection={...selection,starting:true};selected=branch;selectedComparison=null;
