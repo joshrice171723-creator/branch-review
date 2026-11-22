@@ -14,13 +14,20 @@ function connectProjectConversation(initial) {
   const mockup = byId("conversation-mockup");
   const mockupSource = byId("conversation-mockup-source");
   const planner = byId("update-plan-with-conversation");
+  const models = Object.entries(modelCatalog).filter(([, catalog]) => catalog?.models)
+    .flatMap(([provider, catalog]) => [["" + provider + ":", provider + " default"],
+      ...catalog.models.map(model => [provider + ":" + model, model])]);
+  const model = select("", [["", "Workflow model"], ...models], () => true);
+  const effort = select("", [["", "Workflow level"], ...WorkbenchProfile.efforts.map(level =>
+    [level, level[0].toUpperCase() + level.slice(1)])], () => true);
+  byId("conversation-model-controls").append(field("Model", model), field("Thinking level", effort));
   if (embedded) mockupSource.querySelector('option[value="slice"]').remove();
   const key = "workbench.design.draft.v1:" + projectState.project.path;
   const stored = designDraftFor(key);
   const acceptedKey = "workbench.conversation.accepted:" + projectState.project.path;
   let accepted = {};
   try { accepted = JSON.parse(localStorage.getItem(acceptedKey)) || {}; } catch {}
-  let state = initial, busy = false, previousOpener, quality = {}, slice = {}, review = {}, lastQuestion, fingerprint;
+  let state = initial, busy = false, outgoing, previousOpener, quality = {}, slice = {}, review = {}, lastQuestion, fingerprint;
   const visible = () => !drawer.hidden;
   composer.value = stored.message;
 
@@ -117,13 +124,25 @@ function connectProjectConversation(initial) {
     finally { busy = send.disabled = false; showContext(); }
   }
   async function submit(action, body, submitted) {
-    return perform(action === "image" ? "Generating mockup…" : "Waiting for reply…", async () => {
+    if (busy) return;
+    const usePlanner = action === "chat" || action === "guide" || action === "answer";
+    const target = active().stages.plan;
+    const [provider, modelId] = model.value ? model.value.split(":") : [target.provider, target.model];
+    const conversationModel = usePlanner && (model.value || effort.value)
+      ? {provider, model: modelId, effort: effort.value || target.effort} : undefined;
+    outgoing = body.message || undefined;
+    renderMessages();
+    if (outgoing) messages.scrollTop = messages.scrollHeight;
+    await perform(action === "image" ? "Generating mockup…" : "Working on your message…", async () => {
       const current = await api("design");
       const mode = embedded || current.mode === "task" ? {mode: "task"} : {};
-      const next = await api("design/" + action, {revision: current.revision, ...mode, ...body});
+      const next = await api("design/" + action, {revision: current.revision, ...mode, ...body, conversationModel});
       if (submitted !== undefined && composer.value === submitted) editComposer("");
+      outgoing = undefined;
       update(next, true);
     });
+    outgoing = undefined;
+    renderMessages();
   }
 
   function route(destination, tab, focus) {
@@ -210,7 +229,7 @@ function connectProjectConversation(initial) {
   }
   function renderMessages() {
     if (!state) return;
-    const next = JSON.stringify([state.messages, state.question?.id, accepted]);
+    const next = JSON.stringify([state.messages, state.question?.id, accepted, outgoing]);
     if (fingerprint !== next) {
       fingerprint = next;
       const scrollEnd = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 28;
@@ -223,7 +242,8 @@ function connectProjectConversation(initial) {
         if (item.choices) row.append(element("div", "answer-choices", ...item.choices.map(choice =>
           button(choice, () => { editComposer(choice); composer.focus(); }))));
         return row;
-      }));
+      }), ...(outgoing ? [element("li", "user", element("small", "", "You · Working"),
+        element("p", "", outgoing))] : []));
       if (scrollEnd) messages.scrollTop = messages.scrollHeight;
     }
     const question = state.question;

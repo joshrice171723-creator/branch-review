@@ -40,11 +40,13 @@
     <ol class="conversation" id="project-conversation-messages" aria-label="Conversation"></ol>
     <div id="project-conversation-pending"></div>
     <form id="project-conversation-form">
+      <div class="form-grid" id="conversation-model-controls"></div>
       <label class="field"><span>Message</span><textarea id="project-conversation-message" rows="3"></textarea></label>
       <div class="actions">
         <button class="button primary" id="send-project-conversation" type="submit">Send</button>
         <button class="button" id="update-plan-with-conversation" type="button" hidden>Ask planner to update draft</button>
       </div>
+      <p id="project-conversation-status" role="status"></p>
     </form>
     <div id="conversation-mockup">
       <div class="field"><label for="conversation-mockup-source">Mockup context</label><select id="conversation-mockup-source">
@@ -52,7 +54,6 @@
       </select></div>
       <button class="button" id="generate-conversation-mockup" type="button">Generate mockup</button>
     </div>
-    <p id="project-conversation-status" role="status"></p>
   </aside>
   <input type="file" id="profile-file" accept=".json,application/json" hidden>
   <input type="file" id="document-files" accept=".md,.txt,.json,.yaml,.yml,.toml" multiple hidden>

@@ -126,9 +126,11 @@ test('keeps a planning question until it has distinct suggestions and applies pr
     {plan: '## Acceptance criteria\n- Use Welcome.', message: 'Drafted the greeting.'},
     {message: 'Here is the proposal.', proposal: {kind: 'plan', title: 'Edit title', plan: 'Revised plan'}}
   ];
-  let prompt;
+  let prompt, requestedModel, requestedEffort;
   const coordinator = await createCoordinator({repository, store, git, invoke: async request => {
     prompt = request.prompt;
+    requestedModel = request.model;
+    requestedEffort = request.effort;
     return {text: JSON.stringify(replies.shift())};
   }});
   const action = (name, data) => coordinator.dispatch(name, data, {method: 'POST'});
@@ -138,11 +140,16 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   await assert.rejects(action('design/answer', {revision: state.revision, mode: 'task', id: 'stale', message: 'Welcome'}), /question has changed/);
   state = await action('design/answer', {revision: state.revision, mode: 'task', id: state.question.id, message: 'Welcome'});
   state = await action('design/guide', {revision: state.revision, mode: 'task', message: 'Revise this plan.',
+    conversationModel: {provider: 'Codex', model: 'gpt-6.2-sol', effort: 'low'},
     context: {view: 'workflow', tab: 'Plan', activeProject: 'Other project', conversationOpen: false}});
   const context = JSON.parse(prompt.split('\n').find(line => line.startsWith('{"activeProject":')));
   assert.equal(context.activeProject, path.basename(repository));
   assert.equal(context.conversationOpen, true);
   assert.deepEqual(context.screen, {view: 'workflow', tab: 'Plan'});
+  assert.match(context.planControls['Draft a plan'], /focuses the message box/);
+  assert.equal(requestedModel, 'gpt-6.2-sol');
+  assert.equal(requestedEffort, 'low');
+  assert.notEqual((await store.getProfile()).profiles.audited.stages.plan.effort, 'low');
   assert.match(state.plan, /Use Welcome/);
   assert.equal(state.messages.at(-1).proposal.plan, 'Revised plan');
   assert.equal(state.messages.at(-1).proposal.before.plan, state.plan);

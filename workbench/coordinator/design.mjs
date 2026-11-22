@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {assetPattern, id, now, sentence} from './files.mjs';
 import {objectReply} from './provider.mjs';
+import {modelCatalog, WorkbenchProfile} from '../profile.mjs';
 
 export const workspaceFile = '.harness/design/workspace.json';
 export const stageKeys = {
@@ -143,6 +144,18 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     return (await agent({profile, folder, stage: 'plan', prompt})).text;
   }
 
+  async function conversationProfile(settings) {
+    const profile = await store.getProfile();
+    if (settings === undefined) return profile;
+    const {provider, model, effort} = settings ?? {};
+    if (!['Codex', 'Muse'].includes(provider) ||
+        (model !== '' && !modelCatalog[provider].models.includes(model)) ||
+        !WorkbenchProfile.efforts.includes(effort)) throw Error('Select a conversation model and thinking level.');
+    const copy = structuredClone(profile);
+    Object.assign(selectedProfile(copy).stages.plan, {provider, model, effort});
+    return copy;
+  }
+
   async function plan(operation, payload) {
     const release = await files.acquire('.harness/design/planner.owner');
     try {
@@ -173,7 +186,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         }
         marker = {id: id(), operation, error: 'Retry the pending planner request.'};
         folder = '.harness/design/turns/' + marker.id;
-        request = {revision: state.revision, context: contextOf(state), profile: await store.getProfile()};
+        request = {revision: state.revision, context: contextOf(state), profile: await conversationProfile(payload.conversationModel)};
         if (operation === 'retry') request.question = pending.question;
         await files.write(folder + '/request.json', request);
         state.plannerRetry = marker;
@@ -263,17 +276,26 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         branch: state.branch, preview: state.preview, message: text,
         ...(quality ? {quality: quality.definition} : {})};
       if (quality || ['Preview', 'Build'].includes(screen.tab)) context.projectEvidence = await projectEvidence?.();
+      if (screen.view === 'workflow' && screen.tab === 'Plan' && !screen.kind) {
+        context.planControls = {
+          'Project conversation': 'The top button opens or closes this conversation.',
+          'Draft a plan': 'Opens this conversation and focuses the message box.',
+          'Open project conversation': 'The button under Design the change opens the same conversation and focuses the message box.',
+          'Ask planner to update draft': 'Sends the message to the planner to update the draft.'
+        };
+      }
       const turn = id();
       const prompt = 'Help with the current project and screen. Return one JSON object with message and optional choices. ' +
         'activeProject is the selected project and this project conversation is already open. Use this app state over earlier messages. ' +
         'When the user asks to use this project, confirm the active project and continue with their request. ' +
-        'Do not ask the user to select the active project or open this conversation. Offer distinct next steps when a decision is needed. ' +
+        'Do not ask the user to select the active project or open this conversation. Answer UI questions using planControls when present. ' +
+        'The two Plan shortcuts add no starter prompt or extra context. Offer distinct next steps when a decision is needed. ' +
         'Only if requested, include one proposal. Plan proposals contain kind=plan, title and complete plan with observable acceptance bullets. ' +
         'Include a roadmap only for an existing roadmap workflow. Settings proposals contain kind=settings, title, branch or preview. ' +
         'Quality proposals contain kind=quality, title and complete definition. Preserve unrelated fields. ' +
         'Use literal command arguments and working directories from project evidence. Do not modify files or claim a proposal was applied.\n' +
         JSON.stringify(context);
-      const profile = await store.getProfile();
+      const profile = await conversationProfile(payload.conversationModel);
       const reply = objectReply(await planner(profile, '.harness/design/turns/' + turn, prompt));
       const description = sentence(reply.message, 'a project reply');
       const suggestions = choices(reply.choices);
