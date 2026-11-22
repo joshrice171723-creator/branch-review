@@ -3,6 +3,8 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {link, mkdir, readFile, realpath, stat, unlink, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {digest} from './reviews.mjs';
+import {canApprove, itemStatus} from './public/review-model.js';
 
 const runPattern = /^\d{8}T\d{12}-[0-9a-f]{8}$/;
 const commitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -102,9 +104,29 @@ export function selectHandoffBranch(handoff, inventory) {
   return branch;
 }
 
+export async function workbenchReview(repository, runId, records, git) {
+  const handoff = await readHandoff(repository, runId);
+  const record = records.findLast(({identity}) => identity.workbenchRun === runId &&
+    identity.repository === repository && identity.ref === handoff.ref && identity.source === handoff.commit);
+  const tip = await git('rev-parse','--verify',handoff.ref).catch(() => null);
+  const result = {runId, ref:handoff.ref, commit:handoff.commit, status:'waiting', checklist:[], findings:[]};
+  if (tip !== handoff.commit) return {...result, status:'branch-changed'};
+  if (!record) return result;
+  const reviewedCommit = record.identity.changed;
+  const checklist = record.manifest.scenarios.map(item => ({id:item.id, title:item.title, status:itemStatus(record,item)}));
+  const findings = record.issues.filter(issue => issue.status !== 'resolved').map(({id,scenario,actual,expected}) => ({id,scenario,actual,expected}));
+  const approved = reviewedCommit === handoff.commit && record.approval?.commit === reviewedCommit &&
+    record.approval.identity === digest(record.identity) && canApprove(record);
+  const status = findings.length ? 'changes-requested' : approved ? 'approved' :
+    reviewedCommit === handoff.commit ? 'reviewing' : 'different-preview';
+  return {...result, status, reviewId:record.id, reviewedCommit, checklist, findings,
+    approval:approved ? {reviewer:record.approval.reviewer, at:record.approval.at} : null};
+}
+
 export async function returnFindings(repository, runId, record, selectedIds) {
   const handoff = await readHandoff(repository, runId);
-  if (record.identity.source !== handoff.commit || record.identity.ref !== handoff.ref) {
+  if (record.identity.source !== handoff.commit || record.identity.ref !== handoff.ref ||
+      (record.identity.workbenchRun && record.identity.workbenchRun !== runId)) {
     throw new Error('The review must match the branch and source commit from Workbench.');
   }
   if (!Array.isArray(selectedIds) || !selectedIds.length || selectedIds.length > 100 ||

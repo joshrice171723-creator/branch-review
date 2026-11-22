@@ -17,17 +17,30 @@ export function apexPanel({api,getState,openBranch}) {
     finally {button.disabled=false;}
   }
   async function showSelection() {
+    const reviewState=byId('apex-review-state'), checks=byId('apex-review-checks');
+    reviewState.hidden=true; checks.hidden=true; checks.replaceChildren();
     byId('apex-findings').hidden=true;
     byId('apex-repair').hidden=true;
     choiceList.replaceChildren();
     receipt=null;
     selectedRun=runPicker.value;
-    const record=getState().record;
-    if(!selectedRun || !record) return;
+    const run=selectedRun;
+    if(!run) return;
     let handoff;
-    try {handoff=await api('/api/workbench-handoff?run='+encodeURIComponent(selectedRun));}
+    try {handoff=await api('/api/workbench-review?run='+encodeURIComponent(run));}
     catch {return;} // A completed run can be selected before its first handoff.
-    if(handoff.runId!==selectedRun || handoff.commit!==record.identity.source || handoff.ref!==record.identity.ref) return;
+    if(handoff.runId!==selectedRun) return;
+    const statuses={waiting:'Ready for review', reviewing:'Review in progress', approved:'Approved',
+      'changes-requested':'Changes requested', 'branch-changed':'Branch moved. Review the current commit.',
+      'different-preview':'The preview shows a different commit. Review the source commit to approve this run.'};
+    reviewState.textContent=statuses[handoff.status]+' · '+handoff.commit.slice(0,8);
+    reviewState.hidden=false;
+    for(const item of handoff.checklist) {
+      const row=document.createElement('li'); row.textContent=item.title+' · '+item.status.replaceAll('-',' '); checks.append(row);
+    }
+    checks.hidden=!checks.childElementCount;
+    const record=getState().record;
+    if(!record || handoff.commit!==record.identity.source || handoff.ref!==record.identity.ref) return;
     for(const finding of record.issues.filter(item=>item.status!=='resolved')) {
       const label=document.createElement('label');
       const choice=document.createElement('input');

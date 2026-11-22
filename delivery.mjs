@@ -26,7 +26,7 @@ export class Delivery {
     let sha = source;
     const cleanMain=await this.withoutChecklist(main),cleanSource=await this.withoutChecklist(source);
     if (common !== main || cleanMain!==main || cleanSource!==source) {
-      if (previous?.main === main && previous.source === source && !await this.git('ls-tree','--name-only',previous.sha,'--','.branch-review.json')) return previous;
+      if (!previous?.sourceOnly && previous?.main === main && previous.source === source && !await this.git('ls-tree','--name-only',previous.sha,'--','.branch-review.json')) return previous;
       const output = await this.git('merge-tree','--write-tree',cleanMain,cleanSource).catch(e => { throw new Error('Merge conflict: this branch conflicts with GitHub main. Resolve the code conflicts, then open it again.\n\nTechnical details\n' + e.message); });
       const tree = output.split('\n')[0];
       if (!/^[0-9a-f]{40}$/.test(tree)) throw new Error('Could not produce a merge candidate.');
@@ -36,6 +36,7 @@ export class Delivery {
     return {main,source,sha,preparedAt:new Date().toISOString()};
   }
   async push(record, expectedCommit) {
+    if (record.integration?.sourceOnly) throw new Error('Use Workbench to push this reviewed project branch.');
     if (expectedCommit !== record.identity.changed) throw new Error('The shipping confirmation names a different commit.');
     if (!record.approval || record.approval.identity !== digest(record.identity)) throw new Error('Approve this exact reviewed version before merging.');
     if (!record.integration || record.integration.sha !== record.identity.changed) throw new Error('Prepare and test the integration candidate before merging.');

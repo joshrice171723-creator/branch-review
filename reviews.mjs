@@ -50,6 +50,7 @@ export class ReviewStore {
   }
   async open(snapshot, manifest, recipeHash) {
     const identity = { repository: snapshot.repository, ref: snapshot.comparison.branch.ref, source: snapshot.comparison.branch.sha, base: snapshot.original.sha, changed: snapshot.changed.sha, scenarioHash: digest({manifest, recipeHash}) };
+    if(snapshot.integration?.workbenchRun)identity.workbenchRun=snapshot.integration.workbenchRun;
     const id = digest(identity);
     let record = this.records.find(r => r.id === id);
     if (!record) {

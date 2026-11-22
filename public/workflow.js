@@ -127,6 +127,7 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
   $('results-action').onclick=async()=>{
     const state=getState(),r=state.record;
     if(delivering || approving || state.busy)return;
+    if(r.integration?.sourceOnly && r.approval){$('open-apex-panel').click();return;}
     if(state.publishTarget===null && r.approval){if(r.delivery?.stage==='pushed')return;return $('ship').click();}
     if(['published','verified'].includes(r.delivery?.stage)){try{await api('/api/published-review',{id:r.id,action:'start'});await window.desktop.openPublished(state.publishTarget+'/qa?view=office');}catch(e){error(e.message);}return;}
     const action=deliveryStep(getState().record,getState().releaseConfigured).action;if(!action)return;
@@ -266,11 +267,18 @@ export function workflow({api, getState, getSide, error, poll, reopen}) {
     $('capture').disabled ||= capturing;
     $('report').disabled ||= capturing;
     $('approve').disabled=published || !enabled || !canApprove(r);
-    $('ship').disabled=!enabled || !r.approval || r.integration?.sha!==r.identity.changed || ['pushed','deploying','published','verified'].includes(r.delivery?.stage);
+    $('ship').disabled=!enabled || !r.approval || r.integration?.sourceOnly || r.integration?.sha!==r.identity.changed || ['pushed','deploying','published','verified'].includes(r.delivery?.stage);
     $('publish').hidden=state.publishTarget===null;
     $('release-settings').hidden=state.publishTarget===null;
     $('publish').disabled=!enabled || !r.approval || r.delivery?.stage!=='pushed' || !state.releaseConfigured;
     $('release-settings').disabled=state.busy;
+    if(r.integration?.sourceOnly){
+      $('delivery-state').textContent='Workbench source commit '+r.identity.changed.slice(0,8);
+      if(canApprove(r)){
+        $('results-message').textContent=r.approval?'Approved for Workbench.':'Checklist complete. Approve this source commit.';
+        if(r.approval){$('results-action').textContent='Return to Workbench';$('results-action').disabled=!enabled;}
+      }
+    }
     $('smoke').disabled=!enabled || r.delivery?.stage!=='published';
     $('retry-publish').hidden=r.delivery?.stage!=='deployment-needs-inspection';
     $('retry-publish').disabled=!enabled;

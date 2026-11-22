@@ -3,7 +3,7 @@ import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
-import {completedRuns, createRepair, exportHandoff, readHandoff, returnFindings, selectHandoffBranch} from './workbench-handoff.mjs';
+import {completedRuns, createRepair, exportHandoff, readHandoff, returnFindings, selectHandoffBranch, workbenchReview} from './workbench-handoff.mjs';
 import localOrigin from './desktop/local-origin.cjs';
 import {projectPanel} from './apex-panel.mjs';
 import {npmEntry} from './web-project.mjs';
@@ -94,14 +94,14 @@ async function readyFix(ref,priorId){
   if(source===cached.selected.branch.sha && remote.split(/\s/)[0]===cached.integration.main && clean.every(Boolean) && Object.values(health.sides).every(side=>side.ok))return cached;
   preparedFix=null;return null;
 }
-async function startCandidate(ref, previousReviewId, expectedCommit) {
+async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRun=null) {
   delete state.previewVersion;
   if(project.error)throw Error(project.error);
   if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
   previousReviewId ||= store.records.findLast(record=>record.identity.ref===ref)?.id;
-  const checking=readyFix(ref,previousReviewId);
+  const checking=workbenchRun?Promise.resolve(null):readyFix(ref,previousReviewId);
   const sourceCheck=expectedCommit?git('rev-parse',ref).then(sha=>{if(sha!==expectedCommit)throw Error('Choose an unchanged, committed fix job before retesting.');}):Promise.resolve();
-  const pending=preparedFix;
+  const pending=workbenchRun?null:preparedFix;
   if(pending && pending.ref===ref && pending.priorId===previousReviewId && state.recordId===previousReviewId){
     Object.assign(state,{status:'preview-ready',recordId:null,comparison:pending.combined,integration:pending.integration,original:pending.original,changed:pending.changed,
       manifest:{...pending.combined.plan,scenarios:[pending.item,...pending.combined.plan.scenarios.filter(item=>item.id!==pending.item.id)]}});
@@ -113,7 +113,12 @@ async function startCandidate(ref, previousReviewId, expectedCommit) {
   const selected=warmed?.selected || await comparison(ref,'main');
   if (expectedCommit && selected.branch.sha !== expectedCommit) throw new Error('The selected branch changed before its review opened.');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
-  const integration=warmed?.integration || await delivery.prepare(ref,expectedCommit || selected.branch.sha,previous);
+  let integration;
+  if(workbenchRun){
+    const {main,source}=await delivery.refs({identity:{ref,source:expectedCommit}});
+    const baseline=await git('merge-base',main,source);
+    integration={main:baseline,source,sha:source,sourceOnly:true,workbenchRun};
+  }else integration=warmed?.integration || await delivery.prepare(ref,expectedCommit || selected.branch.sha,previous);
   const combined=warmed?.combined || await candidateComparison(git,selected,integration);
   const prior=previousReviewId?store.get(previousReviewId):null;
   const fixFiles=prior?(await git('diff','--name-only','-z',prior.identity.changed,integration.sha,'--')).split('\0').filter(Boolean):[];
@@ -272,7 +277,7 @@ async function mutate(endpoint, data) {
       expectedCommit=job.resultCommit;
       if(job.reviewId)prior=store.get(job.reviewId);
     }
-    await startCandidate(data.ref,prior?.id,expectedCommit);return;
+    await startCandidate(data.ref,prior?.id,expectedCommit,data.workbenchRun);return;
   }
   if (endpoint === '/api/stop') {delete state.previewVersion;return stopReview();}
   if (endpoint === '/api/fetch') return git('fetch','origin');
@@ -410,6 +415,8 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     const url=new URL(req.url,origin);
     if (req.method === 'GET' && url.pathname === '/api/workbench') return json(res,200,await apex.status());
     if (req.method === 'GET' && url.pathname === '/api/workbench-runs') return json(res,200,await completedRuns(repo));
+    if (req.method === 'GET' && url.pathname === '/api/workbench-review') return json(res,200,
+      await workbenchReview(repo,url.searchParams.get('run'),store.records,git));
     if (req.method === 'GET' && url.pathname === '/api/workbench-handoff') {
       return json(res, 200, await readHandoff(repo, url.searchParams.get('run')));
     }

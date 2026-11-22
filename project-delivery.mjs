@@ -41,6 +41,7 @@ export async function deployProject(record,{local,cwd,run,git,store,defaultBranc
   return record.projectDeployment;
 }
 export async function createReviewPr(record,{delivery,git,run,store,local,repo,defaultBranch}){
+  if(record.integration?.sourceOnly)throw Error('Open the integration review before creating a pull request.');
   if(record.approval?.identity!==digest(record.identity) || record.integration?.sha!==record.identity.changed)throw Error('Approve the reviewed candidate before creating a pull request.');
   const refs=await delivery.refs(record);if(refs.main!==record.integration.main)throw Error('The default branch moved. Reopen the review first.');
   const branch='branch-review/approved-'+record.identity.changed.slice(0,12);
