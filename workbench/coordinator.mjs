@@ -1,4 +1,5 @@
 import {realpath} from 'node:fs/promises';
+import path from 'node:path';
 import {WorkbenchProfile} from './profile.mjs';
 import {createAudit} from './coordinator/audit.mjs';
 import {createBuilds} from './coordinator/builds.mjs';
@@ -41,7 +42,7 @@ export async function createCoordinator({
     return result;
   }
 
-  const design = createDesign({files, store, git, agent, projectEvidence, validateQuality,
+  const design = createDesign({files, store, git, agent, projectName: path.basename(root), projectEvidence, validateQuality,
     qualityDraft: async () => {
       const quality = await qualityDraft?.();
       return quality?.draft ?? (quality?.definition ? quality : null);

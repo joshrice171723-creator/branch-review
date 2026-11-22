@@ -33,7 +33,7 @@ function connectProjectConversation(initial) {
   }
   function showContext() {
     const current = context();
-    headingContext.textContent = [current.kind === "branch-review" ? "Branch Review" : titles[current.view][0],
+    headingContext.textContent = [projectState.project.label, current.kind === "branch-review" ? "Review" : titles[current.view][0],
       current.tab || current.section, current.label || current.scenarioTitle].filter(Boolean).join(" / ");
     mockup.hidden = current.view !== "workflow" || Boolean(embedded && current.kind);
     planner.hidden = current.view !== "workflow" || current.tab !== "Plan" || !!current.kind;

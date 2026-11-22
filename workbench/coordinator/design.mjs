@@ -97,7 +97,7 @@ function contextOf(state) {
   };
 }
 
-export function createDesign({files, store, git, agent, image, projectEvidence, qualityDraft, validateQuality}) {
+export function createDesign({files, store, git, agent, image, projectName, projectEvidence, qualityDraft, validateQuality}) {
   async function read() {
     const saved = await files.read(workspaceFile);
     if (saved) {
@@ -258,12 +258,16 @@ export function createDesign({files, store, git, agent, image, projectEvidence, 
         .map(key => [key, payload.context[key].slice(0, 400)]));
       const quality = screen.view === 'quality' ? await qualityDraft?.() : null;
       const taskMode = payload.mode === 'task' || state.mode === 'task';
-      const context = {screen, ...contextOf(state), mode: taskMode ? 'task' : 'roadmap', approved: state.approved === state.revision,
+      const context = {activeProject: projectName, conversationOpen: true, screen, ...contextOf(state),
+        mode: taskMode ? 'task' : 'roadmap', approved: state.approved === state.revision,
         branch: state.branch, preview: state.preview, message: text,
         ...(quality ? {quality: quality.definition} : {})};
       if (quality || ['Preview', 'Build'].includes(screen.tab)) context.projectEvidence = await projectEvidence?.();
       const turn = id();
       const prompt = 'Help with the current project and screen. Return one JSON object with message and optional choices. ' +
+        'activeProject is the selected project and this project conversation is already open. Use this app state over earlier messages. ' +
+        'When the user asks to use this project, confirm the active project and continue with their request. ' +
+        'Do not ask the user to select the active project or open this conversation. Offer distinct next steps when a decision is needed. ' +
         'Only if requested, include one proposal. Plan proposals contain kind=plan, title and complete plan with observable acceptance bullets. ' +
         'Include a roadmap only for an existing roadmap workflow. Settings proposals contain kind=settings, title, branch or preview. ' +
         'Quality proposals contain kind=quality, title and complete definition. Preserve unrelated fields. ' +
