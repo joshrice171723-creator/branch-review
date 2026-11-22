@@ -139,12 +139,15 @@ function connectProjectConversation(initial) {
   capture.hidden = !navigator.mediaDevices?.getDisplayMedia;
   capture.onclick = async () => {
     const target = mockupTarget.value;
+    if (context().tab !== target) {
+      referenceStatus.textContent = "Open " + target + " before capturing, or upload a screenshot.";
+      return;
+    }
     let stream;
     capture.disabled = true;
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: false, preferCurrentTab: true});
       close(false);
-      projectConversation.goToDesign?.(target);
       const video = document.createElement("video");
       video.muted = true;
       video.srcObject = stream;
@@ -158,7 +161,7 @@ function connectProjectConversation(initial) {
       open();
     }
   };
-  previewCleanup.onclick = () => { close(false); projectConversation.previewCleanup?.(); };
+  previewCleanup.onclick = () => projectConversation.previewCleanup?.();
   byId("generate-conversation-mockup").onclick = () => {
     const brief = composer.value;
     const activeContext = context();

@@ -206,7 +206,6 @@ function designPanel(initialState) {
   const settings = {branch: null, host: null};
   const previewDraft = {};
   const reviewDrafts = new Map();
-  let previewPlanCleanup = false;
   let readiness, readinessKey, buildStamp, runControls, refreshing = false;
   function rememberDraft() {
     persistDesignDraft(draftKey, localDraft);
@@ -1008,10 +1007,7 @@ function designPanel(initialState) {
       next = [label, () => goBuild()];
     } else if (state.question || state.plannerRetry) next = ["Resolve the planning decision", () => projectConversation.open()];
     else if (localDraft.plan) next = ["Save the local draft", focus("plan-save")];
-    else if (!state.plan.trim()) {
-      if (previewPlanCleanup) { nextAction.replaceChildren(); return; }
-      next = ["Draft a plan", () => projectConversation.open()];
-    }
+    else if (!state.plan.trim()) next = ["Draft a plan", () => projectConversation.open()];
     else if (state.approved !== state.revision) next = ["Approve the saved plan", focus("plan-approve")];
     else if (problem) next = actions[problem.id] || ["Review build readiness", () => goBuild()];
     else next = [readiness?.ready ? "Set up the build" : "Check build readiness", () => goBuild()];
@@ -1046,10 +1042,7 @@ function designPanel(initialState) {
     }));
     const layout = layoutSetting("panes") || "beside";
     body.replaceChildren(tab === "Plan" ? element("div","design-stack",
-      ...(previewPlanCleanup ? [
-        box("Plan preview", button("Show original", () => { previewPlanCleanup = false; draw(); })),
-        editor()
-      ] : [element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), editor())]),
+      element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), editor()),
       progressPanel(() => openTab("Build"), syncProgress)) :
       tab === "Mockups" ? mockups() : tab === "Preview" ? preview() : buildPanel());
     guideNext();
@@ -1145,9 +1138,23 @@ function designPanel(initialState) {
       if (!await change("continue", {build}, {wait: "Starting repair…"})) throw Error(status.textContent);
     };
     projectConversation.previewCleanup = () => {
-      previewPlanCleanup = true;
-      if (tab === "Plan") draw();
-      else openTab("Plan");
+      const sample = element("div", "design-stack");
+      sample.inert = true;
+      const panel = editor();
+      const toolbar = element("div", "actions", button("Project conversation", () => {}));
+      function show(original) {
+        const shortcuts = original ? [
+          ...(!state.plan.trim() && !localDraft.plan ? [button("Draft a plan", () => {}, "button primary")] : []),
+          conversationActions()
+        ] : [];
+        sample.replaceChildren(toolbar, ...shortcuts, panel);
+      }
+      show(false);
+      showDialog("Plan cleanup preview",
+        field("Preview version", select("proposed", [["proposed", "Proposed"], ["original", "Original"]], value => {
+          show(value === "original");
+          return true;
+        })), sample);
     };
     projectConversation.goToDesign = (next, focus) => {
       tab = next;
