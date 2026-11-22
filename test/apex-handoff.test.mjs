@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {panelAddress} from '../apex-panel.mjs';
-import {applyWorkbenchRubric,approvedWorkbenchEvidence,draftWorkbenchPullRequest,readHandoff,returnFindings,selectHandoffBranch,verifyCommittedSources,workbenchComparison,workbenchMockup,workbenchReview,workbenchRubric,pushWorkbenchReview} from '../workbench-handoff.mjs';
+import {taskChecklist, applyWorkbenchRubric,approvedWorkbenchEvidence,draftWorkbenchPullRequest,readHandoff,returnFindings,selectHandoffBranch,verifyCommittedSources,workbenchComparison,workbenchMockup,workbenchReview,workbenchRubric,pushWorkbenchReview} from '../workbench-handoff.mjs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {digest} from '../reviews.mjs';
@@ -286,4 +286,19 @@ test('explicit push sends only the approved commit to its branch',async t=>{
   const nextRecord={...record,identity:nextIdentity,approval:{...record.approval,identity:digest(nextIdentity),commit:next}};
   await assert.rejects(pushWorkbenchReview(repository,nextId,next,[nextRecord],git,target),/rejected|non-fast-forward/i);
   assert.equal(await git('ls-remote','--heads',url),remoteChange+'\t'+ref);
+});
+
+test('the approved plan has stable review criteria after a repair', () => {
+  const task={title:'Confirm appointments',plan:[
+    'Show the appointment after saving.', '## Acceptance criteria',
+    '- Show the confirmation message.', '2. Keep the original appointment time.',
+    '## Implementation notes', '- Reuse the existing action.'
+  ].join('\n')};
+  const plan=taskChecklist(task);
+  assert.equal(plan.title,task.title);
+  assert.deepEqual(plan.scenarios.map(item=>[item.id,item.expected]),[
+    ['acceptance-1','Show the confirmation message.'],
+    ['acceptance-2','Keep the original appointment time.']
+  ]);
+  assert.equal(taskChecklist({...task,plan:'Verify the result.'}).scenarios.length,1);
 });

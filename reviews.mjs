@@ -51,13 +51,20 @@ export class ReviewStore {
   async open(snapshot, manifest, recipeHash) {
     const identity = { repository: snapshot.repository, ref: snapshot.comparison.branch.ref, source: snapshot.comparison.branch.sha, base: snapshot.original.sha, changed: snapshot.changed.sha, scenarioHash: digest({manifest, recipeHash}) };
     if(snapshot.integration?.workbenchRun)identity.workbenchRun=snapshot.integration.workbenchRun;
+    if(snapshot.integration?.workbenchTask)identity.workbenchTask=snapshot.integration.workbenchTask;
     const id = digest(identity);
     let record = this.records.find(r => r.id === id);
     if (!record) {
       const previous = this.records.findLast(r => r.identity.repository === identity.repository &&
         (snapshot.previousReviewId ? r.id === snapshot.previousReviewId : r.identity.ref === identity.ref &&
-          (!identity.workbenchRun || r.identity.workbenchRun && r.identity.base===identity.base)));
+          (identity.workbenchTask ? r.identity.workbenchTask === identity.workbenchTask && r.identity.base===identity.base
+            : !identity.workbenchRun || r.identity.workbenchRun && !r.identity.workbenchTask && r.identity.base===identity.base)));
       record = { id, identity, manifest, title: snapshot.comparison.branch.subject, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), checks: {}, items:{}, cursor:{itemId:manifest.scenarios[0].id,view:'item'}, previousId:previous?.id || null, issues: previous ? [...previous.issues,...(previous.publishedFindings || [])].filter(i => i.status !== 'resolved').map(i => ({ ...i, status: 'needs-retest', carriedFrom: previous.id })) : [], events: [], approval: null, integration: null, delivery: null };
+      if (identity.workbenchTask && previous) {
+        const retest = record.issues.map(issue=>issue.scenario);
+        const preferred = retest.includes(previous.cursor?.itemId) ? previous.cursor.itemId : retest[0];
+        if (manifest.scenarios.some(item=>item.id===preferred)) record.cursor.itemId = preferred;
+      }
       record.comparisonMode={baseline:snapshot.comparison.baseline || 'parent',baselineCommit:snapshot.comparison.baselineCommit};
       record.requestHistory=structuredClone(previous?.requestHistory || []);
       for (const [itemId, saved] of Object.entries(previous?.items || {})) {

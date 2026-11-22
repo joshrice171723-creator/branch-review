@@ -26,7 +26,9 @@ Use **Chat about this review** to open the project conversation with the selecte
 Use **Workspace files** and **Preview cleanup** to inspect managed scratch and temporary files.
 
 Set `APEX_WORKBENCH_URL` to a running project-bound panel to reuse its service. Branch Review checks the project identity before opening it.
-Set `BRANCH_REVIEW_PORT` to use another local port. The three preview ports remain reserved for branch comparisons.
+Set `BRANCH_REVIEW_PORT` to choose a different controller port.
+The installed app reuses its last automatic controller port when available.
+It selects free loopback ports when a controller or preview port is occupied.
 
 A local desktop workspace for reviewing changes in Git projects: choose a branch, compare isolated versions, report findings, ask Codex for a fix, and retest within the same review.
 
@@ -95,7 +97,8 @@ Checklists come from the actual diff and routes in a read-only checkout and stay
 
 Codex jobs disable unrelated connectors, plugins, apps and hooks for that process without altering global configuration. Claude disconnected-state support remains; live Claude acceptance is deferred.
 
-Loopback ports 4310-4312 are reserved. Only one controller can own them. The desktop renderer is sandboxed, and preview content cannot invoke privileged desktop controls. Running project commands is not an operating-system security sandbox.
+Browser and development use loopback port 4310 for the controller and 4311–4313 for previews by default.
+The desktop renderer is sandboxed, and preview content cannot invoke privileged desktop controls. Running project commands is not an operating-system security sandbox.
 
 ## More tools
 
@@ -110,7 +113,9 @@ Reports include outcomes, findings, screenshots, approval and delivery history. 
 
 ## Development
 
-Run `npm run dev` from this repository to open the Electron app directly from source; no installer or packaging is needed. Development uses its own `.local-dev` settings and review data, so choose a trusted project on first launch. It shares ports 4310–4313 with the installed app: close the other Branch Review window before starting it. The development window is labeled **Branch Review — Development**.
+Run `npm run dev` from this repository to open the Electron app directly from source.
+Development uses its own `.local-dev` settings and review data. Choose a trusted project on first launch.
+Start development before the installed app when both need to run. The development window is labeled **Branch Review — Development**.
 
 For changes under `public/`, save your work and press F5 or Ctrl+R in the development window; confirm after saving any form edits. Server, desktop, or dependency changes require closing and reopening `npm run dev`. Refresh does not restart the server or automatically reload unsaved changes. Reviews and evidence created in development stay separate from the installed app. Make an installer only for distribution or when updating the installed copy.
 

@@ -8,6 +8,7 @@ Var BRProgressTotal
 Var BRProgressTick
 Var BRProgressLastTick
 Var BRProgressDelay
+Var BRApplyStatus
 
 Function BranchReviewWriteProgress
   StrCmp $BRProgressFile "" done
@@ -66,3 +67,29 @@ FunctionEnd
     Nsis7z::ExtractWithCallback "${FILE}" $BRProgressCallback
   ${EndIf}
 !macroend
+
+Function BranchReviewApplyFiles
+  IfFileExists "$PLUGINSDIR\7z-out\${APP_EXECUTABLE_FILENAME}" copy
+  MessageBox MB_OK|MB_ICONEXCLAMATION "$(decompressionFailed)" /SD IDOK
+  Goto failed
+
+copy:
+  StrCpy $BRProgressLine "apply"
+  Call BranchReviewWriteProgress
+  # Copy every staged file without purging extra destination files.
+  nsExec::ExecToLog '"$SYSDIR\robocopy.exe" "$PLUGINSDIR\7z-out" "$OUTDIR\." /E /MT:8 /R:4 /W:1 /IS /IT /XJ /NJH /NJS /NFL /NDL /NP'
+  Pop $BRApplyStatus
+  ${If} $BRApplyStatus == "error"
+  ${OrIf} $BRApplyStatus < 0
+  ${OrIf} $BRApplyStatus >= 8
+    DetailPrint "Could not copy the application files. Robocopy returned $BRApplyStatus."
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Could not copy the application files." /SD IDCANCEL IDRETRY copy
+    Goto failed
+  ${EndIf}
+  ClearErrors
+  Return
+
+failed:
+  SetErrorLevel 2
+  Quit
+FunctionEnd

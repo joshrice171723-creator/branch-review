@@ -204,6 +204,10 @@ export async function workbenchReview(repository, runId, records, git) {
   }
   result.slices=design?.slices || [];
   result.base=design?.identity.base || null;
+  if (design?.task) {
+    result.taskBuild = design.identity.build;
+    result.approvedPlan = design.task.plan;
+  }
   if (!tipMatches) return {...result,status:'branch-changed'};
   const record = records.findLast(({identity}) => identity.workbenchRun === runId &&
     identity.repository === repository && identity.ref === handoff.ref && identity.source === handoff.commit &&
@@ -265,7 +269,8 @@ async function reviewGroup(repository,handoff,git) {
     if(await git('merge-base',group.base,handoff.commit)!==group.base) throw staleDesign();
   } catch {throw staleDesign();}
   const slices=build.roadmap.flatMap(m=>m.slices);
-  return {identity,slices:group.slices.map(id=>{
+  const task = build.mode === 'task' ? {title:build.title, plan:build.plan} : null;
+  return {identity,task,slices:group.slices.map(id=>{
     const asset=build.attachments?.[id];
     return {id,title:slices.find(slice=>slice.id===id)?.title || id,mockup:/^[a-f0-9]{32}$/.test(asset)?asset:null};
   })};
@@ -289,6 +294,26 @@ export async function workbenchComparison(repository,runId,git) {
   const subject=await git('show','-s','--format=%s',handoff.commit);
   const branch={ref:handoff.ref,sha:handoff.commit,subject,name:handoff.ref.slice('refs/heads/'.length),aliases:[],remote:false};
   return {handoff,branch,base,design};
+}
+
+export function taskChecklist(task) {
+  const lines = task.plan.split(/\r?\n/);
+  const start = lines.findIndex(line => /^\s*(?:#{1,6}\s*)?acceptance criteria\s*:?\s*$/i.test(line));
+  const acceptance = [];
+  if (start >= 0) {
+    for (const line of lines.slice(start + 1)) {
+      if (/^\s*#{1,6}\s/.test(line)) break;
+      const item = /^\s*(?:[-*+]\s+|\d+[.)]\s+)(?:\[[ xX]\]\s*)?(.+)$/.exec(line);
+      if (item) acceptance.push(item[1].trim());
+    }
+  }
+  const title = task.title.trim().slice(0,160);
+  const scenarios = (acceptance.length ? acceptance : [title]).slice(0,80).map((expected,index)=>({
+    id:'acceptance-'+(index+1),title:expected.slice(0,160),path:'/',
+    description:task.plan.slice(0,2000),expected:expected.slice(0,2000),
+    steps:[acceptance.length ? expected.slice(0,500) : 'Check the changed app against the approved plan.']
+  }));
+  return {version:2,title,summary:task.plan.slice(0,2000),source:'Approved change plan',scenarios};
 }
 
 export function designChecklist(slices) {

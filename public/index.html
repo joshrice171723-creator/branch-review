@@ -14,58 +14,30 @@
       >
       <div class="project">
         <span class="dot"></span> <span id="project-name">Project</span> <button id="choose-repository" class="project-switch" aria-label="Switch project" hidden>Switch project</button>
-        <span class="divider">/</span> Review workspace
+        <span class="divider">/</span> <span id="workspace-phase">Design</span>
       </div>
       <div class="header-actions">
-        <button id="open-apex-panel" class="secondary" type="button">Workbench</button>
+        <button id="open-apex-panel" class="secondary" type="button" hidden>Back to change</button>
+        <button id="open-project-qa" class="secondary" type="button">Review a branch</button>
+        <button id="qa-conversation" class="secondary" type="button" hidden>Conversation</button>
           <button id="updated-branch" class="secondary" hidden></button><nav class="main-tools" aria-label="Review tools"><button id="theme-toggle" class="toolbar-icon" type="button" aria-label="Switch to dark mode" title="Switch to dark mode"><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg></button><button id="toolbar-history" class="toolbar-icon labeled-tool" aria-label="Versions" data-tooltip="Versions" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v6l4 2"/></svg>Versions</button><button id="review-tools" class="toolbar-icon labeled-tool" aria-label="Settings" data-tooltip="Settings" ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>Settings</button></nav>
       </div>
     </header>
-    <dialog id="apex-panel-dialog" aria-labelledby="apex-panel-title">
-      <div class="apex-panel-header">
-        <div><h2 id="apex-panel-title">Workbench</h2><small id="apex-checkout"></small></div>
-        <div class="tool-actions">
-          <button id="apex-handoff-toggle" type="button" aria-expanded="false" aria-controls="apex-handoff">Review handoff</button>
-          <button id="apex-recovery-toggle" type="button" aria-expanded="false" aria-controls="apex-recovery" hidden>Workspace files</button>
-          <button id="close-apex-panel" type="button">Close</button>
-        </div>
+    <section id="change-workspace" aria-label="Change workspace">
+      <p id="apex-panel-status" role="status" hidden></p>
+      <div id="workspace-recovery-actions" class="tool-actions">
+        <button id="retry-apex-panel" type="button" hidden>Retry setup</button>
+        <button id="install-apex-panel" class="primary" type="button" hidden>Prepare project</button>
+        <button id="apex-recovery-toggle" type="button" aria-expanded="false" aria-controls="apex-recovery" hidden>Workspace files</button>
       </div>
-      <section id="apex-handoff" hidden aria-label="Review handoff">
-        <label for="apex-completed">Completed run</label><select id="apex-completed"></select>
-        <button id="apex-review-run" type="button">Review this commit</button>
-        <button id="apex-refresh-handoff" type="button">Refresh review status</button>
-        <p id="apex-review-state" role="status" hidden></p>
-        <button type="button" id="apex-push" hidden>Push to GitHub</button>
-        <button type="button" id="apex-github-check" hidden>Publish GitHub PR check</button>
-        <button type="button" id="apex-pr-draft" hidden>Draft pull request</button>
-        <a id="apex-evidence-download" download hidden>Download review evidence</a>
-        <a id="apex-github-evidence" target="_blank" rel="noopener" hidden>Open evidence on GitHub</a>
-        <section id="apex-pr-draft-panel" aria-label="Pull request draft" hidden>
-          <label for="apex-pr-draft-text">Pull request title and description</label>
-          <textarea id="apex-pr-draft-text" rows="9" readonly></textarea>
-          <button id="apex-pr-draft-copy" type="button">Copy draft</button>
-        </section>
-        <ul id="apex-review-checks" aria-label="Review checklist" hidden></ul>
-        <fieldset id="apex-findings" hidden><legend>Findings for a new repair task</legend>
-          <div id="apex-finding-choices"></div><button id="apex-pick-findings" type="button">Prepare repair task</button>
-        </fieldset>
-        <fieldset id="apex-repair" hidden><legend>New Workbench task</legend>
-          <label>Action<input id="apex-repair-action" maxlength="4000"></label>
-          <label>Scope<textarea id="apex-repair-scope" maxlength="16000"></textarea></label>
-          <button id="apex-create-repair" type="button">Create repair task</button>
-        </fieldset>
-      </section>
-      <section id="apex-recovery" hidden aria-label="Workbench workspace files">
+      <section id="apex-recovery" hidden aria-label="Managed workspace files">
         <button id="apex-cleanup-preview" type="button">Preview cleanup</button>
-        <p id="apex-cleanup-status" role="status"></p>
+        <p id="apex-cleanup-status" role="status" hidden></p>
         <ul id="apex-cleanup-files" aria-label="Managed files"></ul>
       </section>
-      <p id="apex-panel-status" role="status" hidden></p>
-      <button id="retry-apex-panel" type="button" hidden>Retry Workbench</button>
-      <button id="install-apex-panel" class="primary" type="button" hidden>Upgrade Workbench</button>
-      <iframe id="apex-panel-frame" title="Project Workbench" hidden></iframe>
-    </dialog>
-    <main>
+      <div id="factory-view"></div>
+    </section>
+    <main id="review-workspace" hidden>
       <aside class="branches">
         <div class="rail-heading">
           <div>
@@ -234,7 +206,7 @@
             <details id="item-background"><summary>About this change</summary><p id="item-description"></p><p id="item-instructions"></p></details>
             <section id="latest-fix" hidden><strong>Latest fix to verify</strong><p id="latest-fix-expected"></p><button id="verify-fix" class="primary">Verify fix and next</button><p class="small muted">Complete the checks below, then choose Looks good. If it is still wrong, right-click the affected area in the preview.</p></section>
             <section class="review-expectation"><h3>What to check</h3><p id="item-expected"></p></section><div id="checks"></div>
-            <details id="item-more"><summary>Details and tools</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Technical details and recovery</button><button id="apex-chat-about-review" class="secondary" type="button">Chat about this review</button><label class="field-label" for="item-notes">Notes</label>
+            <details id="item-more"><summary>Details and tools</summary><button id="toolbar-review" class="secondary">Edit review checklist</button><button id="toolbar-agent" class="secondary">Technical details and recovery</button><button id="qa-prepare-checks" class="secondary" type="button">Prepare checks for this route</button><button id="apex-chat-about-review" class="secondary" type="button">Chat about this review</button><label class="field-label" for="item-notes">Notes</label>
             <textarea id="item-notes" maxlength="4000" placeholder="Optional note"></textarea>
             <label class="field-label" for="item-outcome">Can’t check this?</label>
             <select id="item-outcome"><option value="">Choose an exception</option><option value="needs-fixes" hidden>Needs fixes</option><option value="blocked">Blocked — cannot test</option><option id="item-not-applicable" value="not-applicable">Not applicable</option></select>
@@ -250,7 +222,31 @@
             <button id="results-action" class="primary">Continue remaining checks</button><p id="results-action-detail" class="small muted"></p>
             <button id="published-report" class="secondary" hidden>Report a problem</button><p id="published-findings-status" class="small" role="status" hidden></p>
             <details id="published-findings" hidden><summary>Reported problems</summary><div id="published-findings-list"></div></details><details id="results-checks"><summary id="results-checks-label">Review checks</summary><div id="result-items"></div></details>
-            <div id="results-options"></div>
+            <section id="apex-handoff" class="qa-delivery" aria-label="Reviewed commit" hidden>
+        <p id="apex-delivery-status" role="status" hidden></p>
+        <p id="apex-review-state" role="status" hidden></p>
+        <button type="button" id="apex-push" hidden>Push to GitHub</button>
+        <button type="button" id="apex-github-check" hidden>Publish GitHub PR check</button>
+        <button type="button" id="apex-pr-draft" hidden>Draft pull request</button>
+        <a id="apex-evidence-download" download hidden>Download review evidence</a>
+        <a id="apex-github-evidence" target="_blank" rel="noopener" hidden>Open evidence on GitHub</a>
+        <section id="apex-pr-draft-panel" aria-label="Pull request draft" hidden>
+          <label for="apex-pr-draft-text">Pull request title and description</label>
+          <textarea id="apex-pr-draft-text" rows="9" readonly></textarea>
+          <button id="apex-pr-draft-copy" type="button">Copy draft</button>
+        </section>
+        <details id="approved-plan" hidden><summary>Approved plan</summary><pre id="approved-plan-text"></pre></details>
+        <ul id="apex-review-checks" aria-label="Selected mockups" hidden></ul>
+        <fieldset id="apex-findings" hidden><legend>Findings for a new repair task</legend>
+          <div id="apex-finding-choices"></div><button id="apex-pick-findings" type="button">Prepare repair task</button>
+        </fieldset>
+        <fieldset id="apex-repair" hidden><legend>New Workbench task</legend>
+          <label>Action<input id="apex-repair-action" maxlength="4000"></label>
+          <label>Scope<textarea id="apex-repair-scope" maxlength="16000"></textarea></label>
+          <button id="apex-create-repair" type="button">Create repair task</button>
+        </fieldset>
+      </section>
+      <div id="results-options"></div>
             <button id="resume-review" class="quiet">Continue remaining checks</button>
             <button id="export-review" class="secondary">View / export review report</button>
           </section>

@@ -26,7 +26,10 @@ const extractor = path.join(stage, 'include', 'extractAppPackage.nsh');
 const extract = '  Nsis7z::Extract "${FILE}"';
 const prepare = '  SetOutPath "$PLUGINSDIR\\7z-out"';
 patch(extractor, prepare + '\n' + extract, prepare + '\n  !insertmacro BranchReviewExtract "${FILE}"');
-const retry = '  # Retry counter';
-patch(extractor, retry, '  StrCpy $BRProgressLine "apply"\n  Call BranchReviewWriteProgress\n\n' + retry);
+const stockApply = fs.readFileSync(extractor, 'utf8').match(/  # Retry counter\n[\s\S]*?  DoneExtract7za:\n/);
+if (!stockApply?.[0].includes('CopyFiles /SILENT "$PLUGINSDIR\\7z-out\\*" $OUTDIR')) {
+  throw Error('Unexpected Electron Builder template: ' + extractor);
+}
+patch(extractor, stockApply[0], '  Call BranchReviewApplyFiles\n');
 
 nsis.nsisTemplatesDir = stage;

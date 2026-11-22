@@ -45,11 +45,6 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
     original: { sha: "aaaaaaaaaaaa1111", scenario: {} },
   };
   const slot = { web: upstream.address().port, proxy: 0 };
-  // Use a reserved ephemeral port for the explicit Host/Origin checks.
-  const reservation = http.createServer();
-  await new Promise((resolve) => reservation.listen(0, "127.0.0.1", resolve));
-  slot.proxy = reservation.address().port;
-  await new Promise((resolve) => reservation.close(resolve));
   const proxy = previewProxy(
     "original",
     slot,
@@ -63,7 +58,7 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
     proxy.closeAllConnections();
     proxy.close();
   });
-  const origin = `http://127.0.0.1:${slot.proxy}`;
+  const origin = `http://127.0.0.1:${proxy.address().port}`;
   assert.equal(
     (
       await fetch(origin, {

@@ -29,10 +29,12 @@ export function expiredPreviewCookies(header='',previews=[]){
 const escapeJSON = (data) => JSON.stringify(data).replace(/</g, "\\u003c");
 
 export function previewProxy(side, slot, getState, appOrigin) {
-  const origin = `http://127.0.0.1:${slot.proxy}`;
-  const allowedHost = `127.0.0.1:${slot.proxy}`;
-  const upstream = `127.0.0.1:${slot.web}`;
-  function headers(req, preview) {
+  function requestOrigin(req) {
+    const address = server.address();
+    const host = address && `127.0.0.1:${address.port}`;
+    return host && req.headers.host === host ? `http://${host}` : null;
+  }
+  function headers(req, preview, origin) {
     const result = {
       ...req.headers,
       host: `127.0.0.1:${preview.web || slot.web}`,
@@ -50,7 +52,8 @@ export function previewProxy(side, slot, getState, appOrigin) {
     return result;
   }
   const server = http.createServer({maxHeaderSize:128*1024},(req, res) => {
-    if (req.headers.host !== allowedHost) {
+    const origin = requestOrigin(req);
+    if (!origin) {
       res.writeHead(403).end("Invalid host");
       return;
     }
@@ -99,7 +102,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
         port: preview.web || slot.web,
         method: req.method,
         path: req.url,
-        headers: headers(req, preview),
+        headers: headers(req, preview, origin),
       },
       (response) => {
         const result = { ...response.headers };
@@ -136,10 +139,11 @@ export function previewProxy(side, slot, getState, appOrigin) {
     req.pipe(request);
   });
   server.on("upgrade", (req, socket, head) => {
+    const origin = requestOrigin(req);
     const current = getState();
     const preview = current[side];
     if (
-      req.headers.host !== allowedHost ||
+      !origin ||
       req.headers.origin !== origin ||
       !preview ||
       !["ready","preview-ready"].includes(current.status)
@@ -149,7 +153,7 @@ export function previewProxy(side, slot, getState, appOrigin) {
       hostname: "127.0.0.1",
       port: preview.web || slot.web,
       path: req.url,
-      headers: headers(req, preview),
+      headers: headers(req, preview, origin),
     });
     request.on("upgrade", (response, remote, remoteHead) => {
       socket.write(

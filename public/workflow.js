@@ -280,7 +280,7 @@ export function workflow({api, getState, getSide, error, poll, reopen, openHando
       $('delivery-state').textContent='Workbench source commit '+r.identity.changed;
       if(canApprove(r)){
         $('results-message').textContent=r.approval?'The local approval applies to this commit.':'Checklist complete. Approve this source commit.';
-        if(r.approval){$('results-action').textContent='Open review handoff';$('results-action').disabled=!enabled;}
+        if(r.approval){$('results-action').textContent='Show delivery options';$('results-action').disabled=!enabled;}
       }
     }
     $('smoke').disabled=!enabled || r.delivery?.stage!=='published';

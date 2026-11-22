@@ -3,14 +3,16 @@ import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
-import {applyWorkbenchRubric, approvedWorkbenchEvidence, completedRuns, createRepair, designChecklist, draftWorkbenchPullRequest, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, rubricComplete, validateWorkbenchPreview, workbenchComparison, workbenchMockup, workbenchReview, workbenchRubric} from './workbench-handoff.mjs';
+import {applyWorkbenchRubric, approvedWorkbenchEvidence, completedRuns, createRepair, designChecklist, taskChecklist, draftWorkbenchPullRequest, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, rubricComplete, validateWorkbenchPreview, workbenchComparison, workbenchMockup, workbenchReview, workbenchRubric} from './workbench-handoff.mjs';
 import {githubApi, publishWorkbenchCheck} from './workbench-github.mjs';
 import localOrigin from './desktop/local-origin.cjs';
 import {projectPanel} from './apex-panel.mjs';
 import {npmEntry} from './web-project.mjs';
 import http from 'node:http';
+import { once } from 'node:events';
 import { readFile, writeFile, access, rename, stat, mkdir, open, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario, project, webHealthy, defaultBranch } from './adapter.mjs';
 import { previewProxy, expiredPreviewCookies } from './proxy.mjs';
@@ -30,26 +32,21 @@ import { reviewReport } from './report.mjs';
 import { previewHealth } from './health.mjs';
 import {groupedBranches,consolidateFixBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan,appearanceFixPlan} from './fix-review.mjs';
 
-const {port, origin} = localOrigin;
-const apex = projectPanel(repo,process.env.APEX_WORKBENCH_URL,origin);
-process.once('exit', () => apex.close());
 const token = randomBytes(32).toString('hex');
 let busy = false, preparedFix=null;
 let displayDefaultBranch=await defaultBranch().catch(()=>null);
-const store = await new ReviewStore(local).load();
-for(const record of store.records)for(const run of record.browserQa || [])if(run.status==='running'){run.status='interrupted';run.error='The app closed before browser evidence completed.';}
-await store.persist();
+const store = new ReviewStore(local);
 const qaRunning=()=>store.records.some(record=>record.browserQa?.some(run=>run.status==='running'));
 const muse=new MuseQa(local,store);
 const plans=new PlanStore(path.join(local,'diff-reviews'));
 let agentSettings=JSON.parse(await readFile(path.join(local,'agent-settings.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
 const selectedAgent=()=>({provider:providerId(agentSettings.provider),executable:agentSettings.executables?.[agentSettings.provider || 'codex']});
-const jobs=await new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,provider:selectedAgent,project,prepareFix:warmFix,changedCwd:()=>path.join(previewRoot,state.changed?.runtime || 'changed'),prepareNext:async sha=>{
+const jobs=new ReviewJobs(local,{git,run,previewRoot,toolchain,repo,provider:selectedAgent,project,prepareFix:warmFix,changedCwd:()=>path.join(previewRoot,state.changed?.runtime || 'changed'),prepareNext:async sha=>{
   const branch=(await branches()).find(branch=>branch.sha===sha);if(!branch)throw new Error('Choose a current branch.');
   const selected=await comparison(branch.ref,'parent'),runtime=state.changed?.runtime==='standby'?'changed':'standby';
   const prepared=await prepare(runtime,sha,selected.files);state.prepared={...prepared,recipe:scenarioRecipe(selected.files)};await writeFile(path.join(local,'prepared.json'),JSON.stringify(state.prepared));return prepared;
-}}).load();
-const cleanup=databaseCleanup({run,local,state,records:store.records,preparedFix:()=>preparedFix,jobs:()=>jobs.rows});
+}});
+let cleanup;
 let toolsSettings=JSON.parse(await readFile(path.join(local,'tools-settings.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
 const delivery = new Delivery(git, store, defaultBranch);
 const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'};
@@ -118,7 +115,9 @@ async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRu
     warmed?.selected || await comparison(ref,'main');
   if (expectedCommit && selected.branch.sha !== expectedCommit) throw new Error('The selected branch changed before its review opened.');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
-  const integration=pinned ? {main:pinned.base,source:pinned.handoff.commit,sha:pinned.handoff.commit,sourceOnly:true,workbenchRun} :
+  const task = pinned?.design?.task;
+  const integration=pinned ? {main:pinned.base,source:pinned.handoff.commit,sha:pinned.handoff.commit,sourceOnly:true,workbenchRun,
+    ...(task && {workbenchTask:pinned.design.identity.build})} :
     warmed?.integration || await delivery.prepare(ref,expectedCommit || selected.branch.sha,previous);
   const combined=warmed?.combined || await candidateComparison(git,selected,integration);
   const prior=previousReviewId?store.get(previousReviewId):null;
@@ -134,7 +133,7 @@ async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRu
     async()=>{await startReview(ref,'main',undefined,{comparison:combined,integration,deferReady:true,beforeFix:!!prior && !sameBranch});if(state.status==='error')throw Error(state.error);},
     async()=>{
       let plan=await plans.get(planKey);
-      if(!plan && pinned?.design) plan=designChecklist(pinned.design.slices);
+      if(!plan && pinned?.design) plan=task ? taskChecklist(task) : designChecklist(pinned.design.slices);
       if(!plan && prior && !fixFiles.length)plan=structuredClone(prior.manifest);
       if(!plan && prior){
         plan=await appearanceFixPlan(git,prior,integration.sha,fixFiles,integration.main) || await colorFixPlan(git,prior,integration.sha,fixFiles,integration.main);
@@ -256,6 +255,7 @@ async function mutate(endpoint, data) {
     const history=await branchVersions(git,record);
     if(!history.versions.some(row=>row.sha===data.sha))throw Error('Choose a version from this branch history.');
     if(endpoint==='/api/version-restore'){
+      if(record.identity.workbenchTask)throw Error('Create a new change to restore an earlier version.');
       const commit=await restoreVersion(git,run,record,data.sha,data.expected,data.confirmation);
       await store.event(record,'branch-version-restored',{from:history.tip,version:data.sha,commit});
       await startCandidate(record.identity.ref,record.id,commit);return;
@@ -373,11 +373,18 @@ async function mutate(endpoint, data) {
   if(endpoint==='/api/plan'){
     if(jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running job before editing the plan.');
     const rubric=record.identity.workbenchRun?await workbenchRubric(repo,record.identity.workbenchRun):[];
-    const plan=rubric.length?applyWorkbenchRubric(data.manifest,rubric):data.manifest;
+    let plan=data.manifest;
+    if (record.identity.workbenchTask) {
+      const comparison=await workbenchComparison(repo,record.identity.workbenchRun,git);
+      const accepted=taskChecklist(comparison.design.task);
+      const extra=(plan?.scenarios || []).filter(item=>!item.id?.startsWith('acceptance-'));
+      plan={...accepted,scenarios:[...accepted.scenarios,...extra]};
+    }
+    if (rubric.length) plan=applyWorkbenchRubric(plan,rubric);
     await plans.save(record.identity.workbenchRun?workbenchPlanKey(record.integration):record.identity.changed,plan);
     await activate();return state.recordId;
   }
-  if(endpoint==='/api/job'){if(data.batch && (!reviewAccountedFor(record) || !record.issues.some(i=>!['resolved','needs-retest'].includes(i.status))))throw Error('Finish reviewing every item and collect change requests before starting this batch.');return jobs.start(record,data.kind,data);}
+  if(endpoint==='/api/job'){if(record.integration?.workbenchTask && data.kind==='fix')throw Error('Send these findings to the current build from the QA summary.');if(data.batch && (!reviewAccountedFor(record) || !record.issues.some(i=>!['resolved','needs-retest'].includes(i.status))))throw Error('Finish reviewing every item and collect change requests before starting this batch.');return jobs.start(record,data.kind,data);}
   if(endpoint==='/api/fix-commit'){
     if(!jobs.rows.some(job=>job.id===data.jobId && job.reviewId===record.id))throw Error('Choose a fix job from this review.');
     return jobs.commitFix(data.jobId,data.files);
@@ -412,7 +419,8 @@ async function mutate(endpoint, data) {
     store.invalidate(record);return store.event(record,data.remove?'request-withdrawn':'request-edited',{issueId:issue.id,actual:issue.actual,expected:issue.expected});
   }
   if (endpoint === '/api/item') {
-    if(data.outcome==='not-applicable' && record.workbenchRequiredCriteria?.includes(data.itemId))
+    if(data.outcome==='not-applicable' && (record.workbenchRequiredCriteria?.includes(data.itemId) ||
+        record.integration?.workbenchTask && data.itemId?.startsWith('acceptance-')))
       throw Error('Complete this required Workbench Quality criterion before approval.');
     return store.item(record.id,data.itemId,data);
   }
@@ -475,9 +483,9 @@ actions.add('/api/release-key-text');actions.add('/api/new-change');actions.add(
 for(const endpoint of ['/api/version-preview','/api/version-latest','/api/version-restore','/api/fix-apply'])actions.add(endpoint);
 longActions.add('/api/version-restore');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
-const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
+async function handleRequest(req,res,{origin,host,apex,previewOrigins}) {
   try {
-    if(req.headers.host!==`127.0.0.1:${port}`) return json(res,403,{error:'Invalid host'});
+    if(req.headers.host!==host) return json(res,403,{error:'Invalid host'});
     if(apex.handle(req,res)) return;
     // Loopback cookies cross ports; retire old revisions before their headers grow too large.
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
@@ -535,8 +543,10 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     }
     if(req.method==='GET' && url.pathname==='/api/versions')return json(res,200,await branchVersions(git,store.get(url.searchParams.get('id')),jobs.rows));
     if(req.method==='GET' && url.pathname==='/api/commits')return json(res,200,await commitHistory(git,url.searchParams.get('sha')));
-    if(req.method==='GET' && url.pathname==='/api/changes')return json(res,200,await changedFiles(git,url.searchParams.get('base'),url.searchParams.get('changed')));
-    if(req.method==='GET' && url.pathname==='/api/diff')return json(res,200,await fileDiff(git,url.searchParams.get('base'),url.searchParams.get('changed'),url.searchParams.get('file')));
+    if(req.method==='GET' && url.pathname==='/api/changes')return json(res,200,await changedFiles(git,url.searchParams.get('base'),
+      url.searchParams.get('working')==='1' ? null : url.searchParams.get('changed') || ''));
+    if(req.method==='GET' && url.pathname==='/api/diff')return json(res,200,await fileDiff(git,url.searchParams.get('base'),
+      url.searchParams.get('working')==='1' ? null : url.searchParams.get('changed') || '',url.searchParams.get('file')));
     if(req.method==='GET' && /^\/screenshots\/[a-f0-9-]{36}\.png$/.test(url.pathname)) { const image=await readFile(path.join(local,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'"}); return res.end(image); }
     if(req.method==='GET' && /^\/recordings\/[a-f0-9-]{36}\.webm$/.test(url.pathname)){const clip=await readFile(path.join(local,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':'video/webm','Content-Length':clip.length,'Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'"});return res.end(clip);}
     if(req.method==='POST' && actions.has(url.pathname)) {
@@ -559,24 +569,80 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     }
     if(req.method!=='GET'||!['/','/app.js','/apex-panel.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/photo-markup.js','/branch-history.js','/batch-review.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css','/theme.js'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
-    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' "+apex.frameOrigin+" http://127.0.0.1:4311 http://127.0.0.1:4312 http://127.0.0.1:4313; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
+    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' "+[apex.frameOrigin,...previewOrigins,'http://127.0.0.1:*','http://localhost:*','https:'].filter(Boolean).join(' ')+"; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
   }catch(error){if(!res.headersSent)json(res,400,{error:error.message});else res.end();}
-});
-await restoreReview();state.prepared=JSON.parse(await readFile(path.join(local,'prepared.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return 'null';throw e;})); await activate().catch(error=>{state.status='error';state.error=error.message;});
-for(const [runtime,slot] of Object.entries(slots)) { const proxy=previewProxy('changed',slot,()=>{
-  const preview=[state.original,state.changed].find(preview=>preview?.runtime===runtime);
-  if(preview)return {...state,changed:preview};
-  if(preparedFix?.changed.runtime===runtime)return {status:'ready',changed:preparedFix.changed,manifest:preparedFix.combined.plan};
-  return {status:'idle'};
-},origin);proxy.on('error',error=>{console.error(error.message);process.exit(1);});proxy.listen(slot.proxy,'127.0.0.1'); }
-server.on('error',error=>{console.error(error.message);process.exit(1);});
-await new Promise(resolve=>server.listen(port,'127.0.0.1',resolve));
-console.log(`Branch Review: ${origin}`);
-let checkingMuse=false;
-setInterval(async()=>{
-  if(busy || checkingMuse)return;checkingMuse=true;
-  try{for(const record of store.records.filter(record=>record.museQa && ['published','verified'].includes(record.delivery?.stage) && (!['completed','result_confirmed','evidence-missing'].includes(record.museQa.status) || !record.museQa.evidenceChecked))){
-    try{await muse.refresh(record);}catch{record.museQa.statusError='Office status is temporarily unavailable; the last reported state is shown.';await store.persist();}
-  }}finally{checkingMuse=false;}
-},15000).unref();
+}
+
+async function bindLoopback(server, port, allowFallback) {
+  const bind = async requested => {
+    const listening = once(server,'listening');
+    server.listen({port:requested,host:'127.0.0.1',exclusive:true});
+    await listening;
+  };
+  try {
+    await bind(port);
+  } catch (error) {
+    if (!allowFallback || !['EADDRINUSE','EACCES'].includes(error.code)) throw error;
+    await bind(0);
+  }
+  return server.address().port;
+}
+
+export async function startServer({allowPortFallback=false,preferredPort} = {}) {
+  const controllerFallback = allowPortFallback && !localOrigin.hasPortOverride;
+  const requestedPort = controllerFallback && localOrigin.isControllerPort(preferredPort) ? preferredPort : localOrigin.port;
+  let context, apex;
+  const server = http.createServer({maxHeaderSize:128*1024},(req,res)=>{
+    if (!context) return json(res,503,{error:'Branch Review is starting.'});
+    void handleRequest(req,res,context);
+  });
+  const listeners = [server];
+  try {
+    const port = await bindLoopback(server,requestedPort,controllerFallback);
+    const host = `127.0.0.1:${port}`;
+    const origin = `http://${host}`;
+    apex = projectPanel(repo,process.env.APEX_WORKBENCH_URL,origin);
+    const previewOrigins = [];
+    for (const [runtime,slot] of Object.entries(slots)) {
+      const proxy = previewProxy('changed',slot,()=>{
+        const preview=[state.original,state.changed].find(preview=>(preview?.runtime || preview?.side)===runtime);
+        if(preview)return {...state,changed:preview};
+        if(preparedFix?.changed.runtime===runtime)return {status:'ready',changed:preparedFix.changed,manifest:preparedFix.combined.plan};
+        return {status:'idle'};
+      },origin);
+      listeners.push(proxy);
+      slot.proxy = await bindLoopback(proxy,slot.proxy,allowPortFallback);
+      previewOrigins.push(`http://127.0.0.1:${slot.proxy}`);
+    }
+    await store.load();
+    for(const record of store.records)for(const run of record.browserQa || [])if(run.status==='running'){run.status='interrupted';run.error='The app closed before browser evidence completed.';}
+    await store.persist();
+    await jobs.load();
+    cleanup=databaseCleanup({run,local,state,records:store.records,preparedFix:()=>preparedFix,jobs:()=>jobs.rows});
+    await restoreReview();
+    state.prepared=JSON.parse(await readFile(path.join(local,'prepared.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return 'null';throw e;}));
+    const preparedSlot = slots[state.prepared?.runtime];
+    if (preparedSlot && state.prepared.proxy !== undefined) state.prepared.proxy = preparedSlot.proxy;
+    await activate().catch(error=>{state.status='error';state.error=error.message;});
+    context = {origin,host,apex,previewOrigins};
+    process.once('exit',()=>apex.close());
+    let checkingMuse=false;
+    setInterval(async()=>{
+      if(busy || checkingMuse)return;checkingMuse=true;
+      try{for(const record of store.records.filter(record=>record.museQa && ['published','verified'].includes(record.delivery?.stage) && (!['completed','result_confirmed','evidence-missing'].includes(record.museQa.status) || !record.museQa.evidenceChecked))){
+        try{await muse.refresh(record);}catch{record.museQa.statusError='Office status is temporarily unavailable; the last reported state is shown.';await store.persist();}
+      }}finally{checkingMuse=false;}
+    },15000).unref();
+    console.log(`Branch Review: ${origin}`);
+    return {origin,port};
+  } catch (error) {
+    for (const listener of listeners) if (listener.listening) listener.close();
+    apex?.close();
+    throw error;
+  }
+}
+
+if (import.meta.main ?? (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url)) {
+  await startServer();
+}

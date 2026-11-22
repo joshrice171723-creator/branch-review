@@ -29,60 +29,41 @@ test('external Workbench opens only when it serves the selected project',async t
   await assert.rejects(panel.open(),/serves a different project/);
 });
 
-test('one Workbench open uses the selected project and sends chat context only to its ready iframe',async t=>{
+test('the project workspace mounts once and retains conversation during Branch Review', async t => {
   const origin='http://127.0.0.1:4310';
-  const events={},calls=[],messages=[];
+  const calls=[], mounts=[], messages=[], visibility=[];
   const nodes=new Map();
-  function element(id){
-    if(!nodes.has(id)) nodes.set(id,{
-      hidden:true,open:false,src:'',
-      setAttribute(){},replaceChildren(){},append(){},
-      showModal(){this.open=true;},close(){this.open=false;}
-    });
+  function element(id) {
+    if (!nodes.has(id)) nodes.set(id,{hidden:true,dataset:{},setAttribute(){},replaceChildren(){},append(){}});
     return nodes.get(id);
   }
   globalThis.location=new URL(origin);
-  globalThis.document={getElementById:element,createElement:()=>({})};
-  globalThis.window={addEventListener:(type,listener)=>{events[type]=listener;}};
-  t.mock.method(globalThis,'setTimeout',()=>0);
+  globalThis.document={getElementById:element};
+  globalThis.window={};
   t.after(()=>{delete globalThis.document;delete globalThis.window;delete globalThis.location;});
-  const frame=element('apex-panel-frame');
-  frame.contentWindow={postMessage:(data,target)=>messages.push({data,target})};
-  let failOpen=false;
-  const panel=apexPanel({getState:()=>({}),openBranch:async()=>true,
-    api:async(path,data)=>{
-      calls.push({path,data});
-      if(path==='/api/workbench') return {project:'/trusted/project',installed:false};
-      if(path==='/api/workbench-prepare') return {result:{installed:true,managed:true}};
-      if(path==='/api/workbench-open'){
-        if(failOpen) throw Error('Workbench could not identify its project.');
-        return {result:{src:'/__workbench/',managed:true}};
-      }
-      if(path==='/api/workbench-cleanup-preview') return {entries:[],bytes:0};
-      throw Error('Unexpected API request: '+path);
+  const panel=apexPanel({getState:()=>({}),openBranch:async()=>true,flush:async()=>true,
+    loadPanel:async()=>({mount:async(node,options)=>{
+      mounts.push({node,options});
+      return {setVisible:value=>visibility.push(value),openConversation:input=>messages.push(input)};
+    }}),
+    api:async(route)=>{
+      calls.push(route);
+      if(route==='/api/workbench') return {project:'/trusted/project',installed:true};
+      if(route==='/api/workbench-open') return {result:{src:'/__workbench/',managed:true}};
+      throw Error('Unexpected route '+route);
     }});
-  await panel.prepare();
   const context={kind:'branch-review',commit:'a'.repeat(40),ref:'refs/heads/design',scenarioId:'example'};
+  await Promise.all([panel.open(),panel.openChat(context)]);
+  assert.deepEqual(calls,['/api/workbench','/api/workbench-open']);
+  assert.equal(mounts[0].node,element('factory-view'));
+  assert.equal(mounts[0].options.base,origin+'/__workbench/');
+  assert.deepEqual(messages,[context]);
+  assert.equal(element('review-workspace').hidden,true);
+  element('open-project-qa').onclick();
+  assert.equal(element('review-workspace').hidden,false);
   await panel.openChat(context);
-  assert.deepEqual(calls.map(row=>row.path),['/api/workbench-prepare','/api/workbench','/api/workbench-open']);
-  assert.equal(element('apex-checkout').textContent,'Project checkout · /trusted/project');
-  assert.equal(frame.src,origin+'/__workbench/');
-  assert.equal(frame.hidden,false);
-  assert.deepEqual(messages,[]);
-  await events.message({source:frame.contentWindow,origin:'http://127.0.0.1:4320',data:{type:'workbench-chat-ready'}});
-  assert.deepEqual(messages,[]);
-  await events.message({source:frame.contentWindow,origin,data:{type:'workbench-chat-ready'}});
-  assert.deepEqual(messages,[{data:{type:'workbench-chat-context',context},target:origin}]);
-  await element('apex-cleanup-preview').onclick();
-  assert.deepEqual(calls.at(-1),{path:'/api/workbench-cleanup-preview',data:undefined});
-  assert.equal(element('apex-cleanup-status').textContent,'No managed files to clean.');
-  failOpen=true;
   await panel.open();
-  assert.equal(frame.hidden,true);
-  assert.equal(frame.src,'about:blank');
-  assert.equal(element('retry-apex-panel').hidden,false);
-  failOpen=false;
-  await element('retry-apex-panel').onclick();
-  assert.equal(frame.hidden,false);
-  assert.equal(frame.src,origin+'/__workbench/');
+  assert.equal(mounts.length,1);
+  assert.deepEqual(visibility,[true,false,true]);
+  assert.deepEqual(messages,[context,context]);
 });

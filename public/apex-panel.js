@@ -1,32 +1,72 @@
-export function apexPanel({api,getState,openBranch}) {
+export function apexPanel({api, getState, openBranch, flush, reportError,
+    loadPanel = address => import(new URL('mount.js', address).href)}) {
   const byId = id => document.getElementById(id);
-  const dialog = byId('apex-panel-dialog');
-  const frame = byId('apex-panel-frame');
+  const workspace = byId('change-workspace');
+  const factory = byId('factory-view');
+  const preview = byId('review-workspace');
+  const back = byId('open-apex-panel');
+  const openProjectQa = byId('open-project-qa');
+  const phase = byId('workspace-phase');
   const status = byId('apex-panel-status');
+  const deliveryStatus = byId('apex-delivery-status');
   const install = byId('install-apex-panel');
-  const retry=byId('retry-apex-panel');
-  const recovery=byId('apex-recovery');
-  const recoveryToggle=byId('apex-recovery-toggle');
+  const retry = byId('retry-apex-panel');
+  const recovery = byId('apex-recovery');
+  const recoveryToggle = byId('apex-recovery-toggle');
+  byId('tools-workspace').append(recoveryToggle, recovery);
   const drawer = byId('apex-handoff');
-  const runPicker = byId('apex-completed');
-  const handoffButton = byId('apex-handoff-toggle');
   const choiceList = byId('apex-finding-choices');
   const push = byId('apex-push');
   const publish = byId('apex-github-check');
   const download = byId('apex-evidence-download');
   const githubEvidence = byId('apex-github-evidence');
-  const refresh = byId('apex-refresh-handoff');
-  const draft=byId('apex-pr-draft');
-  const draftPanel=byId('apex-pr-draft-panel');
-  const draftText=byId('apex-pr-draft-text');
-  const review=byId('apex-review-run');
-  const initialRun = new URLSearchParams(location.search).get('workbenchRun');
-  let selectedRun=initialRun,receipt,requestId=0,pendingChat,chatReadyAddress,opening;
-  function message(text) {status.textContent=text; status.hidden=!text;}
-  async function action(button,fn) {
-    button.disabled=true;
-    try {await fn();} catch(error) {message(error.message);}
-    finally {button.disabled=false;}
+  const draft = byId('apex-pr-draft');
+  const draftPanel = byId('apex-pr-draft-panel');
+  const draftText = byId('apex-pr-draft-text');
+  let selectedRun, receipt, requestId = 0, opening, panel, qa = false, selectedStage = 'plan';
+  let deliveryKey, approvalKey;
+  function message(text) {
+    const target = qa ? deliveryStatus : status;
+    target.textContent = text;
+    target.hidden = !text;
+  }
+  async function action(button, fn) {
+    button.disabled = true;
+    try { await fn(); } catch (error) { message(error.message); }
+    finally { button.disabled = false; }
+  }
+  function showStage(stage) {
+    selectedStage = stage;
+    const labels = {plan:'Design', build:'Build', preview:'Preview', mockups:'Mockups', quality:'Quality',
+      stages:'Workflow settings', documents:'Instructions', rules:'Shared rules', history:'History', live:'Run activity'};
+    phase.textContent = qa ? 'Review' : labels[stage] || 'Design';
+  }
+  function showWorkspace(inQa) {
+    qa = inQa;
+    preview.hidden = !qa;
+    back.hidden = !qa;
+    openProjectQa.hidden = qa;
+    byId('qa-conversation').hidden = !qa;
+    if (qa) {
+      recovery.hidden = true;
+      recoveryToggle.setAttribute('aria-expanded', 'false');
+    }
+    workspace.dataset.qa = String(qa);
+    panel?.setVisible?.(!qa);
+    showStage(selectedStage);
+  }
+  function render(state) {
+    if (!qa) return;
+    const run = state.record?.identity.workbenchRun;
+    drawer.hidden = !run;
+    const key = JSON.stringify([run,state.record?.updatedAt,state.record?.approval]);
+    if (!run || key === deliveryKey) return;
+    deliveryKey = key;
+    selectedRun = run;
+    void showSelection().catch(error => {
+      deliveryKey = null;
+      message(error.message);
+    });
   }
   async function showSelection() {
     const request=++requestId;
@@ -40,13 +80,10 @@ export function apexPanel({api,getState,openBranch}) {
     byId('apex-repair').hidden=true;
     choiceList.replaceChildren();
     receipt=null;
-    selectedRun=runPicker.value;
     const run=selectedRun;
-    review.disabled=true;
     if(!run) return;
     const handoff=await api('/api/workbench-review?run='+encodeURIComponent(run));
     if(request!==requestId || handoff.runId!==selectedRun) return;
-    review.disabled=['design-stale','branch-changed'].includes(handoff.status);
     const statuses={waiting:'Ready for review', reviewing:'Review in progress', approved:'Approved',
       'changes-requested':'Changes requested', 'branch-changed':'Branch moved. Review the current commit.',
       'not-exported':'Open this run in Branch Review.',
@@ -54,7 +91,9 @@ export function apexPanel({api,getState,openBranch}) {
     reviewState.textContent=[handoff.message || statuses[handoff.status],handoff.commit?.slice(0,8),
       handoff.base && 'Base '+handoff.base.slice(0,8)].filter(Boolean).join(' · ');
     reviewState.hidden=false;
-    for(const slice of handoff.slices || []){
+    byId('approved-plan').hidden = !handoff.approvedPlan;
+    byId('approved-plan-text').textContent = handoff.approvedPlan || '';
+    for(const slice of (handoff.slices || []).filter(item=>item.mockup)){
       const row=document.createElement('li');
       row.textContent=slice.title;
       if(slice.mockup){
@@ -68,6 +107,10 @@ export function apexPanel({api,getState,openBranch}) {
       checks.append(row);
     }
     if(handoff.status==='approved'){
+      if (handoff.taskBuild && panel && approvalKey !== run) {
+        await panel.syncReview({build:handoff.taskBuild,sha:handoff.commit});
+        approvalKey = run;
+      }
       const branch=handoff.ref.slice('refs/heads/'.length);
       const destination=handoff.pushTarget;
       const pushed=handoff.delivery?.repository===destination;
@@ -92,9 +135,13 @@ export function apexPanel({api,getState,openBranch}) {
       push.onclick=()=>action(push,async()=>{
         if(!confirm('Push '+handoff.commit+' to '+destination+'/'+branch+'?')) return;
         message('Pushing the reviewed commit…');
-        const {result}=await api('/api/workbench-push',{runId:run,commit:handoff.commit,expectedTarget:destination});
+        if (handoff.taskBuild && panel) {
+          await panel.syncReview({build:handoff.taskBuild,sha:handoff.commit,expectedTarget:destination});
+        } else {
+          await api('/api/workbench-push',{runId:run,commit:handoff.commit,expectedTarget:destination});
+        }
         await showSelection();
-        message('Pushed '+result.commit.slice(0,8)+' to '+result.remote+'/'+branch+'.');
+        message('Pushed '+handoff.commit.slice(0,8)+' to '+destination+'/'+branch+'.');
       });
       publish.hidden=!pushed || !githubEvidence.hidden;
       publish.onclick=()=>action(publish,async()=>{
@@ -105,12 +152,9 @@ export function apexPanel({api,getState,openBranch}) {
         message('GitHub confirmed the evidence comment and exact-commit check.');
       });
     }
-    for(const item of handoff.checklist) {
-      const row=document.createElement('li'); row.textContent=item.title+' · '+item.status.replaceAll('-',' '); checks.append(row);
-    }
     checks.hidden=!checks.childElementCount;
     if(handoff.slices?.length && handoff.findings?.length) {
-      reviewState.textContent+=' · Select the findings and affected slices in Design.';
+      reviewState.textContent+=' · Send your findings from the QA summary.';
       return;
     }
     const record=getState().record;
@@ -125,66 +169,87 @@ export function apexPanel({api,getState,openBranch}) {
     }
     byId('apex-findings').hidden=!choiceList.childElementCount;
   }
-  async function showHandoff() {
-    const runs=await api('/api/workbench-runs');
-    runPicker.replaceChildren();
-    for(const run of runs) runPicker.add(new Option(run.title+' · '+run.id,run.id));
-    if(selectedRun && runs.some(run=>run.id===selectedRun)) runPicker.value=selectedRun;
-    refresh.disabled=!runs.length;
-    drawer.hidden=false; handoffButton.setAttribute('aria-expanded','true');
-    message(runs.length?'':'Complete a Workbench run to review its commit.');
-    await showSelection();
-  }
-  async function open() {
-    if(opening) return opening;
-    opening=openPanel().finally(()=>{opening=null;});
-    return opening;
-  }
-  function sendChatContext() {
-    if(!pendingChat || chatReadyAddress!==frame.src || !dialog.open) return;
-    frame.contentWindow.postMessage({type:'workbench-chat-context',context:pendingChat},new URL(chatReadyAddress).origin);
-    pendingChat=null;
-    message('');
-  }
-  async function openPanel() {
-    if(!dialog.open) dialog.showModal();
-    retry.hidden=true;
-    message('Opening project Workbench…');
+  async function inspect(runId) {
     try {
-      const status=await api('/api/workbench');
-      byId('apex-checkout').textContent='Project checkout · '+status.project;
-      if(!status.installed && !status.connected) message('Preparing Workbench for this checkout…');
-      const {result}=await api('/api/workbench-open',{});
-      const address=new URL(result.src,location.origin).href;
-      if(frame.src!==address) {
-        chatReadyAddress=null;
-        frame.src=address;
-      }
-      frame.hidden=false; handoffButton.disabled=false; message('');
-      install.hidden=!status.upgradeAvailable;
-      recoveryToggle.hidden=!result.managed;
-      const chatRequested=Boolean(pendingChat);
-      sendChatContext();
-      if(chatRequested && pendingChat){
-        const request=pendingChat;
-        message('Opening project chat…');
-        setTimeout(()=>{
-          if(pendingChat===request && dialog.open) message('Project chat did not open. Check for a Workbench upgrade or try again.');
-        },12000);
-      }
-      selectedRun ||= getState().record?.identity.workbenchRun;
-      if(!chatRequested && (selectedRun || !drawer.hidden)) await showHandoff().catch(error=>message(error.message));
-    } catch(error) {
-      frame.hidden=true;handoffButton.disabled=true;recoveryToggle.hidden=true;
-      chatReadyAddress=null;
-      frame.src='about:blank';
-      retry.hidden=false;
+      const {result} = await api('/api/workbench-export', {runId});
+      const branch = {ref:result.ref,sha:result.commit,name:result.ref.slice('refs/heads/'.length),
+        subject:result.title,aliases:[],base:result.design?.base};
+      if (!await openBranch(branch, runId)) throw Error('Save changes in the current review and try again.');
+      showWorkspace(true);
+      render(getState());
+    } catch (error) {
       message(error.message);
+      throw error;
     }
   }
-  byId('open-apex-panel').onclick=()=>open();
-  byId('close-apex-panel').onclick=()=>{pendingChat=null;dialog.close();};
-  retry.onclick=()=>open();
+
+  function load() {
+    if (panel) return Promise.resolve(panel);
+    if (opening) return opening;
+    opening = (async () => {
+      retry.hidden = true;
+      try {
+        const info = await api('/api/workbench');
+        if (!info.installed || info.upgradeAvailable) {
+          install.hidden = false;
+          message(info.installed ? 'Update the project runtime to open the change workspace.' : 'Prepare this project to start a change.');
+          return null;
+        }
+        message('Opening the change workspace…');
+        const {result} = await api('/api/workbench-open', {});
+        const address = new URL(result.src, location.origin);
+        if (address.origin !== location.origin || address.pathname !== '/__workbench/') {
+          throw Error('Select the local project runtime to use the change workspace.');
+        }
+        const {mount} = await loadPanel(address);
+        panel = await mount(factory, {
+          base:address.href, initialView:'workflow', onReview:inspect, onStageChange:showStage,
+          workingFiles:base=>api('/api/changes?'+new URLSearchParams({base,working:'1'})),
+          workingDiff:(base,file)=>api('/api/diff?'+new URLSearchParams({base,file,working:'1'})),
+          openEditor:window.desktop?.openEditor,
+          openPreview:window.desktop?.openAppPreview
+        });
+        recoveryToggle.hidden = !result.managed;
+        panel.setVisible?.(!qa);
+        if (qa) { deliveryKey = null; render(getState()); }
+        message('');
+        return panel;
+      } catch (error) {
+        retry.hidden = false;
+        message(error.message);
+        return null;
+      }
+    })().finally(() => { opening = null; });
+    return opening;
+  }
+
+  async function open() {
+    if (qa && !await flush()) return null;
+    showWorkspace(false);
+    return load();
+  }
+
+  async function repair(record, findings) {
+    const runtime = await load();
+    if (!runtime) throw Error('Prepare the project runtime to start a repair.');
+    const runId = record.identity.workbenchRun;
+    const handoff = await api('/api/workbench-review?run=' + encodeURIComponent(runId));
+    if (handoff.reviewId !== record.id || handoff.commit !== record.identity.changed || !handoff.taskBuild) {
+      throw Error('Open the current build commit before starting a repair.');
+    }
+    showWorkspace(false);
+    await runtime.repair({build:handoff.taskBuild, sha:handoff.commit, reviewId:record.id, findingIds:findings.map(issue=>issue.id)});
+  }
+
+  back.onclick = () => void open().catch(error => reportError(error.message));
+  openProjectQa.onclick = () => { showWorkspace(true); render(getState()); };
+  retry.onclick = () => void load();
+  install.onclick = () => action(install, async () => {
+    message('Preparing the project runtime…');
+    await api('/api/workbench-install', {});
+    install.hidden = true;
+    await load();
+  });
   recoveryToggle.onclick=()=>{
     recovery.hidden=!recovery.hidden;
     recoveryToggle.setAttribute('aria-expanded',String(!recovery.hidden));
@@ -210,44 +275,11 @@ export function apexPanel({api,getState,openBranch}) {
     try {await navigator.clipboard.writeText(draftText.value);message('Copied pull request draft.');}
     catch {draftText.select();message('Copy the selected draft.');}
   };
-  install.onclick=()=>action(install,async()=>{
-    message(install.textContent==='Upgrade Workbench'?'Upgrading Workbench…':'Installing Workbench…');
-    await api('/api/workbench-install',{});
-    chatReadyAddress=null;
-    frame.src='about:blank';
-    await open();
-  });
-  handoffButton.onclick=()=>action(handoffButton,async()=>{
-    if(!drawer.hidden) {drawer.hidden=true;handoffButton.setAttribute('aria-expanded','false');message('');}
-    else await showHandoff();
-  });
-  runPicker.onchange=()=>void showSelection().catch(error=>message(error.message));
-  refresh.onclick=()=>action(refresh,async()=>{message('');await showHandoff();});
   if(window.desktop?.openWorkbenchEvidence) githubEvidence.onclick=async event=>{
     event.preventDefault();
     try {await window.desktop.openWorkbenchEvidence(githubEvidence.href);}
     catch(error){message(error.message);}
   };
-  window.addEventListener('message',async event=>{
-    if(event.source!==frame.contentWindow || !frame.src || event.origin!==new URL(frame.src).origin)return;
-    if(event.data?.type==='workbench-chat-ready'){
-      chatReadyAddress=frame.src;sendChatContext();return;
-    }
-    if(!dialog.open || event.data?.type!=='workbench-review-run' || !/^\d{8}T\d{12}-[a-f0-9]{8}$/.test(event.data.runId))return;
-    try{
-      selectedRun=event.data.runId;
-      await showHandoff();
-      if(runPicker.value!==event.data.runId)throw Error('This run is not ready for Branch Review.');
-      byId('apex-review-run').click();
-    }catch(error){message(error.message);}
-  });
-  review.onclick=()=>action(review,async()=>{
-    const {result}=await api('/api/workbench-export',{runId:selectedRun});
-    const branch={ref:result.ref,sha:result.commit,name:result.ref.slice('refs/heads/'.length),
-      subject:result.title,aliases:[],base:result.design?.base};
-    if(await openBranch(branch,selectedRun)) dialog.close();
-    else message('Finish the current review action or save pending changes, then try again.');
-  });
   const prepare=byId('apex-pick-findings');
   prepare.onclick=()=>action(prepare,async()=>{
     const findings=[...choiceList.querySelectorAll('input:checked')].map(choice=>choice.value);
@@ -262,14 +294,24 @@ export function apexPanel({api,getState,openBranch}) {
     const {result}=await api('/api/workbench-repair',{runId:selectedRun,receipt,
       action:byId('apex-repair-action').value,scope:byId('apex-repair-scope').value});
     byId('apex-repair').hidden=true;
-    message('Created '+result.task_id+'. Open Live run to confirm its scope.');
+    await open();
+    message('Created repair task '+result.task_id+'.');
   });
-  return {open,prepare:()=>api('/api/workbench-prepare',{}),openReview:()=>{
-    selectedRun=getState().record?.identity.workbenchRun || selectedRun;
-    return open();
-  },openChat:context=>{
-    pendingChat=context;
-    drawer.hidden=true;handoffButton.setAttribute('aria-expanded','false');
-    return open();
-  }};
+  return {
+    open, inspect, render, repair,
+    async prepareChecks(route) {
+      const runtime = await open();
+      runtime?.openQuality('prepare',{route});
+    },
+    prepare: () => api('/api/workbench-prepare', {}),
+    openReview: () => {
+      showWorkspace(true);
+      render(getState());
+      drawer.scrollIntoView({block:'nearest'});
+    },
+    openChat: async context => {
+      const runtime = await load();
+      if (runtime) runtime.openConversation(context);
+    }
+  };
 }

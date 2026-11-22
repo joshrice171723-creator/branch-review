@@ -6,6 +6,8 @@ if (process.isMainFrame) contextBridge.exposeInMainWorld('desktop', {
   forgetProject: path => ipcRenderer.invoke('review:forget-project',path),
   capture: rect => ipcRenderer.invoke('review:capture',rect),
   openPublished: url => ipcRenderer.invoke('review:open-published',url),
+  openEditor: file => ipcRenderer.invoke('review:open-editor',file),
+  openAppPreview: url => ipcRenderer.invoke('review:open-app-preview',url),
   openWorkbenchEvidence: url => ipcRenderer.invoke('review:open-workbench-evidence',url),
   chooseReleaseFiles: () => ipcRenderer.invoke('review:release-files'),
   startBrowserQa: input => ipcRenderer.invoke('review:browser-qa',input),

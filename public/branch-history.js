@@ -31,7 +31,7 @@ export function branchHistory({api,getState,flush,poll,error}){
         preview.onclick=()=>act(isLatest?'/api/version-latest':'/api/version-preview',isLatest?{}:{sha:version.sha});
         const details=document.createElement('details'),summary=document.createElement('summary'),commit=document.createElement('p');
         summary.textContent='Version details';commit.className='small muted';commit.textContent=version.subject+' · Commit '+version.sha.slice(0,7);details.append(summary,commit);
-        if(!isLatest){
+        if(!isLatest && !state.record?.identity.workbenchTask){
           const explanation=document.createElement('p'),restore=document.createElement('button');
           explanation.textContent='To keep this version, restore all tracked files on this branch. This adds a new commit, preserves the full history, and does not push anything.';
           restore.textContent='Restore this version…';restore.className='secondary';restore.disabled=!!state.busy;

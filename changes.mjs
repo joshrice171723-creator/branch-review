@@ -1,9 +1,10 @@
 const commitPattern=/^[a-f0-9]{40}$/;
 export async function changedFiles(git, base, changed) {
-  if(!commitPattern.test(base) || !commitPattern.test(changed))throw new Error('Choose exact comparison commits.');
-  const tokens=(await git('diff','--name-status','-z','--find-renames',base,changed,'--')).split('\0').filter(Boolean),files=[];
+  if(!commitPattern.test(base) || changed !== null && !commitPattern.test(changed))throw new Error('Choose exact comparison commits.');
+  const refs = changed === null ? [base] : [base,changed];
+  const tokens=(await git('diff','--name-status','-z','--find-renames',...refs,'--')).split('\0').filter(Boolean),files=[];
   for(let i=0;i<tokens.length;){const status=tokens[i++],first=tokens[i++];if(!first)break;const renamed=/^[RC]/.test(status);files.push({status:status[0],path:renamed?tokens[i++]:first,...(renamed?{previousPath:first}:{})});}
-  const stats=(await git('diff','--numstat','-z','--find-renames',base,changed,'--')).split('\0'),counts=new Map();
+  const stats=(await git('diff','--numstat','-z','--find-renames',...refs,'--')).split('\0'),counts=new Map();
   for(let i=0;i<stats.length;i++){
     const row=stats[i];if(!row)continue;
     const first=row.indexOf('\t'),second=row.indexOf('\t',first+1);let name=row.slice(second+1);
@@ -15,7 +16,7 @@ export async function changedFiles(git, base, changed) {
 export async function fileDiff(git, base, changed, filename) {
   const files=await changedFiles(git,base,changed),file=files.find(file=>file.path===filename);
   if(!file)throw new Error('Choose a file from this exact comparison.');
-  const patch=await git('--literal-pathspecs','diff','--no-ext-diff','--no-textconv','--no-color','--unified=4','--find-renames',base,changed,'--',...(file.previousPath?[file.previousPath]:[]),file.path);
+  const patch=await git('--literal-pathspecs','diff','--no-ext-diff','--no-textconv','--no-color','--unified=4','--find-renames',...(changed===null?[base]:[base,changed]),'--',...(file.previousPath?[file.previousPath]:[]),file.path);
   const limit=100000;
   return {base,changed,file,patch:patch.slice(0,limit),truncated:patch.length>limit};
 }

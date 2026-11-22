@@ -94,20 +94,27 @@ try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') 
 const reviewWorkflow = workflow({api,getState:()=>currentState,getSide:()=>active,error,poll,
   reopen:(force=true)=>mountFrames(currentState,force),openHandoff:()=>projectWorkbench.openReview()});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
-const batch=batchReview({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error});
+const batch=batchReview({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error,
+  repair:(record,findings)=>projectWorkbench.repair(record,findings)});
 document.body.append($('change-composer'));
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
-const projectWorkbench=apexPanel({api, getState:()=>currentState, openBranch});
-$('apex-chat-about-review').onclick=async()=>{
+const projectWorkbench=apexPanel({api, getState:()=>currentState, openBranch, flush:reviewWorkflow.flush, reportError:error});
+const openReviewConversation = async () => {
   if(!await reviewWorkflow.flush()) return;
   const record=currentState.record;
-  if(!record) return;
+  if(!record) return projectWorkbench.openChat(null);
   const {repository,ref,changed}=record.identity;
   const scenario=record.manifest.scenarios.find(item=>item.id===reviewWorkflow.scenario());
   await projectWorkbench.openChat({kind:'branch-review',project:repository,reviewId:record.id,
     ref,commit:changed,scenarioId:scenario?.id,scenarioTitle:scenario?.title,route:scenario?.path});
+};
+$('qa-conversation').onclick = $('apex-chat-about-review').onclick = openReviewConversation;
+$('qa-prepare-checks').onclick = async () => {
+  const item=currentState.record?.manifest.scenarios.find(row=>row.id===reviewWorkflow.scenario());
+  const route=reviewWorkflow.getContext(active).location || item?.path;
+  await projectWorkbench.prepareChecks(route);
 };
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
@@ -461,6 +468,7 @@ async function poll() {
     $('project-name').textContent=$('preview-project-name').textContent=currentState.project?.name || 'Project';
     branchVisibilityUI();
     reviewWorkflow.render(currentState);
+    projectWorkbench.render(currentState);
     if(!currentState.record)$('revision-warning').hidden=true;
     const fixRecord=currentState.record;
     fixNotice.hidden=versionHistory.hidden=!fixRecord?.fixComparison;
@@ -646,11 +654,12 @@ window.addEventListener("message", (event) => {
   }
 });
 await poll();
-const setupGuide=onboarding({api,settings:()=>reviewTools.open('workspace'),openWorkbench:projectWorkbench.open,
+onboarding({api,settings:()=>reviewTools.open('workspace'),openWorkbench:projectWorkbench.open,
   refresh:async()=>{await poll();await loadBranches();error('');}});
-if(window.desktop) void projectWorkbench.prepare().catch(()=>{}); // Open Workbench can surface and retry setup failures.
-if (location.hash === '#workbench' || new URLSearchParams(location.search).has('workbenchRun')) await projectWorkbench.open();
-else void setupGuide.initialize();
+const linkedRun = new URLSearchParams(location.search).get('workbenchRun');
+void projectWorkbench.open().then(async () => {
+  if (linkedRun) await projectWorkbench.inspect(linkedRun);
+}).catch(issue=>error(issue.message));
 await loadBranches().catch((e) => error(e.message));
 setInterval(poll, 2000);
 setInterval(()=>{if(!currentState.busy)void loadBranches(false).catch(e=>error(e.message));},30000);

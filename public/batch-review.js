@@ -1,6 +1,6 @@
 import {itemStatus,fixRequest,isPublished} from './review-model.js';
 export const reviewAccountedFor=r=>r.manifest.scenarios.every(item=>['passed','needs-fixes','blocked','not-applicable'].includes(itemStatus(r,item)));
-export function batchReview({api,getState,getSide,workflow,capture,poll,error}){
+export function batchReview({api,getState,getSide,workflow,capture,poll,error,repair}){
   const $=id=>document.getElementById(id),node=(tag,text)=>{const e=document.createElement(tag);e.textContent=text;return e;};
   let saving=false,capturing=false,editing=null,pinned=null,image=null;
   const draftKey=()=>`branch-review:request:${pinned?.id}:${pinned?.scenario}:${editing?.id||'new'}`;
@@ -64,7 +64,7 @@ export function batchReview({api,getState,getSide,workflow,capture,poll,error}){
   }
   requests.onclick=showList;
   $('item-next').onclick=async()=>{if(saving)return;saving=true;try{if(!await workflow.flush())return;const r=getState().record;if(!openIssues(r).some(issue=>issue.scenario===r.cursor.itemId))await api('/api/item-accept',{id:r.id,itemId:r.cursor.itemId});await poll();await next();}catch(e){error(e.message);}finally{saving=false;}};
-  send.onclick=async()=>{if(saving || !reviewAccountedFor(getState().record))return;saving=true;send.disabled=true;try{if(!await workflow.flush())return;const r=getState().record;await api('/api/job',{id:r.id,kind:'fix',batch:true,requestText:fixRequest({...r,issues:openIssues(r),manifest:{...r.manifest,scenarios:r.manifest.scenarios.filter(item=>openIssues(r).some(issue=>issue.scenario===item.id))}})});await poll();}catch(e){error(e.message);}finally{saving=false;}};
+  send.onclick=async()=>{if(saving || !reviewAccountedFor(getState().record))return;saving=true;send.disabled=true;try{if(!await workflow.flush())return;const r=getState().record;if(r.integration?.workbenchTask && repair){await repair(r,openIssues(r));return;}await api('/api/job',{id:r.id,kind:'fix',batch:true,requestText:fixRequest({...r,issues:openIssues(r),manifest:{...r.manifest,scenarios:r.manifest.scenarios.filter(item=>openIssues(r).some(issue=>issue.scenario===item.id))}})});await poll();}catch(e){error(e.message);}finally{saving=false;}};
   return {open:()=>open(),openTarget:selection=>open(null,selection),render(state){
     const r=state.record,enabled=!!r&&state.status==='ready'&&!state.busy&&!state.jobsRunning&&!state.previewVersion&&!isPublished(r),count=r?openIssues(r).length:0;
     requests.hidden=!r||!count;requests.textContent=`${count} queued change${count===1?'':'s'} · View`;requests.disabled=!enabled;skip.disabled=!enabled;

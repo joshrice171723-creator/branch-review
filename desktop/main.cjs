@@ -3,14 +3,14 @@ const {setupUrl,gitAvailable,requireGit}=require('./setup-help.cjs');
 const {askProjectAgent,suggestPreviewRecipe}=require('./welcome-agent.cjs');
 const {configureBundledRuntimes}=require('./windows-runtime.cjs');
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, screen, shell } = require('electron');
-const { readFile, writeFile, appendFile, mkdir } = require('node:fs/promises');
-const { execFile } = require('node:child_process');
+const { readFile, writeFile, appendFile, mkdir, realpath, stat } = require('node:fs/promises');
+const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const exec = promisify(execFile);
-const {origin} = require('./local-origin.cjs');
+const {hasPortOverride} = require('./local-origin.cjs');
 if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') {
   const devRoot = path.resolve(__dirname, '..', '.local-dev');
   app.setPath('userData', path.join(devRoot, 'desktop'));
@@ -103,11 +103,10 @@ async function launch() {
   savedConfig.repository=savedConfig.repository || process.env.META_CLINIC_REPO;
   process.env.BRANCH_REVIEW_DESKTOP_REPOSITORY=savedConfig.repository;
   settings.projects={...settings.projects,[path.resolve(savedConfig.repository).toLowerCase()]:home};
+  const {startServer} = await import(pathToFileURL(path.join(root, 'server.mjs')).href);
+  const {origin, port} = await startServer({allowPortFallback:app.isPackaged, preferredPort:settings.controllerPort});
+  if (app.isPackaged && !hasPortOverride) settings.controllerPort=port;
   await writeFile(settingsPath, JSON.stringify({...settings,home}));
-  // Refuse to attach privileged desktop APIs to an unknown listener.
-  const occupied = await fetch(origin + '/api/state', { signal: AbortSignal.timeout(1200) }).then(() => true, () => false);
-  if (occupied) throw new Error('The Branch Review address is already in use: ' + origin);
-  await import(pathToFileURL(path.join(root, 'server.mjs')).href);
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   Menu.setApplicationMenu(null);
@@ -139,6 +138,42 @@ async function launch() {
   function trusted(event) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || new URL(event.senderFrame.url).origin !== origin) throw new Error('Only the review workspace can request desktop actions.');
   }
+  ipcMain.handle('review:open-app-preview', async (event, url) => {
+    trusted(event);
+    const dest = new URL(url);
+    const loopback = ['localhost','127.0.0.1','[::1]'].includes(dest.hostname);
+    if (dest.username || dest.password || dest.protocol !== 'https:' && !(loopback && dest.protocol === 'http:')) {
+      throw Error('Open an HTTPS app preview or a local HTTP preview.');
+    }
+    await shell.openExternal(dest.href);
+  });
+  ipcMain.handle('review:open-editor', async (event, filename) => {
+    trusted(event);
+    const project = await realpath(savedConfig.repository);
+    let target = project;
+    if (filename !== undefined) {
+      if (typeof filename !== 'string' || !filename || path.isAbsolute(filename)) throw Error('Select a changed file.');
+      target = await realpath(path.resolve(project,filename));
+      const relative = path.relative(project,target);
+      if (!relative || relative === '..' || relative.startsWith('..'+path.sep) || path.isAbsolute(relative) ||
+          !await stat(target).then(info=>info.isFile())) throw Error('Select a file in this project.');
+    }
+    const editor = settings.editor || (await dialog.showOpenDialog(window, {
+      title:'Choose your IDE executable',properties:['openFile'],
+      ...(process.platform==='win32' && {filters:[{name:'Applications',extensions:['exe']}]})
+    })).filePaths[0];
+    if (!editor) return;
+    if (!path.isAbsolute(editor)) throw Error('Choose the path to your IDE executable.');
+    await new Promise((resolve,reject)=>{
+      const child = spawn(editor,[target],{cwd:project,detached:true,stdio:'ignore',windowsHide:true});
+      child.once('error',reject);
+      child.once('spawn',()=>{child.unref();resolve();});
+    });
+    if (!settings.editor) {
+      settings.editor = editor;
+      await writeFile(settingsPath, JSON.stringify(settings));
+    }
+  });
   ipcMain.handle('review:setup-help',async(event,key)=>{trusted(event);await shell.openExternal(setupUrl(key));});
   async function control(endpoint, data = {}) {
     const state = await fetch(origin + '/api/state').then(r => r.json());

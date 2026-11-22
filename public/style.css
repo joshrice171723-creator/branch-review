@@ -1116,25 +1116,18 @@ html[data-theme="dark"] #change-composer{background:#22252a;color:#f1f3f5;border
 #change-photo-tools button,#change-photo-tools select{font:inherit;padding:7px}
 #change-photo-tools p{flex-basis:100%;margin:0}
 #change-photo-canvas:focus-visible{outline:2px solid currentColor;outline-offset:3px}
-#apex-panel-dialog {
-  box-sizing: border-box; padding: 0; width: min(1480px, 97vw); max-width: 97vw;
-  height: 93dvh; max-height: 93dvh; border-radius: 12px;
-}
-#apex-panel-dialog[open] {display: flex; flex-direction: column; overflow: hidden;}
-.apex-panel-header {display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 18px; border-bottom:1px solid #cad2d8;}
-.apex-panel-header h2 {margin:0; font-size:1.05rem;}
-#apex-checkout {overflow-wrap:anywhere;}
-#apex-panel-frame {position:static; inset:auto; display:block; border:0; flex:1 1 0; min-height:0; height:auto; width:100%;}
-#apex-panel-dialog [hidden] {display:none;}
-#apex-panel-status, #install-apex-panel, #retry-apex-panel {margin:12px 18px; align-self:flex-start;}
-#apex-handoff {padding:12px 18px; overflow:auto; max-height:42vh;}
-#apex-recovery {padding:12px 18px; overflow:auto; max-height:26vh;}
-#apex-pr-draft-panel {margin-block:12px;}
-#apex-pr-draft-text {display:block; width:min(100%, 750px); margin-block:6px;}
-#apex-handoff select {max-width: min(480px,100%); margin:0 8px;}
+.header-actions > :is(#open-apex-panel,#open-project-qa,#qa-conversation) {width:auto; margin:0; padding-inline:12px; white-space:nowrap;}
+#change-workspace {display:block; min-width:0; min-height:0;}
+#change-workspace[data-qa="true"] {height:0;}
+#change-workspace[data-qa="true"] > :not(#factory-view) {display:none;}
+#apex-panel-status {margin:20px auto 0; max-width:1000px; padding:0 24px;}
+#workspace-recovery-actions {width:min(100%,1000px); margin:12px auto; padding:0 24px;}
+#workspace-recovery-actions:not(:has(> :not([hidden]))) {display:none;}
+#apex-recovery {margin:8px 0; max-height:26vh; overflow:auto;}
+.qa-delivery {display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:16px 0; padding:12px; border:1px solid var(--border,#cad2d8); border-radius:8px;}
+.qa-delivery > :is(p,ul,fieldset,section) {width:100%;}
+#approved-plan-text {white-space:pre-wrap; overflow-wrap:anywhere; max-height:26rem; overflow:auto;}
+#apex-pr-draft-text {display:block; width:100%; margin-block:6px;}
 #apex-finding-choices label {display:block; margin:6px 0;}
-#apex-review-checks img {display:block; max-width: min(100%, 560px); height:auto; margin:8px 0;}
-@media (max-width:650px) {
-  #apex-panel-dialog {width:100vw; max-width:100vw; height:100dvh; max-height:100dvh; border-radius:0;}
-  .apex-panel-header {padding:8px; flex-wrap:wrap;}
-}
+#apex-review-checks img {display:block; max-width:100%; height:auto; margin:8px 0;}
+@media (max-width:650px) {#apex-panel-status,#workspace-recovery-actions {padding-inline:12px;}}
