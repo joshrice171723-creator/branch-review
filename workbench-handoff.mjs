@@ -59,18 +59,21 @@ export async function exportHandoff(repository,runId,git) {
   const ref=await git('symbolic-ref','--quiet','HEAD');
   const commit=await git('rev-parse','HEAD');
   if(!ref.startsWith('refs/heads/') || !commitPattern.test(commit)) throw Error('Check out the committed branch for this run.');
-  const {stdout}=await execute('git',['ls-files','-z'],{cwd:root,windowsHide:true,maxBuffer:64*1024*1024});
-  const tracked=new Set(stdout.split('\0'));
-  // Linked worktrees keep their Git administrative pointer in a file named .git.
-  const sourceFiles=Object.keys(snapshot.files).filter(name=>name!=='.git');
-  if(sourceFiles.some(name=>!tracked.has(name)) || await git('status','--porcelain','--untracked-files=no')) {
-    throw Error('Commit all source files for this run before opening a branch review.');
-  }
+  await verifyCommittedSources(root,Object.keys(snapshot.files),git);
   if(await git('rev-parse','HEAD')!==commit || await git('symbolic-ref','--quiet','HEAD')!==ref) throw Error('The checkout changed during handoff.');
   const record={kind:'apex-branch-review',version:1,runId,ref,commit,sourceHash:digest,title:current.action};
   const directory=await inbox(root,['.harness','branch-review','outgoing']);
   await immutableJson(directory,runId+'.json',record,old=>old.commit===commit && old.ref===ref && old.sourceHash===digest);
   return record;
+}
+
+export async function verifyCommittedSources(root, names, git) {
+  const {stdout}=await execute('git',['ls-files','--others','--exclude-standard','-z'],
+    {cwd:root,windowsHide:true,maxBuffer:64*1024*1024});
+  const untracked=new Set(stdout.split('\0'));
+  const missing=names.find(name=>untracked.has(name) && !name.startsWith('.idea/'));
+  if(missing)throw Error('Commit project source before opening Branch Review: '+missing);
+  if(await git('status','--porcelain','--untracked-files=no'))throw Error('Commit the pending tracked changes before opening Branch Review.');
 }
 
 async function ownedFile(root, relative,limit=2_000_000) {
