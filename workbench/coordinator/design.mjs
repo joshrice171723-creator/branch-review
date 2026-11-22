@@ -243,7 +243,9 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       revision(state, payload);
       const text = sentence(payload.message, 'a mockup request');
       const {target, screenshot, keep} = payload;
-      if (target !== undefined && !['Plan', 'Preview', 'Build'].includes(target)) throw Error('Choose a target screen.');
+      const page = target === 'Project preview' && typeof payload.referencePage === 'string'
+        ? payload.referencePage.slice(0, 400) : undefined;
+      if (target !== undefined && !['Project preview', 'Plan', 'Preview', 'Build'].includes(target)) throw Error('Choose a target screen.');
       if (target && (typeof screenshot !== 'string' || screenshot.length > 8_000_000 ||
           !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(screenshot))) throw Error('Attach a screenshot of the target screen.');
       const reference = target ? Buffer.from(screenshot.slice('data:image/png;base64,'.length), 'base64') : undefined;
@@ -252,14 +254,15 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       const previous = payload.asset ? await files.path((await asset(state, payload.asset)).file) : undefined;
       const prompt = target
         ? 'Edit the attached screenshot. Preserve the visible layout and controls outside the requested change. Do not add navigation or sample conversation.\n' +
-          JSON.stringify({target, request: text, keep: typeof keep === 'string' ? keep.slice(0, 3000) : '', plan: state.plan})
+          JSON.stringify({target, page, project: projectName, request: text,
+            keep: typeof keep === 'string' ? keep.slice(0, 3000) : '', plan: state.plan})
         : JSON.stringify({request: text, ...contextOf(state)});
       const data = await image({provider, previous, reference, prompt});
       const key = id();
       return edit(async current => {
         await files.write('.harness/design/assets/' + key + '.png', data);
         current.assets.push({id: key, parent: payload.asset ?? null, prompt: text, time: now(),
-          ...(target && {target, planRevision: state.revision})});
+          ...(target && {target, page, planRevision: state.revision})});
         current.messages.push({id: id(), author: 'user', text, time: now()},
           {id: id(), author: 'agent', text: 'Mockup generated.', asset: key, time: now()});
       });
@@ -275,7 +278,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       if (!payload.context || typeof payload.context !== 'object' || Array.isArray(payload.context)) {
         throw Error('Supply the current Workbench context.');
       }
-      const fields = ['view', 'tab', 'section', 'id', 'label', 'kind', 'reviewId', 'commit', 'ref', 'scenarioId', 'scenarioTitle', 'route'];
+      const fields = ['view', 'tab', 'section', 'id', 'label', 'kind', 'reviewId', 'commit', 'ref', 'scenarioId', 'scenarioTitle', 'route', 'projectPage'];
       const screen = Object.fromEntries(fields.filter(key => typeof payload.context[key] === 'string')
         .map(key => [key, payload.context[key].slice(0, 400)]));
       const quality = screen.view === 'quality' ? await qualityDraft?.() : null;
@@ -289,7 +292,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         context.planControls = {
           'Project conversation': 'The top button opens or closes this conversation.',
           'Draft a plan': 'Opens this conversation and focuses the message box.',
-          'Open project conversation': 'The button under Design the change opens the same conversation and focuses the message box.',
+          'Capture this view': 'Captures the project app from the live preview beside the Plan editor.',
           'Ask planner to update draft': 'Sends the message to the planner to update the draft.'
         };
       }
@@ -298,7 +301,8 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         'activeProject is the selected project and this project conversation is already open. Use this app state over earlier messages. ' +
         'When the user asks to use this project, confirm the active project and continue with their request. ' +
         'Do not ask the user to select the active project or open this conversation. Answer UI questions using planControls when present. ' +
-        'The two Plan shortcuts add no starter prompt or extra context. Offer distinct next steps when a decision is needed. ' +
+        'screen.projectPage is the selected page in the live project preview. screen.tab is the Branch Review workspace tab. ' +
+        'Ask which project screen the user means if the page context is missing and their request is ambiguous. Offer choices when possible. ' +
         'On Design Plan, treat a request to change the project as a request for a build plan, even when the user does not say plan. ' +
         'Use the conversation to resolve references such as "do that". Ask a focused question with choices if the intended change is unclear. ' +
         'For a clear change request, include one proposal and tell the user they can review it and start the build. ' +

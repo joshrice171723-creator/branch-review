@@ -223,6 +223,7 @@ summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .mockup { display:block; max-width:100%; max-height:520px; object-fit:contain; }
 .milestone .mockup, .conversation .mockup { max-height:170px; }
 .preview-frame iframe { display:block; width:100%; min-height:60vh; border:1px solid var(--border); }
+.preview-frame iframe:fullscreen { width:100vw; height:100vh; border:0; background:white; }
 .steps details, .attempt { padding:8px 12px; border-bottom:1px solid var(--border); }
 .design-stack summary { cursor:pointer; padding:6px 0; font-weight:600; }
 .runtime-spinner { display:inline-block; width:12px; height:12px; margin-right:7px; border-radius:50%; border:2px solid var(--border); border-top-color:var(--accent); animation:runtime-turn 1s linear infinite; }

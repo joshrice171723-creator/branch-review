@@ -142,11 +142,11 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   state = await action('design/answer', {revision: state.revision, mode: 'task', id: state.question.id, message: 'Welcome'});
   state = await action('design/guide', {revision: state.revision, mode: 'task', message: 'Revise this plan.',
     conversationModel: {provider: 'Codex', model: 'gpt-6.2-sol', effort: 'low'},
-    context: {view: 'workflow', tab: 'Plan', activeProject: 'Other project', conversationOpen: false}});
+    context: {view: 'workflow', tab: 'Plan', projectPage: '/appointments', activeProject: 'Other project', conversationOpen: false}});
   const context = JSON.parse(prompt.split('\n').find(line => line.startsWith('{"activeProject":')));
   assert.equal(context.activeProject, path.basename(repository));
   assert.equal(context.conversationOpen, true);
-  assert.deepEqual(context.screen, {view: 'workflow', tab: 'Plan'});
+  assert.deepEqual(context.screen, {view: 'workflow', tab: 'Plan', projectPage: '/appointments'});
   assert.match(context.planControls['Draft a plan'], /focuses the message box/);
   assert.equal(requestedModel, 'gpt-6.2-sol');
   assert.equal(requestedEffort, 'low');
@@ -154,13 +154,15 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   assert.match(state.plan, /Use Welcome/);
   assert.equal(state.messages.at(-1).proposal.plan, 'Revised plan');
   assert.equal(state.messages.at(-1).proposal.before.plan, state.plan);
-  const mockup = {revision: state.revision, target: 'Plan', message: 'Remove the shortcuts.', keep: 'Plan editor'};
+  const mockup = {revision: state.revision, target: 'Project preview', referencePage: '/appointments',
+    message: 'Add a confirmation button.', keep: 'Appointment details'};
   await assert.rejects(action('design/image', mockup), /Attach a screenshot/);
   const image = Buffer.from('reference bytes');
   state = await action('design/image', {...mockup, screenshot: 'data:image/png;base64,' + image.toString('base64')});
   assert.deepEqual(mockupRequest.reference, image);
-  assert.match(mockupRequest.prompt, /"target":"Plan"/);
-  assert.match(mockupRequest.prompt, /"keep":"Plan editor"/);
+  assert.match(mockupRequest.prompt, /"target":"Project preview"/);
+  assert.match(mockupRequest.prompt, /"keep":"Appointment details"/);
+  assert.equal(state.assets.at(-1).page, '/appointments');
   assert.equal(state.assets.at(-1).planRevision, mockup.revision);
 });
 

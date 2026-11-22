@@ -434,9 +434,6 @@ function designPanel(initialState) {
     return result;
   }
   function conversationActions() {
-    if (embedded) return box("Design the change",
-      button("Open project conversation", () => projectConversation.open(), "button primary"),
-      button("Generate mockup", () => projectConversation.openMockup()));
     const slices = (localDraft.plan?.roadmap || state.roadmap).flatMap(row => row.slices.map(slice =>
       [slice.id, row.title + " / " + slice.title]));
     function selectSlice(id) {
@@ -454,7 +451,7 @@ function designPanel(initialState) {
     if (!assets.length) return box("Mockup versions", generate);
     if (!assets.some(a => a.id === selectedAsset)) selectedAsset = assets.at(-1).id;
     const choices = select(selectedAsset, assets.map((a, i) => [a.id, "Version " + (i + 1) + " · " +
-      (a.target ? a.target + " · Plan revision " + a.planRevision : a.prompt)]),
+      (a.target ? [a.target, a.page, "Plan revision " + a.planRevision].filter(Boolean).join(" · ") : a.prompt)]),
       id => { selectedAsset = id; draw(); return true; });
     const revise = element("textarea");
     revise.dataset.designFocus = "mockup";
@@ -468,12 +465,14 @@ function designPanel(initialState) {
       ...(embedded ? [] : [field("Roadmap slice", target)]),
       button("Attach this version", () => change("attach", {asset: selectedAsset, ...(embedded ? {} : {slice: target.value})})));
   }
-  function preview() {
+  function preview(inPlan = false) {
     const mount = element("div", "preview-frame");
     const address = input(previewDraft.address ?? state.preview ?? "", "App address", value => { previewDraft.address = value; });
     address.dataset.designFocus = "preview";
     address.placeholder = "http://localhost:3000";
-    const save = button("Save app address", () => change("settings", {preview: address.value.trim(), branch: state.branch}));
+    const save = button("Save app address", async () => {
+      if (await change("settings", {preview: address.value.trim(), branch: state.branch})) await checkAddress();
+    });
     const open = element("a", "button", "Open app preview");
     open.target = "_blank";
     open.rel = "noopener";
@@ -483,9 +482,52 @@ function designPanel(initialState) {
       Promise.resolve(hostOptions.openPreview(open.href)).catch(error => notify(error.message));
     };
     const previewStatus = element("p", "design-status");
-    const embedded = element("div");
-    mount.append(open, previewStatus, embedded);
+    const viewport = element("div");
+    const fullScreen = button("Full screen", () => {
+      viewport.querySelector("iframe")?.requestFullscreen().catch(error => notify(error.message));
+    });
+    const captureView = button("Capture this view", () => projectConversation.capturePreview?.());
+    const refreshView = button("Reload page", () => {
+      const frame = viewport.querySelector("iframe");
+      if (frame) frame.src = frame.src;
+    });
+    const pages = element("div");
+    const tools = element("div", "actions", open, fullScreen, refreshView, captureView);
+    mount.append(tools, pages, previewStatus, viewport);
     let process, checked, source, timer, pending = false, version = 0;
+    let pageAddress = "", baseAddress = "";
+    const publishView = () => {
+      const frame = viewport.querySelector("iframe");
+      if (mount.isConnected) projectConversation.setPreview?.(frame ? {frame, address: pageAddress} : null);
+    };
+    function loadPage(url) {
+      pageAddress = url;
+      viewport.replaceChildren();
+      if (url) {
+        const frame = element("iframe");
+        frame.title = projectState.project.label + " app preview";
+        frame.setAttribute("sandbox", "allow-forms allow-scripts allow-same-origin");
+        frame.src = url;
+        viewport.append(frame);
+        open.href = url;
+      }
+      fullScreen.hidden = refreshView.hidden = captureView.hidden = !url;
+      publishView();
+    }
+    function showPages(url) {
+      pages.replaceChildren();
+      if (!url) return;
+      api("quality/routes").then(({routes}) => {
+        if (!mount.isConnected || baseAddress !== url) return;
+        const paths = [...new Set((routes || []).filter(row => row.method === "GET" &&
+          /^\/(?!\/)[^:*{}()?#\\]*$/.test(row.path)).map(row => row.path))].slice(0, 150);
+        if (paths.length) pages.append(field("Project page", select("", [["", "Preview start page"],
+          ...paths.map(path => [path, path])], path => {
+          loadPage(path ? new URL(path, url).href : url);
+          return true;
+        })));
+      }).catch(() => {});
+    }
     const previewMode = select(previewDraft.mode || "web", [["web", "Web preview"], ["process", "Desktop or command output"]], value => {
       previewDraft.mode = value;
       if (value === "process") details.open = true;
@@ -504,18 +546,16 @@ function designPanel(initialState) {
       const target = selected?.url || selected?.address;
       open.hidden = !target;
       if (target) open.href = target;
-      previewStatus.textContent = selected?.status || "";
+      previewStatus.textContent = selected?.status || (!target ? "Set up a preview to load this project's app." : "");
+      if (selected?.url && new URL(selected.url).origin === location.origin) {
+        previewStatus.textContent = "Choose the project's preview address.";
+        selected = null;
+      }
       if (source === selected?.url) return;
       source = selected?.url;
-      embedded.replaceChildren();
-      if (source) {
-        const frame = element("iframe");
-        frame.title = "Project app preview";
-        const separate = new URL(source).origin !== location.origin;
-        frame.setAttribute("sandbox", "allow-forms allow-scripts" + (separate ? " allow-same-origin" : ""));
-        frame.src = source;
-        embedded.append(frame);
-      }
+      baseAddress = source;
+      loadPage(source || "");
+      showPages(source);
     }
     async function checkAddress() {
       try { checked = await api("design/preview"); }
@@ -629,10 +669,14 @@ function designPanel(initialState) {
     }
     const reload = button("Refresh preview", () => { checkAddress(); refresh(); });
     queueMicrotask(() => { checkAddress(); refresh(); });
-    return element("div", "design-stack", box("Project app preview", field("App address", address),
-      element("div", "actions", save, reload), mount),
-    box("Manage preview process", discovered, field("Preview mode", previewMode), field("Executable", program), field("Arguments (one literal argument per line)", args),
-      field("Working directory", cwd), element("div", "actions", start, stop), processStatus, details));
+    fullScreen.hidden = refreshView.hidden = captureView.hidden = true;
+    const setup = box("Manage preview process", discovered, field("Preview mode", previewMode), field("Executable", program),
+      field("Arguments (one literal argument per line)", args), field("Working directory", cwd),
+      element("div", "actions", start, stop), processStatus, details);
+    const addressControls = element("div", "design-stack", field("App address", address), element("div", "actions", save, reload));
+    if (inPlan) return box("Live project preview", mount,
+      element("details", "", element("summary", "", "Preview setup"), addressControls, setup));
+    return element("div", "design-stack", box("Project app preview", addressControls, mount), setup);
   }
   function review(build, group, index, continueBuild) {
     const target = {build: build.id, group: index, sha: group.sha, slices: group.slices};
@@ -1041,10 +1085,22 @@ function designPanel(initialState) {
       return node;
     }));
     const layout = layoutSetting("panes") || "beside";
-    body.replaceChildren(tab === "Plan" ? element("div","design-stack",
-      element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), editor()),
-      progressPanel(() => openTab("Build"), syncProgress)) :
-      tab === "Mockups" ? mockups() : tab === "Preview" ? preview() : buildPanel());
+    if (tab === "Plan" && embedded) {
+      const columns = body.querySelector(":scope > [data-plan-columns]") ||
+        element("div", "", preview(true), element("div"));
+      columns.dataset.planColumns = "";
+      columns.className = layout === "beside" ? "design-columns" : "design-stack";
+      columns.lastElementChild.replaceChildren(editor());
+      const progress = progressPanel(() => openTab("Build"), syncProgress);
+      if (columns.parentNode === body) body.lastElementChild.replaceWith(progress);
+      else body.replaceChildren(columns, progress);
+    } else {
+      if (tab !== "Preview") projectConversation.setPreview?.(null);
+      body.replaceChildren(tab === "Plan" ? element("div","design-stack",
+        element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), editor()),
+        progressPanel(() => openTab("Build"), syncProgress)) :
+        tab === "Mockups" ? mockups() : tab === "Preview" ? preview() : buildPanel());
+    }
     guideNext();
     if (tab === "Plan") tabs.append(button(layout === "beside" ? "Stack panes" : "Show panes side by side", () => {
       layoutSetting("panes", layout === "beside" ? "stack" : "beside"); draw();
@@ -1136,25 +1192,6 @@ function designPanel(initialState) {
       }
       openTab("Build");
       if (!await change("continue", {build}, {wait: "Starting repair…"})) throw Error(status.textContent);
-    };
-    projectConversation.previewCleanup = () => {
-      const sample = element("div", "design-stack");
-      sample.inert = true;
-      const panel = editor();
-      const toolbar = element("div", "actions", button("Project conversation", () => {}));
-      function show(original) {
-        const shortcuts = original ? [
-          ...(!state.plan.trim() && !localDraft.plan ? [button("Draft a plan", () => {}, "button primary")] : []),
-          conversationActions()
-        ] : [];
-        sample.replaceChildren(toolbar, ...shortcuts, panel);
-      }
-      show(false);
-      showDialog("Plan cleanup preview",
-        field("Preview version", select("proposed", [["proposed", "Proposed"], ["original", "Original"]], value => {
-          show(value === "original");
-          return true;
-        })), sample);
     };
     projectConversation.goToDesign = (next, focus) => {
       tab = next;
