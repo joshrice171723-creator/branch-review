@@ -196,7 +196,10 @@ function connectProjectConversation(initial) {
       update(saved, true);
     }
     renderMessages();
-    notify(undo ? "Proposal undone." : "Proposal applied.");
+    if (!undo && proposal.kind === "plan") {
+      route("workflow", "Plan", "plan-approve");
+      notify("Plan saved. Review it before you start the build.");
+    } else notify(undo ? "Proposal undone." : "Proposal applied.");
   }
   function edit(proposal) {
     if (proposal.kind === "quality") {
@@ -222,7 +225,8 @@ function connectProjectConversation(initial) {
     const fields = proposal.kind === "plan" ? planFields(proposal) :
       proposal.kind === "quality" ? proposal.definition : proposal.fields;
     const action = accepted[item.id] ? button("Undo", () => perform("Undoing proposal…", () => revise(item, true))) :
-      button("Apply", () => perform("Applying proposal…", () => revise(item, false)), "button primary");
+      button(proposal.kind === "plan" ? "Save and review plan" : "Apply",
+        () => perform("Applying proposal…", () => revise(item, false)), "button primary");
     return element("div", "conversation-proposal", element("strong", "", proposal.title),
       element("details", "", element("summary", "", "Proposed changes"), element("pre", "", JSON.stringify(fields, null, 2))),
       element("div", "actions", action, button("Edit", () => edit(proposal))));

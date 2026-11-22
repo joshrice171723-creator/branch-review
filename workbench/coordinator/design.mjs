@@ -290,7 +290,10 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         'When the user asks to use this project, confirm the active project and continue with their request. ' +
         'Do not ask the user to select the active project or open this conversation. Answer UI questions using planControls when present. ' +
         'The two Plan shortcuts add no starter prompt or extra context. Offer distinct next steps when a decision is needed. ' +
-        'Only if requested, include one proposal. Plan proposals contain kind=plan, title and complete plan with observable acceptance bullets. ' +
+        'On Design Plan, treat a request to change the project as a request for a build plan, even when the user does not say plan. ' +
+        'Use the conversation to resolve references such as "do that". Ask a focused question with choices if the intended change is unclear. ' +
+        'For a clear change request, include one proposal and tell the user they can review it and start the build. ' +
+        'Plan proposals contain kind=plan, title and complete plan with observable acceptance bullets. ' +
         'Include a roadmap only for an existing roadmap workflow. Settings proposals contain kind=settings, title, branch or preview. ' +
         'Quality proposals contain kind=quality, title and complete definition. Preserve unrelated fields. ' +
         'Use literal command arguments and working directories from project evidence. Do not modify files or claim a proposal was applied.\n' +
