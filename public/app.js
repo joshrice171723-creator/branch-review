@@ -8,6 +8,7 @@ import {activity} from './activity.js';
 import { workflow } from './workflow.js';
 import { reviewShortcut, refreshedSelection, selectedReviewState } from './shortcuts.js';
 import {workbench} from './workbench.js';
+import {apexPanel} from './apex-panel.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
 function dismissOverlays() {
@@ -97,6 +98,7 @@ document.body.append($('change-composer'));
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
+const projectWorkbench=apexPanel({api, getState:()=>currentState, openBranch});
 $('toolbar-review').onclick=()=>reviewTools.open('plan');
 $('toolbar-agent').onclick=()=>reviewTools.open('updates');
 const evidenceMenu=document.createElement('button');evidenceMenu.textContent='Evidence tools';evidenceMenu.className='secondary';evidenceMenu.onclick=()=>reviewTools.open('evidence');$('item-more').append(evidenceMenu);
@@ -316,10 +318,11 @@ async function select(branch,reveal=false) {
     error(e.message);
   }
 }
-async function openBranch(branch) {
-  if(currentState.busy || openingSelection?.starting)return;
-  if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha && (!branch.fixJob || currentState.record.fixComparison))return;
-  if(!await reviewWorkflow.flush())return;
+async function openBranch(branch, workbenchRun) {
+  if(workbenchRun) await poll();
+  if(currentState.busy || openingSelection?.starting)return false;
+  if(currentState.status==='ready' && currentState.record?.identity.ref===branch.ref && currentState.record.identity.source===branch.sha && (!branch.fixJob || currentState.record.fixComparison))return true;
+  if(!await reviewWorkflow.flush())return false;
   openingSelection={...branch,starting:true};selected=branch;selectedComparison=null;
   openingSummary.textContent=`${branchTitle(branch)} · ${branch.name} · ${branch.sha.slice(0,7)}`;
   try{sessionStorage.setItem('branch-review:opening',JSON.stringify(openingSelection));}catch{}
@@ -328,8 +331,8 @@ async function openBranch(branch) {
   $('loading').hidden=false;$('empty').hidden=true;$('loading-label').textContent='OPENING REVIEW';$('phase').textContent=`Opening ${branch.name}…`;
   $('original-sha').textContent='';$('changed-sha').textContent='';error('');branchList();
   $('context').textContent=`Opening ${branch.name}…`;
-  try{await api('/api/start',{ref:branch.ref,baseline:'main',...(branch.fixJob?{fixJob:branch.fixJob}:{})});openingSelection.starting=false;await poll();}
-  catch(e){openingSelection.starting=false;currentState.busy=false;error(e.message);$('loading').hidden=true;branchList();}
+  try{await api('/api/start',{ref:branch.ref,baseline:'main',...(branch.fixJob?{fixJob:branch.fixJob}:{}),...(workbenchRun?{workbenchRun}:{})});openingSelection.starting=false;await poll();return true;}
+  catch(e){openingSelection.starting=false;currentState.busy=false;error(e.message);$('loading').hidden=true;branchList();if(workbenchRun)throw e;return false;}
 }
 async function openDiff(filename,comparison=selectedComparison) {
   if(!comparison)return;
@@ -631,7 +634,8 @@ window.addEventListener("message", (event) => {
 });
 await poll();
 const setupGuide=onboarding({api,settings:()=>reviewTools.open('workspace'),refresh:async()=>{await poll();await loadBranches();error('');}});
-void setupGuide.initialize();
+if (location.hash === '#workbench' || new URLSearchParams(location.search).has('workbenchRun')) await projectWorkbench.open();
+else void setupGuide.initialize();
 await loadBranches().catch((e) => error(e.message));
 setInterval(poll, 2000);
 setInterval(()=>{if(!currentState.busy)void loadBranches(false).catch(e=>error(e.message));},30000);

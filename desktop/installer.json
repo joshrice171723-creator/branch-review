@@ -9,8 +9,11 @@
   "files": [
     "*.mjs",
     "*.rb",
+    "workbench-install.py",
+    "workbench-release/*",
     "public/**/*",
     "desktop/main.cjs",
+    "desktop/local-origin.cjs",
     "desktop/welcome.html",
     "desktop/welcome.js",
     "desktop/welcome-preload.cjs",

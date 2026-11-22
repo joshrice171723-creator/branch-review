@@ -112,8 +112,10 @@ test('plan tooling writes stay in a detached checkout and never dirty the active
   const base=await git('rev-parse','HEAD');await writeFile(path.join(preview,'change.txt'),'Changed');await git('add','.');await git('commit','-m','change');
   const changed=await git('rev-parse','HEAD'),indexBefore=await readFile(path.join(preview,'.git','index'));
   const jobs=await new ReviewJobs(directory,{git,run,changedCwd:()=>preview,codex:'test-codex'}).load();
-  jobs.command=async(job,command,args,cwd)=>{
+  jobs.command=async(job,command,args,cwd,prompt)=>{
     assert.notEqual(cwd,preview);assert.equal(cwd,job.worktree);assert.equal(args[args.indexOf('-C')+1],cwd);
+    assert.match(prompt,/diff --git a\/change\.txt b\/change\.txt/);
+    assert.match(prompt,/^\+Changed$/m);
     assert.equal(args[args.indexOf('--sandbox')+1],'read-only');
     assert.equal(await run('git',['rev-parse','HEAD'],{cwd}),changed);
     assert.equal(await run('git',['branch','--show-current'],{cwd}),'');

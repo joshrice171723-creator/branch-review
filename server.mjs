@@ -3,6 +3,9 @@ import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
+import {completedRuns, createRepair, exportHandoff, readHandoff, returnFindings, selectHandoffBranch} from './workbench-handoff.mjs';
+import localOrigin from './desktop/local-origin.cjs';
+import {projectPanel} from './apex-panel.mjs';
 import {npmEntry} from './web-project.mjs';
 import http from 'node:http';
 import { readFile, writeFile, access, rename, stat, mkdir, open, unlink } from 'node:fs/promises';
@@ -26,7 +29,10 @@ import { reviewReport } from './report.mjs';
 import { previewHealth } from './health.mjs';
 import {groupedBranches,consolidateFixBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan,appearanceFixPlan} from './fix-review.mjs';
 
-const port = 4310, origin = `http://127.0.0.1:${port}`, token = randomBytes(32).toString('hex');
+const {port, origin} = localOrigin;
+const apex = projectPanel(repo,process.env.APEX_WORKBENCH_URL,origin);
+process.once('exit', () => apex.close());
+const token = randomBytes(32).toString('hex');
 let busy = false, preparedFix=null;
 let displayDefaultBranch=await defaultBranch().catch(()=>null);
 const store = await new ReviewStore(local).load();
@@ -105,8 +111,9 @@ async function startCandidate(ref, previousReviewId, expectedCommit) {
   if(!warmed)preparedFix=null;
   state.status=warmed?'preview-ready':'preparing';state.recordId=null;if(!warmed)state.manifest=null;progress(warmed?'Opening your prepared review':'Checking changes against the remote default branch');
   const selected=warmed?.selected || await comparison(ref,'main');
+  if (expectedCommit && selected.branch.sha !== expectedCommit) throw new Error('The selected branch changed before its review opened.');
   const previous=store.records.findLast(record=>record.identity.ref===ref && record.integration)?.integration;
-  const integration=warmed?.integration || await delivery.prepare(ref,selected.branch.sha,previous);
+  const integration=warmed?.integration || await delivery.prepare(ref,expectedCommit || selected.branch.sha,previous);
   const combined=warmed?.combined || await candidateComparison(git,selected,integration);
   const prior=previousReviewId?store.get(previousReviewId):null;
   const fixFiles=prior?(await git('diff','--name-only','-z',prior.identity.changed,integration.sha,'--')).split('\0').filter(Boolean):[];
@@ -177,6 +184,11 @@ function json(res,status,data) { res.writeHead(status,{'Content-Type':'applicati
 async function body(req) { let buffer=''; for await(const chunk of req) { buffer += chunk; if(Buffer.byteLength(buffer)>16_000_000) throw new Error('Request too large'); } return JSON.parse(buffer || '{}'); }
 const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>readRecipe(local),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
 async function mutate(endpoint, data) {
+  if (endpoint === '/api/workbench-export') return exportHandoff(repo,data.runId,git);
+  if (endpoint === '/api/workbench-repair') return createRepair(repo,data,git);
+  if (endpoint === '/api/workbench-findings') {
+    return returnFindings(repo, data.runId, store.get(data.reviewId), data.findings);
+  }
   if(qaRunning() && !['/api/browser-qa-result','/api/check','/api/item','/api/cursor','/api/issue'].includes(endpoint))throw Error('Stop browser QA before changing its review, settings or runtime.');
   if(['/api/version-preview','/api/version-latest','/api/version-restore'].includes(endpoint)){
     if(jobs.rows.some(row=>row.status==='running'))throw Error('Wait for the running job before changing versions.');
@@ -245,11 +257,18 @@ async function mutate(endpoint, data) {
   if(endpoint==='/api/tools-settings'){if(typeof data.autoPlan!=='boolean')throw new Error('Choose whether to generate plans automatically.');const next={autoPlan:data.autoPlan};await writeFile(path.join(local,'tools-settings.json'),JSON.stringify(next));toolsSettings=next;return next;}
   if (endpoint === '/api/start') {
     let prior,expectedCommit;
+    if (data.workbenchRun) {
+      const handoff = await readHandoff(repo, data.workbenchRun);
+      selectHandoffBranch(handoff, await branches());
+      if (handoff.ref !== data.ref) throw new Error('Select the exact branch from the Workbench run.');
+      expectedCommit = handoff.commit;
+    }
     const tip=await git('rev-parse',data.ref);
     const fixJob=data.fixJob || jobs.rows.findLast(row=>row.branch && data.ref==='refs/heads/'+row.branch && row.status==='succeeded' && row.resultCommit===tip)?.id;
     if(fixJob){
       const job=jobs.rows.find(row=>row.id===fixJob && row.kind==='fix' && row.status==='succeeded');
       if(!job || data.ref!=='refs/heads/'+job.branch)throw new Error('Choose an unchanged, committed fix job before retesting.');
+      if (expectedCommit && expectedCommit !== job.resultCommit) throw new Error('The fix job belongs to another commit.');
       expectedCommit=job.resultCommit;
       if(job.reviewId)prior=store.get(job.reviewId);
     }
@@ -366,6 +385,8 @@ const actions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','/api
 const longActions=new Set(['/api/start','/api/stop','/api/fetch','/api/retest','/api/candidate','/api/ship','/api/publish']);
 actions.add('/api/published-review');
 actions.add('/api/tools-settings');
+actions.add('/api/workbench-findings');
+for (const endpoint of ['/api/workbench-open','/api/workbench-install','/api/workbench-export','/api/workbench-repair']) actions.add(endpoint);
 actions.add('/api/fix-commit');
 actions.add('/api/retry-muse');
 actions.add('/api/agent-settings');actions.add('/api/agent-probe');
@@ -382,10 +403,16 @@ longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
 const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
   try {
     if(req.headers.host!==`127.0.0.1:${port}`) return json(res,403,{error:'Invalid host'});
+    if(apex.handle(req,res)) return;
     // Loopback cookies cross ports; retire old revisions before their headers grow too large.
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
+    if (req.method === 'GET' && url.pathname === '/api/workbench') return json(res,200,await apex.status());
+    if (req.method === 'GET' && url.pathname === '/api/workbench-runs') return json(res,200,await completedRuns(repo));
+    if (req.method === 'GET' && url.pathname === '/api/workbench-handoff') {
+      return json(res, 200, await readHandoff(repo, url.searchParams.get('run')));
+    }
     if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await readRecipe(local).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await consolidateFixBranches(groupedBranches(await branches(),jobs.rows,store.records),git));
     if(req.method==='GET' && url.pathname==='/api/qa-review')return json(res,200,store.get(url.searchParams.get('id')));
@@ -424,6 +451,12 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     if(req.method==='GET' && /^\/recordings\/[a-f0-9-]{36}\.webm$/.test(url.pathname)){const clip=await readFile(path.join(local,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':'video/webm','Content-Length':clip.length,'Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'"});return res.end(clip);}
     if(req.method==='POST' && actions.has(url.pathname)) {
       if(req.headers.origin!==origin || req.headers['x-review-token']!==token) return json(res,403,{error:'Reload Branch Review before continuing.'});
+      if(url.pathname==='/api/workbench-open') return json(res,200,{result:await apex.open()});
+      if(url.pathname==='/api/workbench-install') {
+        if(busy || jobs.rows.some(job=>job.status==='running')) return json(res,409,{error:'Wait for the active review operation before installing Workbench.'});
+        busy=true;
+        try {return json(res,200,{result:await apex.install()});} finally {busy=false;}
+      }
       if(url.pathname==='/api/job-cancel')return json(res,200,{result:await jobs.cancel((await body(req)).jobId)});
       if(busy) return json(res,409,{error:'Another operation is still running.'});
       busy=true;
@@ -433,9 +466,9 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/photo-markup.js','/branch-history.js','/batch-review.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css','/theme.js'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/apex-panel.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/photo-markup.js','/branch-history.js','/batch-review.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css','/theme.js'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
-    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:4311 http://127.0.0.1:4312 http://127.0.0.1:4313; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
+    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' "+apex.frameOrigin+" http://127.0.0.1:4311 http://127.0.0.1:4312 http://127.0.0.1:4313; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
   }catch(error){if(!res.headersSent)json(res,400,{error:error.message});else res.end();}
 });

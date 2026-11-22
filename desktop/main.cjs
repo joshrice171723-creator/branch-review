@@ -9,7 +9,7 @@ const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const exec = promisify(execFile);
-const origin = 'http://127.0.0.1:4310';
+const {origin} = require('./local-origin.cjs');
 if (!app.isPackaged && process.env.BRANCH_REVIEW_DEV === '1') {
   const devRoot = path.resolve(__dirname, '..', '.local-dev');
   app.setPath('userData', path.join(devRoot, 'desktop'));
@@ -94,7 +94,7 @@ async function launch() {
   await writeFile(settingsPath, JSON.stringify({...settings,home}));
   // Refuse to attach privileged desktop APIs to an unknown listener.
   const occupied = await fetch(origin + '/api/state', { signal: AbortSignal.timeout(1200) }).then(() => true, () => false);
-  if (occupied) throw new Error('Port 4310 is already in use. Close the existing Branch Review server, then open this app again.');
+  if (occupied) throw new Error('The Branch Review address is already in use: ' + origin);
   await import(pathToFileURL(path.join(root, 'server.mjs')).href);
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);

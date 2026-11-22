@@ -1,5 +1,16 @@
 # Branch Review
 
+Open **Workbench** in the toolbar to use the selected repository’s Apex harness. The panel includes Design, Live run, and History.
+For a new project, select **Install Workbench for this project**. The bundled release requires Ruby, Python, and Node.
+The panel operates on the displayed project checkout. Branch Review keeps its isolated comparison previews.
+
+Use **Review handoff** to select a completed run on its committed branch. Open **Review this commit** to inspect it.
+After review, select unresolved findings and choose **Prepare repair task**. Review the action and scope, then create the new task.
+The handoff records the completed run, source fingerprint, Git commit, review ID, and selected findings.
+
+Set `APEX_WORKBENCH_URL` to a running project-bound panel to reuse its service. Branch Review checks the project identity before opening it.
+Set `BRANCH_REVIEW_PORT` to use another local port. The three preview ports remain reserved for branch comparisons.
+
 A local desktop workspace for reviewing changes in Git projects: choose a branch, compare isolated versions, report findings, ask Codex for a fix, and retest within the same review.
 
 **[Download the Windows beta](https://github.com/joshrice171723-creator/branch-review/releases/tag/v0.6.0)** · [Installation guide](INSTALL.md) · [Run from source](#get-started)
