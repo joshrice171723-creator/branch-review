@@ -3,7 +3,7 @@ import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
-import {completedRuns, createRepair, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, selectHandoffBranch, workbenchReview} from './workbench-handoff.mjs';
+import {completedRuns, createRepair, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, selectHandoffBranch, workbenchMockup, workbenchReview} from './workbench-handoff.mjs';
 import localOrigin from './desktop/local-origin.cjs';
 import {projectPanel} from './apex-panel.mjs';
 import {npmEntry} from './web-project.mjs';
@@ -192,7 +192,7 @@ async function mutate(endpoint, data) {
   if (endpoint === '/api/workbench-export') return exportHandoff(repo,data.runId,git);
   if (endpoint === '/api/workbench-repair') return createRepair(repo,data,git);
   if (endpoint === '/api/workbench-push') {
-    const receipt=await pushWorkbenchReview(repo,data.runId,data.commit,store.records,git);
+    const receipt=await pushWorkbenchReview(repo,data.runId,data.commit,store.records,git,data.expectedTarget);
     await store.event(store.get(receipt.reviewId),'workbench-branch-pushed',{runId:data.runId,...receipt});
     return receipt;
   }
@@ -423,6 +423,11 @@ const server=http.createServer({maxHeaderSize:128*1024},async(req,res)=>{
     if (req.method === 'GET' && url.pathname === '/api/workbench-runs') return json(res,200,await completedRuns(repo));
     if (req.method === 'GET' && url.pathname === '/api/workbench-review') return json(res,200,
       await workbenchReview(repo,url.searchParams.get('run'),store.records,git));
+    if (req.method==='GET' && url.pathname==='/api/workbench-mockup'){
+      const data=await workbenchMockup(repo,url.searchParams.get('run'),url.searchParams.get('slice'));
+      res.writeHead(200,{'Content-Type':'image/png','Content-Length':data.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+      res.end(data);return;
+    }
     if (req.method === 'GET' && url.pathname === '/api/workbench-handoff') {
       return json(res, 200, await readHandoff(repo, url.searchParams.get('run')));
     }

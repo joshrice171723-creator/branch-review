@@ -112,7 +112,8 @@ export async function workbenchReview(repository, runId, records, git) {
   const record = records.findLast(({identity}) => identity.workbenchRun === runId &&
     identity.repository === repository && identity.ref === handoff.ref && identity.source === handoff.commit);
   const tip = await git('rev-parse','--verify',handoff.ref).catch(() => null);
-  const result = {runId, ref:handoff.ref, commit:handoff.commit, status:'waiting', checklist:[], findings:[]};
+  const slices=await reviewSlices(repository,handoff);
+  const result = {runId, ref:handoff.ref, commit:handoff.commit, status:'waiting', slices, checklist:[], findings:[]};
   if (tip !== handoff.commit) return {...result, status:'branch-changed'};
   if (!record) return result;
   const reviewedCommit = record.identity.changed;
@@ -122,15 +123,43 @@ export async function workbenchReview(repository, runId, records, git) {
     record.approval.identity === digest(record.identity) && canApprove(record);
   const status = findings.length ? 'changes-requested' : approved ? 'approved' :
     reviewedCommit === handoff.commit ? 'reviewing' : 'different-preview';
+  const destination=approved ? await githubTarget(git,handoff.ref).catch(()=>null) : null;
   return {...result, status, reviewId:record.id, reviewedCommit, checklist, findings,
+    pushTarget:destination?.repository || null,
     approval:approved ? {reviewer:record.approval.reviewer, at:record.approval.at} : null};
 }
 
-export async function pushWorkbenchReview(repository, runId, expectedCommit, records, git) {
-  const review = await workbenchReview(repository,runId,records,git);
-  if (review.status !== 'approved' || review.commit !== expectedCommit)
-    throw Error('Approve the current source commit in Branch Review before pushing.');
-  const branch = review.ref.slice('refs/heads/'.length);
+async function reviewSlices(repository,handoff) {
+  const root=await realpath(repository);
+  let groupData;
+  try {groupData=await ownedFile(root,path.join('.harness','loops',handoff.runId,'design.json'));}
+  catch(error){if(error.code==='ENOENT')return [];throw error;}
+  const workspace=await ownedFile(root,path.join('.harness','design','workspace.json'),32_000_000);
+  const build=workspace.builds.find(b=>b.id===groupData.build);
+  const attempt=build?.attempts.findLast(a=>a.task===handoff.runId && a.outcome==='completed');
+  const group=build?.groups.find(g=>g.sha===handoff.commit && g.slices.includes(attempt?.slice));
+  if(!group)return [];
+  const slices=build.roadmap.flatMap(m=>m.slices);
+  return group.slices.map(id=>{
+    const asset=build.attachments?.[id];
+    return {id,title:slices.find(slice=>slice.id===id)?.title || id,mockup:/^[a-f0-9]{32}$/.test(asset)?asset:null};
+  });
+}
+
+export async function workbenchMockup(repository,runId,sliceId) {
+  const handoff=await readHandoff(repository,runId);
+  const slice=(await reviewSlices(repository,handoff)).find(s=>s.id===sliceId);
+  if(!slice?.mockup)throw Error('No mockup is attached to this reviewed slice.');
+  const root=await realpath(repository);
+  const file=path.join(root,'.harness','design','assets',slice.mockup+'.png');
+  if(await realpath(file)!==file || (await stat(file)).size>32*1024*1024)throw Error('Invalid project mockup.');
+  const data=await readFile(file);
+  if(data.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Invalid project mockup.');
+  return data;
+}
+
+async function githubTarget(git,ref) {
+  const branch=ref.slice('refs/heads/'.length);
   await git('check-ref-format','--branch',branch);
   // Push the branch named on the review. Use its configured push remote, or origin for new branches.
   const readSetting = async key => (await git('config','--get',key).catch(() => '')).trim();
@@ -140,11 +169,23 @@ export async function pushWorkbenchReview(repository, runId, expectedCommit, rec
   const address = (await git('remote','get-url','--push','--all',remote)).trim();
   if (!/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)[\w.-]+\/[\w.-]+\/?$/i.test(address))
     throw Error('Select a remote with one GitHub push URL.');
+  const repository=address.replace(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)/i,'').replace(/\/$/,'').replace(/\.git$/i,'').toLowerCase();
+  return {remote,address,repository};
+}
+
+export async function pushWorkbenchReview(repository,runId,expectedCommit,records,git,expectedTarget) {
+  const review=await workbenchReview(repository,runId,records,git);
+  if(review.status!=='approved' || review.commit!==expectedCommit)
+    throw Error('Approve the current source commit in Branch Review before pushing.');
+  const target=await githubTarget(git,review.ref);
+  if(!expectedTarget || target.repository!==expectedTarget)
+    throw Error('The GitHub destination changed. Refresh the review and confirm its destination.');
+  const {address,remote}=target;
   await git('push','--no-follow-tags','--recurse-submodules=no','--',address,expectedCommit+':'+review.ref);
   const observed=(await git('ls-remote','--refs','--',address,review.ref)).trim().split(/\s+/);
   if(observed[0]!==expectedCommit || observed[1]!==review.ref)
     throw Error('GitHub has not confirmed this commit. Check the remote branch before retrying.');
-  return {reviewId:review.reviewId,commit:expectedCommit,ref:review.ref,remote};
+  return {reviewId:review.reviewId,commit:expectedCommit,ref:review.ref,remote,repository:target.repository};
 }
 
 export async function returnFindings(repository, runId, record, selectedIds) {

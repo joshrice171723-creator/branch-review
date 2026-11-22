@@ -4,7 +4,7 @@ import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {panelAddress} from '../apex-panel.mjs';
-import {readHandoff,returnFindings,selectHandoffBranch,verifyCommittedSources,workbenchReview,pushWorkbenchReview} from '../workbench-handoff.mjs';
+import {readHandoff,returnFindings,selectHandoffBranch,verifyCommittedSources,workbenchMockup,workbenchReview,pushWorkbenchReview} from '../workbench-handoff.mjs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {digest} from '../reviews.mjs';
@@ -54,6 +54,20 @@ test('Workbench reads the human decision for the current source and checklist',a
   const record={id:'notes',identity:{repository,workbenchRun:runId,ref,source:commit,changed:commit},issues:[],checks:{},
     manifest:{scenarios:[{id:'count',title:'Check notes',steps:['Read the count']}]}};
   const state=(rows=[record],tip=commit)=>workbenchReview(repository,runId,rows,async()=>tip);
+  assert.deepEqual((await state([])).slices,[]);
+  const loop=path.join(repository,'.harness','loops',runId);
+  const design=path.join(repository,'.harness','design'),asset='b'.repeat(32);
+  await mkdir(loop,{recursive:true});await mkdir(path.join(design,'assets'),{recursive:true});
+  await writeFile(path.join(loop,'design.json'),JSON.stringify({build:'demo'}));
+  await writeFile(path.join(design,'workspace.json'),JSON.stringify({builds:[{
+    id:'demo',attempts:[{task:runId,slice:'a',outcome:'completed'}],groups:[{sha:commit,slices:['a']}],
+    roadmap:[{slices:[{id:'a',title:'Notes'}]}],attachments:{a:asset}
+  }]}));
+  const png=Buffer.from('89504e470d0a1a0a','hex');
+  await writeFile(path.join(design,'assets',asset+'.png'),png);
+  assert.deepEqual((await state([])).slices,[{id:'a',title:'Notes',mockup:asset}]);
+  assert.deepEqual(await workbenchMockup(repository,runId,'a'),png);
+  await assert.rejects(workbenchMockup(repository,runId,'b'),/No mockup/);
   assert.equal((await state([])).status,'waiting');
   assert.equal((await state([{...record,identity:{...record.identity,workbenchRun:'another-run'}}])).status,'waiting');
   assert.equal((await state([{...record,identity:{...record.identity,repository:'another-project'}}])).status,'waiting');
@@ -102,10 +116,14 @@ test('explicit push sends only the approved commit to its branch',async t=>{
   const identity={repository,workbenchRun:runId,source:commit,changed:commit,ref};
   const record={id:'notes',identity,manifest:{scenarios:[{id:'count',title:'Count',steps:['Count notes']}]},
     checks:{'count:0':true},issues:[],approval:null};
-  const push=()=>pushWorkbenchReview(repository,runId,commit,[record],git);
+  const target='workbench-tests/notes';
+  const push=()=>pushWorkbenchReview(repository,runId,commit,[record],git,target);
   await assert.rejects(push(),/Approve/);
   assert.equal(await git('ls-remote','--heads',url),'');
   record.approval={identity:digest(identity),commit,reviewer:'Fixture',at:'2026-11-22'};
+  assert.equal((await workbenchReview(repository,runId,[record],git)).pushTarget,target);
+  await assert.rejects(pushWorkbenchReview(repository,runId,commit,[record],git,'workbench-tests/different'),/destination changed/);
+  assert.equal(await git('ls-remote','--heads',url),'');
   const result=await push();
   assert.equal(result.ref,ref);assert.equal(result.commit,commit);
   assert.equal(await git('ls-remote','--heads',url),commit+'\t'+ref);
@@ -119,6 +137,6 @@ test('explicit push sends only the approved commit to its branch',async t=>{
     runId:nextId,ref,commit:next,sourceHash:'b'.repeat(64),title:'Next revision'}));
   const nextIdentity={...identity,workbenchRun:nextId,source:next,changed:next};
   const nextRecord={...record,identity:nextIdentity,approval:{...record.approval,identity:digest(nextIdentity),commit:next}};
-  await assert.rejects(pushWorkbenchReview(repository,nextId,next,[nextRecord],git),/rejected|non-fast-forward/i);
+  await assert.rejects(pushWorkbenchReview(repository,nextId,next,[nextRecord],git,target),/rejected|non-fast-forward/i);
   assert.equal(await git('ls-remote','--heads',url),remoteChange+'\t'+ref);
 });

@@ -37,12 +37,23 @@ export function apexPanel({api,getState,openBranch}) {
       'different-preview':'The preview shows a different commit. Review the source commit to approve this run.'};
     reviewState.textContent=statuses[handoff.status]+' · '+handoff.commit.slice(0,8);
     reviewState.hidden=false;
+    for(const slice of handoff.slices || []){
+      const row=document.createElement('li');
+      row.textContent=slice.title;
+      if(slice.mockup){
+        const link=document.createElement('a');
+        link.textContent='Open selected mockup';link.target='_blank';link.rel='noopener';
+        link.href='/api/workbench-mockup?'+new URLSearchParams({run,slice:slice.id});
+        row.append(' · ',link);
+      }
+      checks.append(row);
+    }
     if(handoff.status==='approved'){
       const branch=handoff.ref.slice('refs/heads/'.length);
-      reviewState.textContent+=' · '+branch;
-      push.hidden=false;
+      reviewState.textContent+=handoff.pushTarget?' · '+handoff.pushTarget+' / '+branch:' · Configure a GitHub remote to push.';
+      push.hidden=!handoff.pushTarget;
       push.onclick=()=>action(push,async()=>{
-        const {result}=await api('/api/workbench-push',{runId:run,commit:handoff.commit});
+        const {result}=await api('/api/workbench-push',{runId:run,commit:handoff.commit,expectedTarget:handoff.pushTarget});
         message('Pushed '+result.commit.slice(0,8)+' to '+result.remote+'/'+branch+'.');
       });
     }
@@ -100,6 +111,16 @@ export function apexPanel({api,getState,openBranch}) {
     else await showHandoff();
   });
   runPicker.onchange=()=>void showSelection().catch(error=>message(error.message));
+  window.addEventListener('message',async event=>{
+    if(event.source!==frame.contentWindow || !frame.src || event.origin!==new URL(frame.src).origin ||
+       event.data?.type!=='workbench-review-run' || !/^\d{8}T\d{12}-[a-f0-9]{8}$/.test(event.data.runId))return;
+    try{
+      selectedRun=event.data.runId;
+      await showHandoff();
+      if(runPicker.value!==event.data.runId)throw Error('This run is not ready for Branch Review.');
+      byId('apex-review-run').click();
+    }catch(error){message(error.message);}
+  });
   const review=byId('apex-review-run');
   review.onclick=()=>action(review,async()=>{
     const {result}=await api('/api/workbench-export',{runId:selectedRun});
