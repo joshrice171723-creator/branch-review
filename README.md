@@ -8,6 +8,14 @@ Use **Review handoff** to select a completed run on its committed branch. Open *
 After review, select unresolved findings and choose **Prepare repair task**. Review the action and scope, then create the new task.
 The handoff records the completed run, source fingerprint, Git commit, review ID, and selected findings.
 
+The handoff checklist shows the status of each item for this run. Check the source preview and record your decision.
+After approval, open **Review handoff** and select **Push to GitHub** to push the reviewed commit to its branch.
+The button uses the branch's configured push remote. New branches default to `origin`.
+If the branch moves, review its new commit before pushing.
+
+The project host exposes `GET /api/workbench-review?run=<run-id>` for the current checklist, commit, findings, and human decision.
+The explicit push action uses the host's authenticated `POST /api/workbench-push` endpoint with `runId` and `commit`.
+
 Set `APEX_WORKBENCH_URL` to a running project-bound panel to reuse its service. Branch Review checks the project identity before opening it.
 Set `BRANCH_REVIEW_PORT` to use another local port. The three preview ports remain reserved for branch comparisons.
 
