@@ -1,7 +1,7 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
-import {link, mkdir, readFile, realpath, stat, unlink, writeFile} from 'node:fs/promises';
+import {isDeepStrictEqual, promisify} from 'node:util';
+import {link, lstat, mkdir, readFile, readlink, realpath, stat, unlink, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {digest} from './reviews.mjs';
 import {canApprove, itemStatus} from './public/review-model.js';
@@ -59,7 +59,7 @@ export async function exportHandoff(repository,runId,git) {
   const ref=await git('symbolic-ref','--quiet','HEAD');
   const commit=await git('rev-parse','HEAD');
   if(!ref.startsWith('refs/heads/') || !commitPattern.test(commit)) throw Error('Check out the committed branch for this run.');
-  await verifyCommittedSources(root,Object.keys(snapshot.files),git);
+  await verifyCommittedSources(root,Object.keys(snapshot.files),git,{runId,ref,commit,files:snapshot.files});
   if(await git('rev-parse','HEAD')!==commit || await git('symbolic-ref','--quiet','HEAD')!==ref) throw Error('The checkout changed during handoff.');
   const record={kind:'apex-branch-review',version:1,runId,ref,commit,sourceHash:digest,title:current.action};
   const directory=await inbox(root,['.harness','branch-review','outgoing']);
@@ -67,13 +67,76 @@ export async function exportHandoff(repository,runId,git) {
   return record;
 }
 
-export async function verifyCommittedSources(root, names, git) {
+export async function verifyCommittedSources(root, names, git, design) {
+  const baseline=design && await designBaseline(root,design);
+  if (baseline) {
+    await verifyDesignBaseline(root,baseline,design.files);
+    return;
+  }
   const {stdout}=await execute('git',['ls-files','--others','--exclude-standard','-z'],
     {cwd:root,windowsHide:true,maxBuffer:64*1024*1024});
   const untracked=new Set(stdout.split('\0'));
   const missing=names.find(name=>untracked.has(name) && !name.startsWith('.idea/'));
   if(missing)throw Error('Commit project source before opening Branch Review: '+missing);
   if(await git('status','--porcelain','--untracked-files=no'))throw Error('Commit the pending tracked changes before opening Branch Review.');
+}
+
+async function designBaseline(root,{runId,ref,commit}) {
+  const folder=path.join('.harness','loops',runId);
+  try {
+    const mark=await ownedFile(root,path.join(folder,'design.json'));
+    if ('refs/heads/'+mark.branch!==ref || !Object.keys(mark.preserved || {}).length) return null;
+    const loop=await ownedFile(root,path.join(folder,'state.json'));
+    if (loop.stage!=='completed' || loop.design_sha!==commit) return null;
+    const workspace=await ownedFile(root,path.join('.harness','design','workspace.json'),32_000_000);
+    const build=workspace.builds?.find(item=>item.id===mark.build && item.branch===mark.branch);
+    const attempt=build?.attempts.findLast(item=>item.task===runId && item.outcome==='completed');
+    if (!attempt || !build.groups.some(group=>group.sha===commit && group.pending?.length===0 &&
+      group.slices.includes(attempt.slice))) return null;
+    if (!mark.preserved_index || !isDeepStrictEqual(mark.preserved,build.preserved) ||
+        !isDeepStrictEqual(mark.preserved_index,build.preserved_index)) return null;
+    const first=build.attempts[0]?.task;
+    if (!runPattern.test(first)) return null;
+    const task=await ownedFile(root,path.join('.harness','tasks',first,'task.json'),64_000_000);
+    if (task.id!==first || !task.initial_snapshot?.files) return null;
+    return {status:mark.preserved,index:mark.preserved_index,files:task.initial_snapshot.files};
+  } catch (error) {
+    if (error.code==='ENOENT' || error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+async function verifyDesignBaseline(root,baseline,files) {
+  const gitOutput=async (...args)=>(await execute('git',args,
+    {cwd:root,windowsHide:true,maxBuffer:64*1024*1024})).stdout.split('\0').filter(Boolean);
+  const readStatus=async ()=>Object.fromEntries((await gitOutput('status','--porcelain','-z','--no-renames','--untracked-files=all'))
+    .filter(row=>!row.startsWith('?? .harness/') && !row.startsWith('?? .idea/'))
+    .map(row=>[row.slice(3),row.slice(0,2)]));
+  const changed=()=>Error('The working changes differ from the recorded Design baseline.');
+  if (!isDeepStrictEqual(await readStatus(),baseline.status)) throw changed();
+  for (const [name,status] of Object.entries(baseline.status)) {
+    const expected=Object.hasOwn(baseline.files,name)?baseline.files[name]:undefined;
+    const completed=Object.hasOwn(files,name)?files[name]:undefined;
+    if (expected!==completed) throw changed();
+    const file=path.join(root,name);
+    const entry=await lstat(file).catch(error=>{if(error.code!=='ENOENT') throw error; return null;});
+    if (!entry && expected===undefined && status.includes('D')) continue;
+    if (!entry || typeof expected!=='string') throw changed();
+    const hash=createHash('sha256');
+    if (entry.isSymbolicLink()) hash.update('symlink:').update(await readlink(file,{encoding:'buffer'}));
+    else if (entry.isFile()) hash.update(await readFile(file));
+    else throw changed();
+    if (hash.digest('hex')!==expected) throw changed();
+  }
+  const index=new Map();
+  for (const row of await gitOutput('ls-files','--stage','-z')) {
+    const split=row.indexOf('\t'), name=row.slice(split+1);
+    if (!Object.hasOwn(baseline.status,name)) continue;
+    if (!index.has(name)) index.set(name,[]);
+    index.get(name).push(row.slice(0,split));
+  }
+  if (!isDeepStrictEqual(Object.fromEntries(index),baseline.index)) throw changed();
+  if (!isDeepStrictEqual(await readStatus(),baseline.status)) throw changed();
 }
 
 async function ownedFile(root, relative,limit=2_000_000) {

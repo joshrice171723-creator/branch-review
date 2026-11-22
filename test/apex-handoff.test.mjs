@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {panelAddress} from '../apex-panel.mjs';
@@ -82,6 +83,55 @@ test('Workbench reads the human decision for the current source and checklist',a
   record.issues=[];
   record.identity.changed='c'.repeat(40);
   assert.equal((await state()).status,'different-preview');
+});
+
+test('handoff permits only the unchanged baseline of the completed Design commit',async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'workbench-baseline-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const exec=promisify(execFile);
+  const git=async (...args)=>(await exec('git',args,{cwd:root,windowsHide:true})).stdout.trimEnd();
+  const put=(name,value)=>writeFile(path.join(root,name),value);
+  const receipt=async (name,value)=>{
+    await mkdir(path.dirname(path.join(root,name)),{recursive:true});
+    await put(name,JSON.stringify(value));
+  };
+  const hash=text=>createHash('sha256').update(text).digest('hex');
+  const firstRun='20261122T024853906396-dddddddd', runId='20261122T024853906396-eeeeeeee', ref='refs/heads/design';
+  await git('init','-b','design');
+  await git('config','user.name','Fixture'); await git('config','user.email','fixture@example.invalid');
+  await put('tracked.txt','Committed');
+  await git('add','tracked.txt'); await git('commit','-qm','Baseline');
+  await put('tracked.txt','Staged'); await git('add','tracked.txt');
+  await put('tracked.txt','Unstaged'); await put('personal.txt','Untracked');
+  const commit=await git('rev-parse','HEAD');
+  const preserved={'tracked.txt':'MM','personal.txt':'??'};
+  const preserved_index={'tracked.txt':[(await git('ls-files','--stage','tracked.txt')).split('\t')[0]]};
+  const files={'tracked.txt':hash('Unstaged'),'personal.txt':hash('Untracked')};
+  const design={runId,ref,commit,files};
+  const loop='.harness/loops/'+runId;
+  const check=(evidence=design)=>verifyCommittedSources(root,Object.keys(files),git,evidence);
+  await assert.rejects(check(),/Commit project source/);
+  await receipt(loop+'/design.json',{branch:'design',build:'build',preserved,preserved_index});
+  await receipt(loop+'/state.json',{stage:'completed',design_sha:commit});
+  const baselineRecord='.harness/tasks/'+firstRun+'/task.json';
+  await receipt(baselineRecord,{id:firstRun,initial_snapshot:{files}});
+  await receipt('.harness/design/workspace.json',{builds:[{id:'build',branch:'design',preserved,preserved_index,
+    attempts:[{task:firstRun,slice:'a',outcome:'completed'},{task:runId,slice:'b',outcome:'completed'}],
+    groups:[{sha:commit,slices:['a','b'],pending:[]}]}]});
+  await check();
+  await assert.rejects(check({...design,commit:'f'.repeat(40)}),/Commit project source/);
+  await assert.rejects(check({...design,files:{...files,'personal.txt':hash('Different')}}),/recorded Design baseline/);
+  await receipt(baselineRecord,{id:firstRun,initial_snapshot:{files:{...files,'personal.txt':hash('Original')}}});
+  await assert.rejects(check(),/recorded Design baseline/);
+  await receipt(baselineRecord,{id:firstRun,initial_snapshot:{files}});
+  await put('personal.txt','Changed untracked');
+  await assert.rejects(check(),/recorded Design baseline/);
+  await put('personal.txt','Untracked');
+  await put('tracked.txt','Changed staged'); await git('add','tracked.txt'); await put('tracked.txt','Unstaged');
+  await assert.rejects(check(),/recorded Design baseline/);
+  await put('tracked.txt','Staged'); await git('add','tracked.txt'); await put('tracked.txt','Unstaged');
+  await put('other.txt','Added after the build');
+  await assert.rejects(check(),/recorded Design baseline/);
 });
 
 test('explicit push sends only the approved commit to its branch',async t=>{
