@@ -176,9 +176,7 @@ function connectProjectConversation(initial) {
     if (item?.proposal?.kind === "plan") return item.proposal;
     if (!embedded || !item || item.proposal ||
         !/^\s*(?:#{1,6}\s+|\*\*)?(?:Plan|Acceptance criteria)\b/im.test(item.text)) return null;
-    const heading = /^#{1,6}\s+(.+)$/m.exec(item.text)?.[1]?.trim();
-    const title = state.title || (heading && !/^(plan|acceptance criteria|verification)$/i.test(heading)
-      ? heading.slice(0, 240) : "");
+    const title = state.title || titleFromPlan(item.text);
     return {kind: "plan", mode: "task", title, plan: item.text, revision: state.revision};
   }
   function setReference(source, target = mockupTarget.value, page = "") {

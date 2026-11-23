@@ -3,6 +3,20 @@
 let layoutWrite = Promise.resolve();
 const designDrafts = new Map();
 
+function titleFromPlan(plan) {
+  const generic = /^(?:plan|proposed plan|change plan|acceptance criteria|verification|scope|constraints)\s*:?$/i;
+  const lines = plan.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const heading = lines.filter(line => /^#{1,6}\s/.test(line))
+    .map(line => line.replace(/^#{1,6}\s+/, "").replace(/[*`]/g, ""))
+    .find(line => !generic.test(line));
+  const opening = lines.map(line => line.replace(/^(?:#{1,6}\s+|[-+*]\s+|\d+\.\s+)/, "").replace(/[*`]/g, "").trim())
+    .find(line => !generic.test(line) && !/^(?:here(?:'s| is)|proposed changes:)/i.test(line));
+  const text = (heading || opening || "Project change").replace(/^For [^,]+,\s*/i, "")
+    .split(/[.!?](?:\s|$)/, 1)[0].trim();
+  const title = text.length > 96 ? text.slice(0, 96).replace(/\s+\S*$/, "") : text;
+  return title ? title[0].toUpperCase() + title.slice(1) : "Project change";
+}
+
 function designDraftKey(state) {
   return "workbench.design.draft.v1:" + projectState.project.path +
     (state?.conversationId ? ":" + state.conversationId : "");
@@ -304,6 +318,10 @@ function designPanel(initialState) {
   }
   function taskEditor() {
     const editing = localDraft.plan?.title !== undefined ? localDraft.plan : {title: state.title || "", plan: state.plan};
+    if (editing === localDraft.plan && !editing.title.trim() && editing.plan.trim()) {
+      editing.title = titleFromPlan(editing.plan);
+      rememberDraft();
+    }
     const baseRevision = localDraft.plan?.title !== undefined ? localDraft.baseRevision : state.revision;
     const title = input(editing.title, "Change title", value => { editing.title = value; edited(); });
     title.dataset.designFocus = "plan-title";
