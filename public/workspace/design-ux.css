@@ -102,8 +102,7 @@
 
 #project-conversation {
   position: fixed;
-  inset: 12px;
-  margin-inline: auto;
+  inset: 12px 12px 12px auto;
   z-index: 12;
   display: grid;
   grid-template-columns: minmax(0, 1fr);

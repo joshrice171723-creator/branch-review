@@ -70,7 +70,7 @@ async function exercise() {
   const measure = selector => evaluate(`(() => {
     const rect = root.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
     const width = document.documentElement.clientWidth;
-    return {top: rect.top, width, visible: rect.width > 0 && rect.left >= 0 && rect.right <= width + 1,
+    return {top: rect.top, rightGap: width - rect.right, width, visible: rect.width > 0 && rect.left >= 0 && rect.right <= width + 1,
       offset: rect.left + rect.width / 2 - width / 2};
   })()`);
   win.setMinimumSize(320, 500);
@@ -104,7 +104,8 @@ async function exercise() {
     contents.setZoomFactor(1);
     await waitFor('the restored workspace', () => evaluate('innerWidth === ' + width));
     const drawer = await measure('#project-conversation');
-    assert.ok(drawer.visible && drawer.top >= 0 && drawer.top < 20 && Math.abs(drawer.offset) <= 1);
+    assert.ok(drawer.visible && drawer.top >= 0 && drawer.top < 20);
+    assert.ok(Math.abs(drawer.rightGap - (width > 460 ? 12 : 4)) <= 1, 'Keep the chat drawer at the right edge.');
     sent = undefined;
     await evaluate(`byId('project-conversation-message').value = 'Change this view';
       byId('project-conversation-form').requestSubmit();`);
