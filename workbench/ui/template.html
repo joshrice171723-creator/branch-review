@@ -16,22 +16,26 @@
     <main>
       <div class="titlebar">
         <div><h1 id="view-title">Design</h1><p id="view-description">Plan, build, and review project slices.</p></div>
-        <div id="profile-group"><span id="profile-label">Build profile</span><div class="profiles" role="group" aria-labelledby="profile-label">
-          <button data-profile="audited" aria-pressed="true">Audited</button>
-          <button data-profile="fast" aria-pressed="false"><span aria-hidden="true">ϟ</span> Fast</button>
-        </div></div>
+        <div id="profile-group" class="profile-toolbar">
+          <span id="profile-label">Build profile</span>
+          <div class="profiles" role="group" aria-labelledby="profile-label">
+            <button data-profile="audited" aria-pressed="true">Audited</button>
+            <button data-profile="fast" aria-pressed="false">Fast</button>
+          </div>
+          <div class="actions profile-actions" id="profile-actions" aria-label="Workflow profile" hidden>
+            <small id="profile-save-status" role="status"></small>
+            <button class="button primary" id="apply-profile">Apply profile</button>
+            <button class="button profile-secondary" id="import">Import profile</button>
+            <button class="button profile-secondary" id="export">Export profile</button>
+          </div>
+        </div>
       </div>
       <section id="workflow-provider-status" class="panel panel-body" aria-label="Workflow providers" hidden></section>
       <nav id="configure-sections" class="actions configure-sections" aria-label="Workflow configuration" hidden>
-        <button class="button" data-view="stages">Stage designer</button>
+        <button class="button" data-view="stages">Stages</button>
         <button class="button" data-view="documents">Documents</button>
         <button class="button" data-view="rules">Shared rules</button>
       </nav>
-      <div class="actions profile-actions" id="profile-actions" aria-label="Workflow profile" hidden>
-        <button class="button primary" id="apply-profile">Apply profile</button>
-        <button class="button" id="import">Import profile</button>
-        <button class="button" id="export">Export profile</button>
-      </div>
       <div id="content"></div>
     </main>
   </div>

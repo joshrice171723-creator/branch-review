@@ -20,13 +20,11 @@ const titles = {
 const roleById = id => WorkbenchProfile.roles.find(role => role.id === id);
 const routeLabels = {plan: "Return to plan", build: "Return to builder", stop: "Stop and report"};
 let data = WorkbenchProfile.initial(presetDocuments);
-let hasSavedProfile = false;
 let view = "workflow";
 let selected = "build";
 let noticeTimer;
 let fieldId = 0;
 const callMcp = workbenchClient(panelUrl("mcp"), signal, () => projectState?.csrf_token);
-const settingsDrafts = new Map();
 let selectedRun = "";
 let historyTimer;
 let currentStage;
@@ -86,7 +84,6 @@ async function loadProject() {
     return;
   }
   data = WorkbenchProfile.validate(WorkbenchProfile.resolve(profile, projectState.config, presetDocuments, modelCatalog));
-  hasSavedProfile = true;
   projectConversation = connectProjectConversation(design);
   render(design);
   void checkWorkflowProviders();
@@ -96,10 +93,19 @@ const active = () => data.profiles[data.active];
 const current = () => active().stages[selected];
 
 let providerStatusRequest = 0;
+let providerStatuses = new Map();
 function showWorkflowProviderStatus() {
   const notice = byId("workflow-provider-status");
-  notice.hidden = !notice.childElementCount ||
-    (notice.dataset.blocking !== "true" && !["stages", "documents", "rules"].includes(view));
+  notice.hidden = !notice.childElementCount || notice.dataset.blocking !== "true" || view === "stages";
+  for (const field of panelRoot.querySelectorAll("[data-provider-health]")) {
+    const row = providerStatuses.get(field.dataset.providerHealth);
+    const status = row?.status === "unverified" ? "Connection unverified" :
+      row?.status === "ready" ? "Ready" : row?.status === "missing" ? "CLI missing" : row ? "Needs setup" : "";
+    field.textContent = field.dataset.providerDetail !== undefined ? !row ? "" :
+      row.status === "unverified" ? row.name + " is installed. Account readiness is unverified." : row.message :
+      row?.status === "ready" ? "" : status;
+    field.hidden = !field.textContent;
+  }
 }
 async function checkWorkflowProviders(refresh = false) {
   const request = ++providerStatusRequest;
@@ -111,21 +117,28 @@ async function checkWorkflowProviders(refresh = false) {
   try {
     const rows = await api("design/providers" + (refresh ? "?refresh=1" : ""));
     if (request !== providerStatusRequest) return;
-    const problems = rows.filter(row => row.status !== "ready");
-    notice.dataset.blocking = String(problems.some(row => row.status !== "unverified"));
+    providerStatuses = new Map(rows.map(row => [row.name, row]));
+    const problems = rows.filter(row => !["ready", "unverified"].includes(row.status));
+    notice.dataset.blocking = String(Boolean(problems.length));
     notice.replaceChildren(...problems.map(row => element("p", "",
       element("strong", "", row.roles.join(", ") + " · " + row.name), " · " + row.message)));
     if (problems.length) notice.append(element("div", "actions",
-      button("Open Stage designer", () => openView("stages")),
-      button("Recheck providers", () => checkWorkflowProviders(true))));
+      button("Configure providers", () => openView("stages"))));
     showWorkflowProviderStatus();
   } catch (error) {
     if (request !== providerStatusRequest) return;
     notice.dataset.blocking = "false";
-    notice.replaceChildren(element("p", "", "Could not check workflow providers. " + error.message),
-      button("Recheck providers", () => checkWorkflowProviders(true)));
+    notice.replaceChildren();
     showWorkflowProviderStatus();
   }
+}
+
+function updateProfileSaveStatus() {
+  const button = byId("apply-profile");
+  const dirty = button.textContent === "Apply changes";
+  byId("profile-save-status").textContent = dirty ? "Unsaved changes" :
+    stateProfileApplied() ? "Profile saved" : "Preset selected";
+  button.hidden = !dirty && stateProfileApplied();
 }
 
 function apply(change, redraw = true) {
@@ -135,7 +148,7 @@ function apply(change, redraw = true) {
     WorkbenchProfile.executable(next, modelCatalog);
     byId("apply-profile").textContent = "Apply changes";
     data = next;
-    hasSavedProfile = true;
+    updateProfileSaveStatus();
     if (redraw) render();
     return true;
   } catch (error) {
@@ -235,19 +248,18 @@ function canvas() {
     }, "stage-card" + (stage.enabled ? "" : " dim"));
     card.dataset.stage = role.id;
     card.setAttribute("aria-pressed", String(selected === role.id));
-    const meta = stage.enabled ? stage.provider + (stage.model ? " · " + stage.model : "") : "Skipped in this profile";
+    const meta = !stage.enabled ? "Skipped in this profile" : role.kind === "Gate" ? stage.provider :
+      stage.provider + " · " + (stage.model || "Provider default");
+    const health = element("small", "provider-health");
+    health.dataset.providerHealth = stage.enabled && role.kind !== "Gate" ? stage.provider : "";
+    health.hidden = true;
     card.replaceChildren(stageIcon(role), element("span", "",
-      element("span", "stage-name", role.name), element("span", "stage-meta", meta)));
-    if (role.kind === "Audit" && stage.enabled) {
-      const label = role.id === "planReview" ? routeLabels[stage.route] :
-        [...new Set([routeLabels[stage.route], routeLabels[stage.requirementsRoute]])].join(" / ");
-      card.append(element("span", "route", label));
-    }
+      element("span", "stage-name", role.name), element("span", "stage-meta", meta), health));
     list.append(element("li", "", card));
   }
-  const inspect = button("Simulate run", preview);
-  const details = enabledAudits + " active audit" + (enabledAudits === 1 ? "" : "s") + " · " + item.stages.buildReview.limit + " shared repair rounds";
-  return element("section", "panel", heading(item.name, details, inspect),
+  const inspect = button("Preview workflow", preview);
+  const details = enabledAudits + " active audit" + (enabledAudits === 1 ? "" : "s") + " · " + item.stages.buildReview.limit + " repair rounds";
+  return element("section", "panel", heading("Workflow stages", details, inspect),
     element("div", "stage-picker", field("Selected stage", select(selected, WorkbenchProfile.roles.map(role => [role.id, role.name]), value => {
       selected = value;
       render();
@@ -263,20 +275,21 @@ function editStage(key, value, redraw = false) {
   if (saved && redraw) {
     const layout = content.querySelector(".layout");
     layout.firstElementChild.replaceWith(canvas());
+    showWorkflowProviderStatus();
   }
-  if (saved) notify("Draft updated for " + active().name + ".");
   return saved;
 }
 
 function agentFields(stage) {
-  const group = element("div", "form-grid");
+  const group = element("div", "design-stack");
+  const fields = element("div", "form-grid");
   const providers = WorkbenchProfile.stageProviders(selected, modelCatalog);
   const provider = select(stage.provider, providers.map(name => [name, name]), value => {
     if (!apply((_, item, target) => { target.provider = value; target.model = ""; }, false)) return false;
     group.replaceWith(agentFields(current()));
     content.querySelector(".layout").firstElementChild.replaceWith(canvas());
     content.querySelector(".agent-provider").focus();
-    notify("Provider selected for " + active().name + ".");
+    showWorkflowProviderStatus();
     return true;
   });
   provider.className = "agent-provider";
@@ -284,99 +297,37 @@ function agentFields(stage) {
   const choices = [["", stage.provider === "Codex" ? "Project model" : "Provider default"], ...models.map(id => [id, id])];
   const picker = select(stage.model, choices, value => editStage("model", value, true));
   const effort = select(stage.effort, WorkbenchProfile.efforts.map(name => [name, name]), value => editStage("effort", value));
-  group.append(field("Provider", provider), field("Model", picker), field("Reasoning effort", effort));
+  fields.append(field("Provider", provider), field("Model", picker), field("Thinking level", effort));
+  group.append(fields);
+  const health = element("small", "stage-provider-detail");
+  health.dataset.providerHealth = stage.provider;
+  health.dataset.providerDetail = "";
+  health.hidden = true;
+  const recheck = button("Recheck provider status", async () => {
+    recheck.disabled = true;
+    try { await checkWorkflowProviders(true); }
+    finally { recheck.disabled = false; }
+  });
+  group.append(element("div", "stage-provider-line", health, recheck));
   const preset = WorkbenchProfile.initial([]).profiles[data.active].stages[selected];
-  const reset = button("Use stage preset", () => {
+  const reset = button("Reset agent settings", () => {
     const {provider, model, effort} = preset;
-    if (!apply((_, item, stage) => Object.assign(stage, {provider, model, effort}), false)) return;
-    const replacement = agentFields(current());
-    group.replaceWith(replacement);
-    content.querySelector(".layout").firstElementChild.replaceWith(canvas());
-    replacement.querySelector("[data-stage-preset]").focus();
+    showDialog("Reset agent settings",
+      element("p", "", "Use " + provider + " · " + (model || "Provider default") + " · " + effort + " thinking."),
+      element("div", "actions", button("Cancel", () => dialog.close()),
+        button("Reset", () => {
+          if (!apply((_, item, stage) => Object.assign(stage, {provider, model, effort}), false)) return;
+          dialog.close();
+          const replacement = agentFields(current());
+          group.replaceWith(replacement);
+          content.querySelector(".layout").firstElementChild.replaceWith(canvas());
+          showWorkflowProviderStatus();
+          replacement.querySelector("[data-stage-preset]").focus();
+        }, "button primary")));
   });
   reset.dataset.stagePreset = "";
-  const catalog = modelCatalog[stage.provider]?.source;
-  group.append(element("div", "design-stack", reset, ...(catalog ? [element("small", "stage-meta", catalog)] : [])));
+  group.append(element("div", "actions", reset));
   return group;
-}
-
-const buildSettings = {
-  set_repair_budget: {label: "Repair budget", field: "stages.buildReview.limit", stage: "buildReview", key: "limit"},
-  set_builder_effort: {label: "Builder reasoning effort", field: "stages.build.effort", stage: "build", key: "effort"}
-};
-
-function cancelCalls() {
-  for (const draft of settingsDrafts.values()) {
-    draft.revision++;
-    if (draft.pending) draft.message = "Draft retained. Apply to retry.";
-    draft.pending = false;
-  }
-}
-
-function buildControl(tool) {
-  const spec = buildSettings[tool];
-  const profile = data.active;
-  const key = profile + "/" + tool;
-  const savedValue = () => data.profiles[profile].stages[spec.stage][spec.key];
-  if (!settingsDrafts.has(key)) settingsDrafts.set(key, {value: savedValue(), revision: 0, message: "", pending: false});
-  const draft = settingsDrafts.get(key);
-  const input = tool === "set_repair_budget" ? element("input") :
-    select(draft.value, WorkbenchProfile.efforts.map(value => [value, value]), () => true);
-  if (tool === "set_repair_budget") Object.assign(input, {type: "range", min: 1, max: 20, step: 1});
-  input.value = draft.value;
-  const draftLabel = element("output", "", String(draft.value));
-  const saved = element("small");
-  const status = element("p", "tool-result");
-  status.setAttribute("role", "status");
-  const box = element("div", "build-control");
-  box.dataset.tool = tool;
-  function refresh() {
-    saved.textContent = (hasSavedProfile ? "Last saved · " : "Preset value · ") + savedValue();
-    status.textContent = draft.message;
-    draftLabel.textContent = String(draft.value);
-  }
-  function edit() {
-    const value = input.type === "range" ? Number(input.value) : input.value;
-    if (draft.value !== value) {
-      Object.assign(draft, {value, revision: draft.revision + 1, pending: false, message: "Draft ready to apply."});
-      refresh();
-    }
-  }
-  input.addEventListener("input", edit);
-  input.addEventListener("change", edit);
-  const save = button("Apply " + spec.label.toLowerCase(), async () => {
-    const revision = ++draft.revision;
-    const value = draft.value;
-    draft.pending = true;
-    draft.message = "Calling " + tool + "…";
-    refresh();
-    const valid = () => draft.revision === revision && data.active === profile;
-    try {
-      const result = await callMcp(tool, {profile, value});
-      if (!valid()) return;
-      if (result?.profile !== profile || result.field !== spec.field || result.value !== value) throw new Error("Unexpected tool result.");
-      const stored = apply((_, item) => { item.stages[spec.stage][spec.key] = result.value; }, false);
-      draft.message = tool + " returned " + result.value + ". " + (stored ? "Draft updated for " + active().name + "." : "Local save failed. Draft retained.");
-      if (stored && view === "workflow") content.querySelector(".layout").firstElementChild.replaceWith(canvas());
-    } catch (error) {
-      if (!valid()) return;
-      draft.message = tool + " failed. " + error.message + " Draft retained.";
-    } finally {
-      if (valid()) {
-        draft.pending = false;
-        // A stage change can remount this control while its request is pending.
-        const visible = content.querySelector('[data-tool="' + tool + '"]');
-        if (visible && visible !== box) visible.replaceWith(buildControl(tool));
-        else refresh();
-      }
-    }
-  });
-  box.append(field(spec.label, input));
-  draftLabel.htmlFor = input.id;
-  if (input.type === "range") box.append(draftLabel);
-  box.append(element("div", "section-row", saved, save), status);
-  refresh();
-  return box;
 }
 
 async function chooseToolSettings(forStage) {
@@ -457,10 +408,6 @@ function inspector() {
   const body = element("div", "panel-body");
   if (role.kind !== "Gate") {
     body.append(agentFields(stage), button("Choose stage tools", () => chooseToolSettings(true)));
-    if (role.id === "build") {
-      body.append(element("section", "build-settings", element("h3", "", "Build controls · " + active().name),
-        buildControl("set_repair_budget"), buildControl("set_builder_effort")));
-    }
   }
   if (role.kind === "Audit") {
     body.append(element("div", "audit-fields",
@@ -471,13 +418,15 @@ function inspector() {
       ...(role.id === "planReview" ? [] : [
         field("On a requirements finding", select(stage.requirementsRoute, ["plan", "stop"].map(key => [key, routeLabels[key]]), value => editStage("requirementsRoute", value, true)))
       ])));
-    if (role.id === "buildReview") body.append(buildControl("set_repair_budget"));
+    if (role.id === "buildReview") body.append(field("Repair rounds", control("number", stage.limit,
+      value => editStage("limit", Number(value), true), {min: 1, max: 20, step: 1})),
+      element("small", "", "A round is used when an audit sends work back to the builder."));
   }
   body.append(field(role.kind === "Gate" ? "Gate rules" : "Stage instructions", control("textarea", stage.instructions,
     value => editStage("instructions", value), {maxLength: 20000, rows: 3})));
   body.append(documentSection(stage.docs, false));
   const footer = element("div", "panel-foot section-row",
-    element("span", "", "Apply the profile to use these settings on future runs."), button("Preview instructions", () => {
+    button("Preview instructions", () => {
       const text = WorkbenchProfile.stagePrompt(active(), selected, data.documents, data.permittedTools);
       showDialog(role.name + " instructions", element("pre", "", text),
         button("Download instructions", () => download(role.id + "-instructions.md", text, "text/markdown")));
@@ -575,15 +524,17 @@ function preview() {
   };
   const selector = select("pass", scenarios, update);
   update("pass");
-  showDialog("Run simulation", element("p", "copy", "Simulate routes and retry limits using scripted audit outcomes."), field("Scenario", selector), result);
+  showDialog("Workflow preview",
+    element("p", "copy", "Choose a sample outcome to see which stages would run. No agents or checks start."),
+    field("Scenario", selector), result);
 }
 
 function render(design) {
   clearTimeout(historyTimer);
   const [title, description] = titles[view];
   byId("profile-group").hidden = ["history", "live", "quality"].includes(view);
-  byId("profile-actions").hidden = view !== "stages";
   const configuring = ["stages", "documents", "rules"].includes(view);
+  byId("profile-actions").hidden = !configuring;
   byId("configure-sections").hidden = !configuring;
   showWorkflowProviderStatus();
   if (configuring) byId("open-configure").setAttribute("aria-current", "page");
@@ -600,6 +551,8 @@ function render(design) {
     : view === "live" ? livePanel() : view === "history" ? element("div", "design-stack", conversationHistory(), deliveryPanel(), designHistory(), historyPanel())
     : view === "documents" ? documentLibrary() : rulesPanel();
   content.replaceChildren(panel);
+  updateProfileSaveStatus();
+  showWorkflowProviderStatus();
   projectConversation?.context();
   if (view !== "workflow") stageChanged(view);
 }
@@ -790,7 +743,6 @@ panelRoot.querySelectorAll("[data-view]").forEach(node => node.addEventListener(
 byId("open-configure").onclick = () => openView("stages");
 panelRoot.querySelectorAll("[data-profile]").forEach(node => node.addEventListener("click", () => {
   if (data.active !== node.dataset.profile && apply(next => { next.active = node.dataset.profile; }, false)) {
-    cancelCalls();
     render();
   }
 }));
@@ -816,8 +768,6 @@ byId("profile-file").addEventListener("change", async event => {
     showDialog("Import profile", element("p", "copy", "Load both profiles and their documents from " + file.name + "?"),
       button("Load profile draft", () => {
         if (apply(next => Object.assign(next, imported), false)) {
-          cancelCalls();
-          settingsDrafts.clear();
           render();
           dialog.close();
           notify("Profile loaded. Apply it to use it on future runs.");
@@ -856,6 +806,7 @@ async function saveWorkflowProfile() {
     projectState.profile_applied = true;
     if (data !== selected) throw Error("The workflow profile changed while saving. Try again.");
     button.textContent = "Apply profile";
+    updateProfileSaveStatus();
     void checkWorkflowProviders();
   }
   finally { button.disabled = false; }
