@@ -123,7 +123,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     const file = '.harness/design/layout.json';
     if (!payload) return files.read(file, {});
     const options = {view: ['workflow', 'stages', 'history', 'live', 'documents', 'rules', 'quality'],
-      tab: ['Plan', 'Mockups', 'Preview', 'Build'], panes: ['beside', 'stack']};
+      tab: ['Plan', 'Mockups', 'Changes', 'Preview', 'Build'], panes: ['beside', 'stack']};
     if (!options[payload.name]?.includes(payload.value)) throw Error('Unknown project layout choice.');
     const release = await files.acquire('.harness/design/layout.owner');
     try {

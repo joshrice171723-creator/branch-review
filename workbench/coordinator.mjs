@@ -79,7 +79,16 @@ export async function createCoordinator({
     image: async payload => image({...payload, invoke, providerOptions: await options()})});
   const audit = createAudit({repository: root, files, git, store, agent});
   const builds = createBuilds({files, git, store, design, audit, review, push, checkProviders});
-  const readDesign = async () => ({...await design.read(), checklist, layout: await design.layout()});
+  async function readDesign() {
+    const [state, layout] = await Promise.all([design.read(), design.layout()]);
+    const current = state.builds.at(-1);
+    let restartRequired = false;
+    if (current && ['failed', 'cancelled'].includes(current.status)) {
+      const head = await git('rev-parse', 'HEAD').catch(() => null);
+      restartRequired = Boolean(head && head !== current.base);
+    }
+    return {...state, checklist, layout, restartRequired};
+  }
 
   async function dispatch(route, payload = {}, {method = 'GET'} = {}) {
     const address = new URL(route, 'http://localhost');

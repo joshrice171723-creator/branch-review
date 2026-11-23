@@ -210,7 +210,8 @@ function designPanel(initialState) {
   let decisionKey;
   status.setAttribute("role", "status");
   panel.append(tabs, nextAction, status, liveDecision, body);
-  const names = embedded ? ["Plan", "Mockups"] : ["Plan", "Mockups", "Preview", "Build"];
+  const canShowChanges = embedded && hostOptions.workingFiles && hostOptions.workingDiff;
+  const names = embedded ? ["Plan", "Mockups", ...(canShowChanges ? ["Changes"] : [])] : ["Plan", "Mockups", "Preview", "Build"];
   let tab = !embedded && names.includes(layoutSetting("tab")) ? layoutSetting("tab") : "Plan";
   let state = initialState || projectConversation?.current(), selectedAsset, busy = false;
   let draftKey = designDraftKey(state);
@@ -954,42 +955,114 @@ function designPanel(initialState) {
     queueMicrotask(update);
     return area;
   }
-  function changedFilesPanel(build) {
-    const changes = element("details", "", element("summary", "", "Changed files"));
-    const files = element("div", "design-stack");
-    const diff = element("pre", "commit-diff");
-    changes.append(files, diff);
-    let timer, signature, selection, request = 0;
-    if (hostOptions.openEditor) {
-      const editor = button("Open in IDE", () => {
-        hostOptions.openEditor(selection).catch(error => notify(error.message));
-      });
-      changes.prepend(editor);
+  let selectedChangedFile = "";
+  let changedFilesFilter = "";
+  function changedFilesPanel() {
+    const build = state.builds.at(-1);
+    let base = build?.groups[0]?.base || build?.base;
+    let rows = [], request = 0, patchKey, signature, loading = false, timer;
+    const criteria = element("p", "design-status");
+    criteria.setAttribute("role", "status");
+    const files = element("div", "changes-tree");
+    const diff = element("div", "changes-diff");
+    const search = input(changedFilesFilter, "Filter files", value => { changedFilesFilter = value; drawFiles(); });
+    search.type = "search";
+    const counts = element("small", "");
+    const viewer = element("section", "panel changes-viewer", diff);
+    const refreshButton = button("Refresh changes", () => refresh(true));
+    const changes = element("section", "design-stack",
+      element("header", "panel changes-header", heading("Changes", "", refreshButton), criteria),
+      element("div", "changes-layout", box("Files", field("Filter files", search), counts, files), viewer));
+    const statuses = {A: "Added", M: "Modified", D: "Deleted", R: "Renamed", C: "Copied", T: "Type changed"};
+    function drawFiles() {
+      const query = changedFilesFilter.trim().toLowerCase();
+      const shown = rows.filter(file => !query || (file.path + " " + (file.previousPath || "")).toLowerCase().includes(query));
+      counts.textContent = rows.length + (rows.length === 1 ? " file changed" : " files changed");
+      if (!shown.length) files.replaceChildren(element("p", "", rows.length ? "No matching files." : "No tracked changes."));
+      else files.replaceChildren(...shown.map(file => {
+        const parts = file.path.split("/");
+        const name = parts.pop();
+        const selectFile = button("", () => { selectedChangedFile = file.path; drawFiles(); void showDiff(file); }, "changes-file");
+        selectFile.setAttribute("aria-pressed", String(file.path === selectedChangedFile));
+        selectFile.title = (statuses[file.status] || file.status) + " · " + file.path;
+        selectFile.append(element("span", "changes-file-status", file.status),
+          element("span", "changes-file-name", element("strong", "", name),
+            ...(parts.length ? [element("small", "", parts.join("/"))] : [])));
+        return selectFile;
+      }));
     }
-    async function refresh() {
-      if (!changes.isConnected || !changes.open) return;
-      try {
-        const rows = await hostOptions.workingFiles(build.base);
-        if (!changes.isConnected || !changes.open) return;
-        const next = JSON.stringify(rows);
-        if (signature !== next) {
-          signature = next;
-          files.replaceChildren(...rows.map(file => button(file.status + "  " + file.path, () => showDiff(file.path))));
-          if (!rows.length) files.textContent = "No tracked file changes yet.";
+    function displayPatch(result) {
+      const lines = result.patch.replace(/\n$/, "").split("\n");
+      const code = element("div", "changes-code");
+      let before, after;
+      for (const line of lines.slice(0, 2500)) {
+        const range = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+        if (range) {
+          before = Number(range[1]); after = Number(range[2]);
+          code.append(element("div", "changes-hunk", line));
+          continue;
         }
-        if (selection && rows.some(row => row.path === selection)) await showDiff(selection);
-      } catch (error) { files.textContent = error.message; }
-      finally { if (changes.isConnected && changes.open) timer = setTimeout(refresh, 4000); }
+        if (before === undefined || !/^[ +\-]/.test(line)) {
+          code.append(element("div", "changes-meta", line));
+          continue;
+        }
+        const added = line.startsWith("+"), removed = line.startsWith("-");
+        code.append(element("div", "changes-line" + (added ? " addition" : removed ? " deletion" : ""),
+          element("span", "changes-line-number", added ? "" : String(before++)),
+          element("span", "changes-line-number", removed ? "" : String(after++)),
+          element("code", "", line || " ")));
+      }
+      if (result.truncated || lines.length > 2500) code.append(element("p", "changes-meta", "Showing the first part of this diff."));
+      return code;
     }
-    async function showDiff(filename) {
-      selection = filename;
+    async function showDiff(file) {
       const id = ++request;
       try {
-        const result = await hostOptions.workingDiff(build.base, filename);
-        if (id === request) diff.textContent = result.patch + (result.truncated ? "\nDiff excerpt ends here." : "");
-      } catch (error) { if (id === request) diff.textContent = error.message; }
+        const result = await hostOptions.workingDiff(base, file.path);
+        if (id !== request || !changes.isConnected) return;
+        const key = JSON.stringify([file.path, result.patch, result.truncated]);
+        if (patchKey === key) return;
+        patchKey = key;
+        const editor = hostOptions.openEditor && file.status !== "D" ? button("Open in IDE", () =>
+          hostOptions.openEditor(file.path).catch(error => notify(error.message))) : null;
+        const count = file.binary ? "Binary file" : "+" + file.added + " −" + file.removed;
+        diff.replaceChildren(heading(file.path, file.previousPath ? "From " + file.previousPath + " · " + count : count, editor),
+          result.patch ? displayPatch(result) : element("p", "panel-body", "No text diff is available."));
+      } catch (error) {
+        if (id === request && changes.isConnected) {
+          patchKey = undefined;
+          diff.textContent = error.message;
+        }
+      }
     }
-    changes.addEventListener("toggle", () => { clearTimeout(timer); if (changes.open) void refresh(); });
+    async function refresh(force = false) {
+      if (loading || !changes.isConnected) return;
+      loading = refreshButton.disabled = true;
+      clearTimeout(timer);
+      try {
+        base ||= (await projectCapabilities()).head || (await projectCapabilities()).git?.head;
+        if (!base) throw Error("Choose a project with a Git commit.");
+        const latest = await hostOptions.workingFiles(base);
+        if (!changes.isConnected) return;
+        criteria.textContent = (build ? "Build starting commit " : "Commit ") + base.slice(0, 8) + " → Working tree";
+        const next = JSON.stringify(latest);
+        if (next !== signature) {
+          signature = next;
+          rows = latest;
+          if (!rows.some(file => file.path === selectedChangedFile)) selectedChangedFile = rows[0]?.path || "";
+          drawFiles();
+        }
+        if (force) patchKey = undefined;
+        const file = rows.find(row => row.path === selectedChangedFile);
+        if (file) await showDiff(file);
+        else diff.replaceChildren(element("p", "panel-body", "File diffs will appear here."));
+      } catch (error) { criteria.textContent = error.message; }
+      finally {
+        loading = refreshButton.disabled = false;
+        if (changes.isConnected && ["working", "cancelling"].includes(build?.status)) timer = setTimeout(refresh, 5000);
+      }
+    }
+    queueMicrotask(refresh);
     return changes;
   }
   function buildPanel() {
@@ -1011,7 +1084,7 @@ function designPanel(initialState) {
       const continueBuild = build.status === "ready" ? button(embedded ? "Start repair" : "Continue build", () =>
         change("continue", {build: build.id}, {wait: embedded ? "Starting repair…" : "Starting the next slice…"}), "button primary") : null;
       if (continueBuild && !showContinueByReview) controls.append(continueBuild);
-      if (["failed", "cancelled"].includes(build.status)) controls.append(button("Resume run", () =>
+      if (["failed", "cancelled"].includes(build.status) && !state.restartRequired) controls.append(button("Resume run", () =>
         change("continue", {build: build.id}, {wait: "Resuming the run…"}), "button primary"));
       if (["working", "cancelling"].includes(build.status)) {
         const cancel = button("Cancel run", () => change("cancel", {build: build.id},
@@ -1032,11 +1105,21 @@ function designPanel(initialState) {
       if (attempt?.task) controls.append(button("Show log", () =>
         showDesignLog(attempt.task, ["working", "cancelling"].includes(build.status))));
       if (!["working", "cancelling", "closed", "retired"].includes(build.status)) {
-        controls.append(button("Retire build", () => change("retire", {build: build.id})));
+        controls.append(button(state.restartRequired ? "Retire failed run" : "Retire build", async () => {
+          if (await change("retire", {build: build.id}) && state.builds.at(-1)?.status === "retired") {
+            const start = body.querySelector('[data-design-focus="plan-approve"]');
+            start?.focus();
+          }
+        }));
       }
       const headingText = element("strong", "", labels[build.status] || build.status);
       const info = box("Current build", element("p", "design-build-status", headingText, " · Revision " + build.revision), controls);
-      if (build.error) info.append(element("p", "evidence-warning", build.error));
+      if (state.restartRequired) {
+        info.append(element("p", "evidence-warning",
+          "The branch changed after this run started. Retire this run, then start a new build from the current commit."));
+        if (build.error) info.append(element("details", "", element("summary", "", "Previous attempt error"),
+          element("p", "", build.error)));
+      } else if (build.error) info.append(element("p", "evidence-warning", build.error));
       for (const [i, group] of build.groups.entries()) {
         if (group.sha && (i === latestReview || (build.status === "review" && i === build.index))) {
           info.append(embedded && build.mode === "task"
@@ -1052,7 +1135,7 @@ function designPanel(initialState) {
         for (const finding of group.findings) info.append(element("p", "", "Finding · " + finding.text));
       }
       result.append(info);
-      if (embedded && hostOptions.workingFiles) result.append(changedFilesPanel(build));
+      if (canShowChanges) controls.append(button("View changes", () => openTab("Changes")));
     }
     if (!embedded && (!build || ["closed", "retired"].includes(build.status))) {
       const targets = [["plan", "Whole approved plan"]];
@@ -1238,7 +1321,7 @@ function designPanel(initialState) {
     };
     let next;
     if (activeBuild) {
-      const label = {ready: "Continue the build", review: "Review checked work", failed: "Resume the run",
+      const label = {ready: "Continue the build", review: "Review checked work", failed: state.restartRequired ? "View failed run" : "Resume the run",
         cancelled: "Resume the run", question: "Answer the build question"}[build.status] || "View the current build";
       next = [label, () => goBuild()];
     } else if (state.question || state.plannerRetry) next = ["Resolve the planning decision", () => projectConversation.open()];
@@ -1318,7 +1401,7 @@ function designPanel(initialState) {
       body.replaceChildren(tab === "Plan" ? element("div","design-stack",
         element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), planEditor),
         progressPanel(() => openTab("Build"), syncProgress)) :
-        tab === "Mockups" ? mockups() : tab === "Preview" ? preview() : buildPanel());
+        tab === "Mockups" ? mockups() : tab === "Changes" ? changedFilesPanel() : tab === "Preview" ? preview() : buildPanel());
     }
     guideNext();
     liveDecision.hidden = !["Plan", "Build"].includes(tab) || !liveDecision.childElementCount;

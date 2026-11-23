@@ -8,6 +8,32 @@
   flex-wrap: wrap;
 }
 
+.changes-header > p { padding: 10px 17px; color: var(--muted); font-size: .86rem; }
+.changes-layout { display: grid; grid-template-columns: minmax(190px, 260px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.changes-tree { display: grid; gap: 2px; margin-block-start: 8px; max-height: 65vh; overflow: auto; }
+.changes-file { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 7px;
+  background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 7px; text-align: start; }
+.changes-file:hover, .changes-file[aria-pressed="true"] { background: var(--accent-soft); }
+.changes-file[aria-pressed="true"] { border-color: var(--accent); }
+.changes-file-status { color: var(--accent-dark); }
+.changes-file-name { display: grid; min-width: 0; overflow-wrap: anywhere; }
+.changes-file-name strong { font-size: .87rem; }
+.changes-file-name small { font-size: .73rem; }
+.changes-diff .panel-head { overflow-wrap: anywhere; flex-wrap: wrap; }
+.changes-code { overflow: auto; font: .84rem/1.6 ui-monospace, Consolas, monospace; }
+.changes-line { display: grid; grid-template-columns: 4ch 4ch minmax(0, 1fr); min-width: max-content; }
+.changes-line code { padding-inline: 10px; white-space: pre; font: inherit; }
+.changes-line-number { text-align: end; padding-inline-end: 5px; color: var(--muted); user-select: none; }
+.changes-hunk, .changes-meta { color: var(--muted); padding-inline: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.changes-hunk { background: var(--accent-soft); margin-block-start: 4px; }
+.changes-line.addition { background: var(--diff-add, #e7f5eb); }
+.changes-line.deletion { background: var(--diff-delete, #fae8eb); }
+.workbench-surface[data-theme="dark"] { --diff-add: #203b32; --diff-delete: #452932; }
+@media (max-width: 780px) {
+  .changes-layout { grid-template-columns: minmax(0, 1fr); }
+  .changes-tree { max-height: 28vh; }
+}
+
 .design-workspace .field :is(input, select, textarea) {
   max-inline-size: 100%;
   min-inline-size: 0;
