@@ -50,7 +50,7 @@ async function waitForBuild(coordinator, wanted = 'review') {
   assert.fail('Build did not reach ' + wanted);
 }
 
-test('a build token limit blocks dispatch and can be increased for the same task', async t => {
+test('a manual retry gets a fresh allowance under the same token limit', async t => {
   const {git, store, repository} = await fixture(t);
   const profile = await store.getProfile();
   profile.profiles[profile.active].providerTokenLimit = 5000;
@@ -81,11 +81,12 @@ test('a build token limit blocks dispatch and can be increased for the same task
   assert.match(blocked.error, /1500 cached input tokens/);
   await assert.rejects(action('design/continue', {build: blocked.id, providerTokenLimit: 1}), /Set the build token limit/);
   await assert.rejects(action('design/continue', {build: blocked.id, providerTimeSeconds: 59}), /Set the build provider time/);
-  await action('design/continue', {build: blocked.id, providerTokenLimit: 2000, providerTimeSeconds: 2100});
+  await action('design/continue', {build: blocked.id, providerTimeSeconds: 2100});
   const resumed = await waitForBuild(coordinator, 'failed');
   assert.equal(resumed.error, 'Stopped after confirming dispatch.');
   assert.equal(resumed.attempts.at(-1).task, blocked.attempts.at(-1).task);
-  assert.equal(resumed.providerTokenLimit, 2000);
+  assert.equal(resumed.providerTokenLimit, 1000);
+  assert.ok(resumed.attempts.at(-1).budgetResetAt);
   assert.equal(resumed.attempts.at(-1).runtimeProfile.providerTimeSeconds, 2100);
   assert.equal((await store.getProfile()).profiles[profile.active].providerTokenLimit, 5000);
   assert.equal((await store.getProfile()).profiles[profile.active].providerTimeSeconds, undefined);

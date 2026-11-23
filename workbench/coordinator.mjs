@@ -54,7 +54,7 @@ export async function createCoordinator({
   }
 
   async function agent({profile, runtimeProfile, folder, stage, prompt, schema, write, signal, report, images, visit, evidenceOnly,
-    toolScope}) {
+    toolScope, budgetResetAt}) {
     const current = selectedProfile(profile);
     const key = stageKeys[stage];
     const configuration = current?.stages?.[key];
@@ -64,7 +64,8 @@ export async function createCoordinator({
     const override = selectedProfile(runtimeProfile) ?? runtimeProfile;
     const limitProfile = override ? {...current, ...override, stages: {...current.stages, ...override.stages}} : current;
     const limits = WorkbenchProfile.providerLimits(limitProfile, runtimeProfile?.active ?? profile.active, key);
-    const spend = visit === undefined ? null : providerSpend(await readMetrics(files, folder, true));
+    const spend = visit === undefined ? null : providerSpend((await readMetrics(files, folder, true))
+      .filter(call => budgetResetAt === undefined || call.startedAt >= budgetResetAt));
     const remaining = spend ? limits.providerTimeSeconds * 1000 - spend.milliseconds : Infinity;
     if (remaining <= 0) {
       throw Object.assign(Error('The task reached its ' + limits.providerTimeSeconds + '-second provider time limit.'),

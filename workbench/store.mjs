@@ -1362,6 +1362,8 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       } else if (operation === 'retryVerification') {
         assert(state.status === 'active' || state.status === 'stopped' && state.cause === 'repair_limit',
           'Select a build stopped during verification.');
+      } else if (operation === 'retryLimits') {
+        assert(state.status === 'active', 'Only an active task can reset its retry allowances.');
       } else if (operation === 'resume') {
         assert(['paused', 'stopped'].includes(state.status), 'Only a paused or stopped task can resume.');
       } else {
@@ -1398,7 +1400,11 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
         await validateChecks({...pinned, checks: [...pinned.checks, ...additions]});
         common.verification_checks = additions;
       }
-      const reached = operation === 'limit' || operation === 'repair' && rounds >= (run.task.execution?.max_repair_rounds ?? 3);
+      if (operation === 'retryLimits' || operation === 'retryVerification') common.repair_rounds_base = rounds;
+      const allowanceBase = operation === 'repair' ? (await records(run.taskDir, 'lifecycle'))
+        .findLast(row => Number.isSafeInteger(row.repair_rounds_base))?.repair_rounds_base ?? 0 : 0;
+      const reached = operation === 'limit' || operation === 'repair' &&
+        rounds - allowanceBase >= (run.task.execution?.max_repair_rounds ?? 3);
       const artifacts = [];
       if (operation === 'repair' && !reached) artifacts.push(['repair_rounds/' + identifier() + '.json', json({...common, round:rounds + 1})]);
       let latest = state;
@@ -1452,6 +1458,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),
     pause:(id, reason) => changeLifecycle(id, 'pause', reason), stop:(id, reason) => changeLifecycle(id, 'stop', reason),
     stopAtLimit:(id, reason) => changeLifecycle(id, 'limit', reason),
-    retryVerification:(id, source) => changeLifecycle(id, 'retryVerification', 'User requested verification only.', source),
+    retryVerification:(id, source, reason = 'User requested verification only.') => changeLifecycle(id, 'retryVerification', reason, source),
+    resetRetryLimits:id => changeLifecycle(id, 'retryLimits', 'User requested a retry with fresh allowances.'),
     resume:(id, reason = 'Explicit resume request') => changeLifecycle(id, 'resume', reason)};
 }

@@ -198,7 +198,7 @@ export function createAudit({repository, files, git, store, agent}) {
     await files.append(loopPath(run) + '/activity.jsonl', {run, stage, actor, timestamp: now(), activity: String(message).slice(0, 500)});
   }
 
-  async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly, runtimeProfile}) {
+  async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly, retryRepair, runtimeProfile}) {
     const run = task.id;
     const profile = task.profile;
     const config = await store.executionConfig(run);
@@ -226,7 +226,7 @@ export function createAudit({repository, files, git, store, agent}) {
     };
     const ask = ({stage, prompt, schema, write = false, images = [], evidenceOnly = false}) =>
       agent({profile, runtimeProfile, folder, stage, prompt, schema, write, images, evidenceOnly, signal,
-        toolScope: build.plan, visit: state.history.length - 1,
+        toolScope: build.plan, budgetResetAt: attempt.budgetResetAt, visit: state.history.length - 1,
         report: (actor, message) => activity(run, stage, actor, message)}).then(reply => reply.text);
     const context = {
       approvedPlan: build.plan, title: build.title ?? task.action, projectAgreement: scope,
@@ -260,9 +260,7 @@ export function createAudit({repository, files, git, store, agent}) {
     async function returnTo(stage, verdict, reason) {
       state.finding = reason;
       if (state.verificationOnly) {
-        await checkpoint('stopped', reason);
-        await store.stopAtLimit(run, reason);
-        return;
+        return block(stage, 'Verification found a defect that needs a build retry. ' + reason, 'verification_defect');
       }
       const {route, requirementsRoute, limit, provider} = action(stage, profile);
       const next = verdict === 'replan' && stage !== 'plan_review' ? requirementsRoute ?? 'plan' :
@@ -523,11 +521,24 @@ export function createAudit({repository, files, git, store, agent}) {
     }
 
     if (!pending) await checkpoint('plan');
-    if (verificationOnly) {
-      state.verificationOnly = true;
-      state.resumeAudit = state.history.at(-1)?.detail?.stage;
+    if (attempt.budgetResetAt && state.budgetResetAt !== attempt.budgetResetAt) {
+      state.budgetResetAt = attempt.budgetResetAt;
+      state.returns = {};
+      delete state.lastRepairSource;
+      delete state.lastRepairChecks;
+      delete state.lastReturnedPlan;
+      delete state.planEvidenceRetried;
       delete state.auditCorrection;
-      await checkpoint('checks', 'Retry verification on the existing changes.');
+      delete state.auditExpansion;
+      await files.write(statePath(run), state);
+      await activity(run, state.stage, 'Workbench', 'Started a fresh time, token, and repair allowance for this retry.');
+    }
+    if (verificationOnly || retryRepair) {
+      state.verificationOnly = Boolean(verificationOnly);
+      state.resumeAudit = state.history.at(-1)?.detail?.stage ??
+        (state.stage === 'stopped' ? state.history.at(-2)?.stage : undefined);
+      delete state.auditCorrection;
+      await checkpoint('checks', retryRepair ? 'Retry the build on the existing changes.' : 'Retry verification on the existing changes.');
     } else if (state.stage === 'evidence_blocked' && !state.checked_source) {
       const previous = state.history.at(-1).detail;
       delete state.auditCorrection;

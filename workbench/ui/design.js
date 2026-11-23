@@ -1199,14 +1199,19 @@ function designPanel(initialState) {
       const continueBuild = build.status === "ready" ? button(embedded ? "Start repair" : "Continue build", () =>
         change("continue", {build: build.id}, {wait: embedded ? "Starting repair…" : "Starting the next slice…"}), "button primary") : null;
       if (continueBuild && !showContinueByReview) controls.append(continueBuild);
-      if (["failed", "cancelled"].includes(build.status) && !state.restartRequired && !state.resumeBlocker) controls.append(button("Resume run", () =>
-        change("continue", {build: build.id, ...budgetPayload(build)}, {wait: "Resuming the run…"}), "button primary"));
+      if (["failed", "cancelled"].includes(build.status) && !state.restartRequired && !state.resumeBlocker) controls.append(
+        button(state.verificationAvailable ? "Retry build" : "Resume run", () =>
+          change("continue", {build: build.id, ...budgetPayload(build)}, {wait: "Resuming the run…"}), "button primary"));
       const canRestart = embedded && state.mode === "task" && state.approved === state.revision &&
         build.revision === state.revision && ["failed", "cancelled"].includes(build.status);
       if (state.verificationAvailable &&
           state.approved === build.revision && state.revision === build.revision) {
         controls.append(button("Retry verification", () => change("retry-verification", {build: build.id, ...budgetPayload(build)},
           {wait: "Running checks on the existing changes…", done: "Verification restarted."}), "button primary"));
+      }
+      if (state.verificationAvailable) {
+        controls.append(element("small", "stage-meta",
+          "Retry starts fresh time, token, and repair allowances. Verification uses the existing changes."));
       }
       if (canRestart) {
         const restart = button("Restart build", async () => {

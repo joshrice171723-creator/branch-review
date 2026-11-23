@@ -132,10 +132,15 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const attempt = build?.attempts.at(-1);
     if (!attempt || !['failed', 'cancelled'].includes(build.status)) return '';
     const pinned = run ?? await store.getRun(attempt.task);
-    if (pinned.lifecycle.cause === 'repair_limit') return repairLimitMessage;
-    if (attempt.step === 'stopped') return 'The audit stopped this run. Review the last audit before starting another build.';
+    if (pinned.lifecycle.cause === 'repair_limit' && !await verificationAvailable(build)) return repairLimitMessage;
+    if (attempt.step === 'stopped' && pinned.lifecycle.cause !== 'repair_limit') {
+      return 'The audit stopped this run. Review the last audit before starting another build.';
+    }
     if (attempt.step === 'evidence_blocked' && await verificationAvailable(build)) {
-      return 'The previous verification attempt stopped. Use Retry verification to run the current checks.';
+      const loop = await files.read(statePath(attempt.task));
+      if (loop?.history.at(-1)?.detail?.kind !== 'verification_defect') {
+        return 'The previous verification attempt stopped. Use Retry verification to run the current checks.';
+      }
     }
     if (changedAgents(pinned.task.profile, await store.getProfile()).length) return workflowChangedMessage(build);
     if (Date.parse((await providerLimitFor(attempt, pinned))?.resetAt) > Date.now()) {
@@ -225,8 +230,11 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const prior = previous?.slice === member && previous.outcome !== 'completed'
       ? await store.getRun(previous.task) : null;
     const loop = prior && await files.read(statePath(prior.id));
+    const manualRetry = Boolean(prior && !automaticRecovery && !answer && ['failed', 'cancelled'].includes(build.status));
+    const retryRepair = manualRetry && !verificationOnly && (prior.lifecycle.cause === 'repair_limit' ||
+      loop?.stage === 'evidence_blocked' && loop.history.at(-1)?.detail?.kind === 'verification_defect');
     let verificationSource;
-    if (verificationOnly) {
+    if (verificationOnly || retryRepair) {
       verificationSource = verificationCheckpoint(prior, loop);
       if (!verificationSource) {
         throw Error('Select a build stopped during audit before it produced a review commit.');
@@ -235,9 +243,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     }
     const blocker = verificationOnly ? '' : await resumeBlocker(build, prior);
     if (blocker) throw Error(blocker);
-    let task = prior && (verificationOnly || ['active', 'paused', 'completed'].includes(prior.lifecycle.status)) ? prior.task : null;
+    let task = prior && (verificationOnly || retryRepair || ['active', 'paused', 'completed'].includes(prior.lifecycle.status)) ? prior.task : null;
     if (automaticRecovery && !task) throw Error('The original task is unavailable for recovery.');
-    if (task && !verificationOnly) {
+    if (task && !verificationOnly && !retryRepair) {
       if (loop?.stage === 'stopped') throw Error('The audit return limit was reached. Retire this build before continuing.');
       await ensureResumeTarget(build, task.id, loop);
       if (prior.lifecycle.status === 'paused') await store.resume(task.id);
@@ -277,7 +285,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const saved = await files.read(markerPath(task.id));
     if (!saved) await files.write(markerPath(task.id), marker);
     else if (!isDeepStrictEqual(saved, marker)) throw Error('The recorded build scope changed.');
-    if (verificationOnly) await store.retryVerification(task.id, verificationSource);
+    if (verificationOnly || retryRepair) await store.retryVerification(task.id, verificationSource,
+      retryRepair ? 'User requested a build retry with fresh allowances.' : undefined);
+    else if (manualRetry && prior.lifecycle.status !== 'completed') await store.resetRetryLimits(task.id);
     const savedLimits = await runtimeProfile(previous, task.id);
     const overrides = Object.fromEntries(['providerTokenLimit', 'providerTimeSeconds']
       .filter(key => build[key] !== undefined).map(key => [key, build[key]]));
@@ -286,11 +296,13 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       ...(limits && {runtimeProfile: limits}),
       ...(automaticRecovery && {automaticRecovery}),
       reason: group.findings.at(-1)?.text ?? previous?.error ?? ''};
+    const budgetResetAt = manualRetry ? Date.now() : previous?.task === task.id ? previous.budgetResetAt : undefined;
+    if (budgetResetAt !== undefined) attempt.budgetResetAt = budgetResetAt;
     build.attempts.push(attempt);
     build.status = 'working';
     delete build.error;
-    return {build: structuredClone(build), attempt, task, answer, verificationOnly, runtimeProfile: limits,
-      step: verificationOnly ? 'checks' : loop?.stage};
+    return {build: structuredClone(build), attempt, task, answer, verificationOnly, retryRepair, runtimeProfile: limits,
+      step: verificationOnly || retryRepair ? 'checks' : loop?.stage};
   }
 
   async function recordResult(buildId, job, loop) {

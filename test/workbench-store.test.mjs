@@ -24,6 +24,23 @@ async function setup(t, configuredCheck = check) {
   return {store, folder};
 }
 
+test('an explicit verification retry resets repair allowance and preserves prior rounds', async t => {
+  const {store} = await setup(t);
+  const profile = await store.getProfile();
+  profile.profiles[profile.active].stages.buildReview.limit = 1;
+  await store.setProfile(profile);
+  const {task_id:id} = await store.startTask(start);
+  await store.repair(id, 'First confirmed finding.');
+  await assert.rejects(store.repair(id, 'Another confirmed finding.'), /repair limit/);
+  const stopped = await store.getRun(id);
+  await store.retryVerification(id, stopped.lifecycle.snapshot_sha256);
+  await store.repair(id, 'First confirmed finding after retry.');
+  const retried = await store.getRun(id);
+  assert.equal(retried.lifecycle.status, 'active');
+  assert.deepEqual(retried.repair_rounds.map(row => row.round), [1, 2]);
+  await assert.rejects(store.repair(id, 'Another finding after retry.'), /repair limit/);
+});
+
 test('runs pinned checks and verifies current audited evidence', async t => {
   const {store, folder} = await setup(t);
   assert.equal(await store.profileApplied(), false);
