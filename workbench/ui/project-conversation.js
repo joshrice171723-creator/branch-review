@@ -162,10 +162,26 @@ function connectProjectConversation(initial) {
   };
   planner.onclick = () => {
     const message = composer.value;
-    if (!message.trim()) { composer.focus(); return; }
-    if (changeScreenshot) submit("guide", {message, context: context(), changeScreenshot}, message);
-    else submit("chat", {message}, message);
+    const latest = state.messages.findLast(item => item.author === "agent" && !item.asset && !item.decision);
+    const plan = planFromReply(latest);
+    if (!message.trim() && !changeScreenshot && plan) {
+      edit(plan, true);
+      return;
+    }
+    if (!message.trim() && !state.messages.length) { composer.focus(); return; }
+    if (stored.plan) { status.textContent = "Save or discard your local plan draft first."; return; }
+    submit("guide", {message: message.trim() || "Draft a plan from this conversation.",
+      context: context(), preparePlan: true, ...(changeScreenshot && {changeScreenshot})}, message);
   };
+  function planFromReply(item) {
+    if (item?.proposal?.kind === "plan") return item.proposal;
+    if (!embedded || !item || item.proposal ||
+        !/^\s*(?:#{1,6}\s+|\*\*)?(?:Plan|Acceptance criteria)\b/im.test(item.text)) return null;
+    const heading = /^#{1,6}\s+(.+)$/m.exec(item.text)?.[1]?.trim();
+    const title = state.title || (heading && !/^(plan|acceptance criteria|verification)$/i.test(heading)
+      ? heading.slice(0, 240) : "");
+    return {kind: "plan", mode: "task", title, plan: item.text, revision: state.revision};
+  }
   function setReference(source, target = mockupTarget.value, page = "") {
     if (target !== mockupTarget.value) return false;
     const canvas = document.createElement("canvas");
@@ -324,6 +340,10 @@ function connectProjectConversation(initial) {
       }
       outgoing = undefined;
       update(next, true);
+      if (body.preparePlan) {
+        const plan = planFromReply(next.messages.at(-1));
+        if (plan) edit(plan, true);
+      }
     });
     outgoing = undefined;
     renderMessages();
@@ -385,7 +405,7 @@ function connectProjectConversation(initial) {
       notify("Plan saved. Review it before you start the build.");
     } else notify(undo ? "Proposal undone." : "Proposal applied.");
   }
-  function edit(proposal) {
+  function edit(proposal, review = false) {
     if (proposal.kind === "quality") {
       route("quality");
       panelRoot.dispatchEvent(new CustomEvent("workbench-quality-proposal", {detail: proposal}));
@@ -397,7 +417,7 @@ function connectProjectConversation(initial) {
         {plan: proposal.plan, roadmap: structuredClone(proposal.roadmap)};
       stored.baseRevision = proposal.revision;
       persistDesignDraft(key, stored);
-      route("workflow", "Plan", embedded && !proposal.title ? "plan-title" : "plan");
+      route("workflow", "Plan", embedded && !proposal.title ? "plan-title" : review ? "plan-reading" : "plan");
     } else {
       const preview = Object.hasOwn(proposal.fields, "preview");
       route("workflow", preview ? "Preview" : "Build", preview ? "preview" : "branch");
@@ -409,11 +429,11 @@ function connectProjectConversation(initial) {
     const preview = proposal.kind === "plan" ? proposal.plan :
       JSON.stringify(proposal.kind === "quality" ? proposal.definition : proposal.fields, null, 2);
     const action = accepted[item.id] ? button("Undo", () => perform("Undoing proposal…", () => revise(item, true))) :
-      button(proposal.kind === "plan" ? "Save to Plan" : "Apply",
+      proposal.kind === "plan" ? null : button("Apply",
         () => perform("Applying proposal…", () => revise(item, false)), "button primary");
     return element("div", "conversation-proposal", element("strong", "", proposal.title),
       element("details", "", element("summary", "", "Proposed changes"), element("pre", "", preview)),
-      element("div", "actions", action, button("Edit", () => edit(proposal))));
+      element("div", "actions", ...(action ? [action] : []), button("Edit", () => edit(proposal))));
   }
   function renderMessages() {
     if (!state) return;
@@ -427,15 +447,6 @@ function connectProjectConversation(initial) {
           element("p", "conversation-text", item.text));
         if (item.asset) row.append(assetImage(item.asset, "Generated mockup"));
         if (item.proposal) row.append(proposalCard(item));
-        else if (embedded && item.author === "agent" && !item.asset && !item.decision &&
-            /^\s*(?:#{1,6}\s+|\*\*)?(?:Plan|Acceptance criteria)\b/im.test(item.text)) {
-          row.append(button("Send to Plan", () => {
-            const heading = /^#{1,6}\s+(.+)$/m.exec(item.text)?.[1]?.trim();
-            const title = state.title || (heading && !/^(plan|acceptance criteria|verification)$/i.test(heading)
-              ? heading.slice(0, 240) : "");
-            edit({kind: "plan", mode: "task", title, plan: item.text, revision: state.revision});
-          }));
-        }
         if (item.choices) row.append(element("div", "answer-choices", ...item.choices.map(choice =>
           button(choice, () => { editComposer(choice); composer.focus(); }))));
         return row;

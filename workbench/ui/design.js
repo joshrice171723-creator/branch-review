@@ -313,6 +313,8 @@ function designPanel(initialState) {
     draft.setAttribute("aria-label", "Plan and acceptance criteria");
     draft.addEventListener("input", () => { editing.plan = draft.value; edited(); });
     const rendered = element("div", "plan-readable");
+    rendered.dataset.designFocus = "plan-reading";
+    rendered.tabIndex = -1;
     const placeholder = element("p", "", "Draft the plan in Project conversation or select Edit plan.");
     const toggle = button("✎", () => {
       editPlan = !editPlan;
@@ -1361,6 +1363,7 @@ function designPanel(initialState) {
     };
     projectConversation.goToDesign = (next, focus) => {
       if (next === "Plan" && focus === "plan") editPlan = true;
+      if (next === "Plan" && focus === "plan-reading") editPlan = false;
       tab = next;
       layoutSetting("tab", tab);
       if (state) draw();

@@ -352,7 +352,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
           'Project conversation': 'The top button opens or closes this conversation.',
           'Draft a plan': 'Opens this conversation and focuses the message box.',
           'Capture this view': 'Captures the project app from the live preview beside the Plan editor.',
-          'Ask planner to update draft': 'Sends the message to the planner to update the draft.'
+          'Send to Plan': 'Uses the latest plan in the conversation or asks the planner to draft one from the conversation.'
         };
       }
       const turn = id();
@@ -368,6 +368,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         context.screenshot = {page: typeof page === 'string' ? page.slice(0, 400) : ''};
       }
       const prompt = 'Help with the current project and screen. Return one JSON object with message and optional choices. ' +
+        (payload.preparePlan === true ? 'The user selected Send to Plan. Use the conversation and latest instructions to return a complete plan proposal. Ask a question with choices if information is missing.\n' : '') +
         'activeProject is the selected project and this project conversation is already open. Use this app state over earlier messages. ' +
         'When the user asks to use this project, confirm the active project and continue with their request. ' +
         'Do not ask the user to select the active project or open this conversation. Answer UI questions using planControls when present. ' +
