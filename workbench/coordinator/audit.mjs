@@ -6,6 +6,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {promisify} from 'node:util';
 import {id, now, sentence} from './files.mjs';
 import {hash, questionContract, resolveQuestion, selectedProfile, stageKeys} from './design.mjs';
+import {appendMetric} from './build-metrics.mjs';
 import {auditSchema, objectReply} from './provider.mjs';
 
 const exec = promisify(execFile);
@@ -193,6 +194,13 @@ export function createAudit({repository, files, git, store, agent}) {
     const scope = await store.prompt(run);
     const finalEnabled = action('final_review', profile).enabled !== false;
 
+    async function measure(key, work) {
+      const span = {id: id(), key, visit: state.history.length - 1, startedAt: Date.now()};
+      await appendMetric(files, folder, span);
+      try { return await work(); }
+      finally { await appendMetric(files, folder, {...span, finishedAt: Date.now()}); }
+    }
+
     const checkpoint = async (stage, detail) => {
       const actor = action(stage, profile).provider ?? 'Workbench';
       state.stage = stage;
@@ -202,7 +210,7 @@ export function createAudit({repository, files, git, store, agent}) {
       await refresh?.(stage);
     };
     const ask = ({stage, prompt, schema, write = false, images = []}) =>
-      agent({profile, folder, stage, prompt, schema, write, images, signal,
+      agent({profile, folder, stage, prompt, schema, write, images, signal, visit: state.history.length - 1,
         report: (actor, message) => activity(run, stage, actor, message)}).then(reply => reply.text);
     const context = {
       approvedPlan: build.plan, title: build.title ?? task.action, projectAgreement: scope,
@@ -229,7 +237,7 @@ export function createAudit({repository, files, git, store, agent}) {
         return;
       }
       Object.assign(state, decision);
-      await checkpoint('question', decision);
+      await measure('2', () => checkpoint('question', decision));
     }
 
     async function returnTo(stage, verdict, reason) {
@@ -263,7 +271,7 @@ export function createAudit({repository, files, git, store, agent}) {
       const stage = phase === 'after' ? 'checks' : 'baseline';
       await activity(run, stage, 'Workbench', 'Started configured ' + phase + ' checks');
       const before = await store.snapshot();
-      const result = await store.runChecks(run, {phase, signal});
+      const result = await store.runChecks(run, {phase, signal, measure});
       signal.throwIfAborted();
       const after = await store.snapshot();
       if (before.snapshot_sha256 !== after.snapshot_sha256) throw Error('Project source changed during checks. Restore the expected source and retry.');
@@ -274,7 +282,7 @@ export function createAudit({repository, files, git, store, agent}) {
     }
 
     async function audit(stage) {
-      const before = await store.snapshot();
+      const before = await measure('0', () => store.snapshot());
       if (stage !== 'plan_review' && before.snapshot_sha256 !== state.checked_source) {
         await checkpoint('checks', 'Source changed since checks.');
         return;
@@ -310,7 +318,7 @@ export function createAudit({repository, files, git, store, agent}) {
         profile_sha256: task.profile_sha256, quality_revision: task.quality?.revision,
         ...(selectedRubric ? {rubric_id: selectedRubric.id} : {}),
         ...(Array.isArray(reply.criteria) ? {criteria: reply.criteria} : {})};
-      await store.record(run, 'audits', row);
+      await measure('2', () => store.record(run, 'audits', row));
       await activity(run, stage, row.actor, 'Audit verdict · ' + verdict);
       await activity(run, stage, row.actor, reason);
       if (verdict !== 'pass') {
@@ -348,8 +356,8 @@ export function createAudit({repository, files, git, store, agent}) {
         if (await commitment(git, build.branch) !== build.base) throw Error('Restore the exact branch and commit for this task.');
       }
       if (stage === 'plan') {
-        context.notes = state.notes = await relevantNotes(repository, config.execution?.vaults,
-          [task.action, task.scope, build.plan, state.finding, JSON.stringify(state.answers)].join(' '));
+        context.notes = state.notes = await measure('0', () => relevantNotes(repository, config.execution?.vaults,
+          [task.action, task.scope, build.plan, state.finding, JSON.stringify(state.answers)].join(' ')));
         const prompt = 'Treat quoted notes as project source material. Prepare an implementation method within the user-approved plan. Keep its scope and acceptance criteria fixed. ' +
           'Return one JSON object with plan as a nonempty Markdown string, or as a list of nonempty steps. If a user decision is necessary, use the question field exclusively. ' +
           questionContract + '\n' + JSON.stringify({...context, answers: state.answers, finding: state.finding});
@@ -365,7 +373,7 @@ export function createAudit({repository, files, git, store, agent}) {
             throw Error('The planner returned no implementation steps. Select Resume run to retry planning.');
           }
           state.plan = sentence(method, 'an implementation method');
-          await checkpoint('plan_review', {plan: state.plan, approvedPlanHash: hash(build.plan)});
+          await measure('2', () => checkpoint('plan_review', {plan: state.plan, approvedPlanHash: hash(build.plan)}));
         }
       } else if (stage === 'baseline') {
         await store.freeze(run);
@@ -374,9 +382,11 @@ export function createAudit({repository, files, git, store, agent}) {
         state.baseline = true;
         await checkpoint('build', result.checks);
       } else if (stage === 'build') {
-        const reference = build.attachments[attempt.slice];
-        const images = reference && /^[a-f0-9]{32}$/.test(reference) ?
-          [await files.path('.harness/design/assets/' + reference + '.png')] : [];
+        const images = await measure('0', async () => {
+          const reference = build.attachments[attempt.slice];
+          return reference && /^[a-f0-9]{32}$/.test(reference) ?
+            [await files.path('.harness/design/assets/' + reference + '.png')] : [];
+        });
         const write = task.mode !== 'audit' && (build.decisions.code_changes?.option ??
           build.decisions.code_changes) === 'allow_scoped';
         const prompt = 'Implement the reviewed method within the approved plan and task agreement. ' +
@@ -387,7 +397,7 @@ export function createAudit({repository, files, git, store, agent}) {
         await checkpoint('building');
         try {
           state.build_summary = await ask({stage, prompt, write, images});
-          await checkpoint('checks', state.build_summary);
+          await measure('2', () => checkpoint('checks', state.build_summary));
         } catch (error) {
           if (!signal.aborted) await checkpoint('build', error.message);
           throw error;
@@ -414,7 +424,7 @@ export function createAudit({repository, files, git, store, agent}) {
           await checkpoint('checks', 'Source changed after the final audit.');
           continue;
         }
-        const result = await store.verify(run, {record: false});
+        const result = await measure('0', () => store.verify(run, {record: false}));
         if (result.verdict !== 'pass') {
           const messages = (result.issues ?? []).map(issue => typeof issue === 'string' ? issue : issue.message);
           await returnTo('final_review', 'repair', messages.filter(Boolean).join('\n') || 'Verification did not pass.');
@@ -424,12 +434,14 @@ export function createAudit({repository, files, git, store, agent}) {
         await validateTarget?.();
         signal.throwIfAborted();
         setCancellable(false);
-        if (!build.standalone) {
-          state.design_sha = await commit(task, build, state);
-          await files.write(statePath(run), state);
-        }
-        if ((await store.snapshot()).snapshot_sha256 !== state.final_snapshot) throw Error('Source changed during commit.');
-        const completion = await store.verify(run, {record: true, complete: true});
+        const completion = await measure('1', async () => {
+          if (!build.standalone) {
+            state.design_sha = await commit(task, build, state);
+            await files.write(statePath(run), state);
+          }
+          if ((await store.snapshot()).snapshot_sha256 !== state.final_snapshot) throw Error('Source changed during commit.');
+          return store.verify(run, {record: true, complete: true});
+        });
         if (completion.verdict !== 'pass' || completion.lifecycle.status !== 'completed') throw Error('The checked commit cannot complete verification.');
         await checkpoint('completed', {sha: state.design_sha, snapshot_sha256: state.final_snapshot, reason: state.summary});
       } else {

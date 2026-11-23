@@ -6,6 +6,7 @@ import {createBuilds} from './coordinator/builds.mjs';
 import {createDesign, selectedProfile, stageKeys} from './coordinator/design.mjs';
 import {id, now, ownedFiles, runPattern} from './coordinator/files.mjs';
 import {generateMockup, runProvider} from './coordinator/provider.mjs';
+import {appendMetric} from './coordinator/build-metrics.mjs';
 
 const checklist = ['Inspect the commit diff', 'Check the included scope', 'Review the recorded project checks'];
 
@@ -50,13 +51,14 @@ export async function createCoordinator({
     }));
   }
 
-  async function agent({profile, folder, stage, prompt, schema, write, signal, report, images}) {
+  async function agent({profile, folder, stage, prompt, schema, write, signal, report, images, visit}) {
     const current = selectedProfile(profile);
     const key = stageKeys[stage];
     const configuration = current?.stages?.[key];
     if (!configuration?.provider) throw Error('Apply a profile with a provider for this step.');
     const {provider, model, effort} = configuration;
-    const path = folder + '/provider-calls/' + id();
+    const callId = id();
+    const path = folder + '/provider-calls/' + callId;
     const output = await files.path(path + '/reply.txt', true);
     const instructions = WorkbenchProfile.stagePrompt(current, key, profile.documents, profile.permittedTools);
     const request = prompt + '\n\n' + instructions;
@@ -64,11 +66,21 @@ export async function createCoordinator({
     if (schema) await files.write(path + '/reply.schema.json', schema);
     if (provider === 'Muse') await files.write(path + '/reply.txt.prompt.txt', Buffer.from(request, 'utf8'));
     await report?.(provider, 'Requested model ' + (model || 'provider default') + ' · thinking effort ' + (effort || 'provider default'));
-    const result = await invoke({provider, model, effort, stage, cwd: root, write, signal, output, images,
-      providerOptions: await options(), schema: schema ? await files.path(path + '/reply.schema.json') : undefined,
-      prompt: request, report: message => report?.(provider, message)});
-    await files.write(path + '/result.json', {time: now(), ...result});
-    return result;
+    const call = {id: callId, visit, stage, provider, model, startedAt: Date.now()};
+    if (visit !== undefined) await appendMetric(files, folder, call);
+    let usage;
+    let outcome = 'failed';
+    try {
+      const result = await invoke({provider, model, effort, stage, cwd: root, write, signal, output, images,
+        providerOptions: await options(), schema: schema ? await files.path(path + '/reply.schema.json') : undefined,
+        prompt: request, report: message => report?.(provider, message), onUsage: value => { usage = value; }});
+      outcome = 'complete';
+      await files.write(path + '/result.json', {time: now(), ...result});
+      return result;
+    } finally {
+      if (visit !== undefined) await appendMetric(files, folder, {...call, outcome: signal?.aborted ? 'cancelled' : outcome,
+        finishedAt: Date.now(), ...(usage && {usage})});
+    }
   }
 
   const design = createDesign({files, store, git, agent, projectName: path.basename(root), projectEvidence, validateQuality,

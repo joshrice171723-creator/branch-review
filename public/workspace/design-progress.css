@@ -15,6 +15,9 @@
 .run-map-steps{list-style:none;margin:12px 0;padding:0}
 .run-map-steps li{display:flex;align-items:center;gap:7px;padding:8px 0;border-bottom:1px solid #d7dfe1}
 .run-map-steps li small{margin-inline-start:auto;color:var(--muted,#58646d)}
+.step-runtime{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font-size:.82rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.step-elapsed{white-space:nowrap;font-variant-numeric:tabular-nums}
+.run-map-card .step-runtime{font-size:.74rem;margin-top:2px}
 .step-evidence-trigger{display:inline-grid;place-items:center;flex:none;width:32px;min-height:32px;padding:4px}
 .step-evidence-trigger svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .step-evidence section{min-width:0;padding-block:12px;border-block-start:1px solid var(--border)}

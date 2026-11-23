@@ -104,8 +104,10 @@ test('pins a checked commit, returns a failed check, and repairs the same approv
   let reviewState;
   const stages = [];
   let edits = 0;
-  const invoke = async ({stage, provider, write, prompt}) => {
+  const usage = {input: 123, output: 45, cached: 23, reasoning: 10};
+  const invoke = async ({stage, provider, write, prompt, onUsage}) => {
     stages.push(stage);
+    if (provider === 'Codex') onUsage(usage);
     if (stage === 'plan') return {text: JSON.stringify({plan: ['Edit the greeting.', 'Inspect the configured check.']})};
     if (stage === 'build') {
       assert.equal(write, true);
@@ -148,6 +150,15 @@ test('pins a checked commit, returns a failed check, and repairs the same approv
   const returned = await inspect(audits[0], '2');
   assert.match(returned.sections.find(row => row.text).text, /required project check failed/i);
   const checkVisits = progress.run.attempts.filter(row => row.role === 'checks');
+  const builder = progress.run.attempts.find(row => row.role === 'build');
+  assert.equal(builder.metrics.providers[0].outcome, 'complete');
+  assert.deepEqual(builder.metrics.providers[0].usage, usage);
+  assert.ok(builder.metrics.time.milliseconds >= builder.metrics.providers[0].time.milliseconds);
+  const repair = progress.run.attempts.find(row => row.role === 'repair');
+  assert.deepEqual(repair.metrics.providers[0].usage, usage);
+  assert.ok(checkVisits[0].metrics.steps.greeting.milliseconds > 0);
+  assert.equal(audits[0].metrics.providers[0].usage, null);
+  assert.deepEqual((await inspect(builder, '1')).providers[0].usage, usage);
   const failed = (await inspect(checkVisits[0], 'greeting')).sections[0].checks[0];
   const passed = (await inspect(checkVisits[1], 'greeting')).sections[0].checks[0];
   assert.equal(failed.exit_code, 1);

@@ -2,7 +2,8 @@ import {isDeepStrictEqual} from 'node:util';
 import {id, now, runPattern, sentence} from './files.mjs';
 import {checkMode, hash, jsonHash, selectedProfile} from './design.mjs';
 import {commitment, currentGroup, loopPath, markerPath, statePath} from './audit.mjs';
-import {buildStageRoles, buildTrace, gateEvidence, stageEvidence} from './step-evidence.mjs';
+import {buildStageRoles, buildTrace, checkRows, gateEvidence, stageEvidence} from './step-evidence.mjs';
+import {readMetrics, visitMetrics} from './build-metrics.mjs';
 
 const leasePath = '.harness/design/build.owner';
 const pendingStates = ['working', 'cancelling'];
@@ -426,11 +427,12 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         } else if (operation === 'push') {
           if (saved?.sha !== sha || saved.reviewId !== result.reviewId || saved.runId !== result.runId) throw Error('Record the current approval first.');
           if (!push || !payload.expectedTarget || payload.expectedTarget !== result.pushTarget) throw Error('Confirm the current GitHub destination.');
+          const start = performance.now();
           const receipt = await push({runId: result.runId, commit: sha, expectedTarget: payload.expectedTarget});
           if (receipt.commit !== sha || receipt.ref !== result.ref || receipt.repository !== payload.expectedTarget) {
             throw Error('Branch Review could not confirm the requested remote branch.');
           }
-          group.pushed = {sha, destination: receipt.remote, ref: receipt.ref, time: now()};
+          group.pushed = {sha, destination: receipt.remote, ref: receipt.ref, time: now(), milliseconds: performance.now() - start};
         } else {
           throw Error('Unknown review action.');
         }
@@ -544,9 +546,13 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const checks = (await store.executionConfig(attempt.task)).checks;
     const statuses = evidence => Object.fromEntries(Object.entries(evidence).map(([key, row]) => [key, row.status]));
     const visits = buildTrace(loop.history);
+    const metrics = await readMetrics(files, loopPath(attempt.task));
+    const windows = build.attempts.filter(row => row.task === attempt.task);
     const attempts = visits.map(visit => {
       const {id, role, stage, time, entry} = visit;
       return {id, role, stage, time,
+        metrics: visitMetrics(visit, windows, metrics,
+          ['baseline', 'checks'].includes(role) ? checkRows(task, visit) : []),
         reason: (typeof entry.detail === 'string' ? entry.detail : entry.detail?.reason ?? '').slice(0, 1200),
         evidence: statuses(stageEvidence(task, build, visit, visits))};
     });
@@ -573,6 +579,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       question: ['question', 'question_retry'].includes(loop.stage) ? loop.question : ''},
       review: {waiting: build.status === 'review', approved: !!group.sha && group.reviews.at(-1)?.sha === group.sha,
         pushed: !!group.sha && group.pushed?.sha === group.sha,
+        pushMs: group.pushed?.sha === group.sha ? group.pushed?.milliseconds : undefined,
         evidence: {humanReview: statuses(gateEvidence('humanReview', build, group)),
           push: statuses(gateEvidence('push', build, group))}}};
   }
@@ -582,7 +589,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const state = await design.read();
     const build = [...(state.archivedBuilds ?? []), ...state.builds].findLast(row => row.attempts.some(item => item.task === id));
     if (!build) throw Error('Select a recorded build step.');
-    let evidence;
+    let evidence, metrics;
     if (['humanReview', 'push'].includes(role)) {
       const group = build.groups.find(row => row.sha && build.attempts.some(item => item.task === id && item.sha === row.sha));
       const review = group && role === 'humanReview' ? await reviewed(build, group).catch(() => null) : null;
@@ -591,9 +598,14 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const trace = buildTrace((await files.read(statePath(id), {})).history);
       const found = trace.find(row => row.id === visit && row.role === role);
       if (!found) throw Error('Select a recorded build step.');
-      evidence = stageEvidence(await store.getRun(id), build, found, trace);
+      const run = await store.getRun(id);
+      evidence = stageEvidence(run, build, found, trace);
+      metrics = visitMetrics(found, build.attempts.filter(row => row.task === id),
+        await readMetrics(files, loopPath(id)), ['baseline', 'checks'].includes(role) ? checkRows(run, found) : []);
     }
-    const record = Object.hasOwn(evidence, key) ? evidence[key] : null;
+    const timing = Object.hasOwn(metrics?.steps ?? {}, key) ? metrics.steps[key] : undefined;
+    const record = Object.hasOwn(evidence, key) ? evidence[key] :
+      timing ? {status: timing.runningSince == null ? 'Timing recorded' : 'Running', sections: []} : null;
     if (!record) throw Error('This step has no saved evidence.');
     if (output !== undefined) {
       const row = record.sections.flatMap(section => section.checks ?? []).find(check => check.id === output);
@@ -603,7 +615,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const [stdout, stderr] = await Promise.all([read('stdout'), read('stderr')]);
       return {stdout, stderr};
     }
-    return record;
+    return {...record, timing, ...(key === '1' && metrics?.providers.length && {providers: metrics.providers})};
   }
 
   async function history() {

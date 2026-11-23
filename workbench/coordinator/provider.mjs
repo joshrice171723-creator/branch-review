@@ -11,6 +11,23 @@ import {redact} from '../../jobs.mjs';
 const exec = promisify(execFile);
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const providerIds = {Codex: 'codex', Muse: 'muse', 'Claude Code': 'claude'};
+const count = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+
+export function reportedUsage(provider, event) {
+  let usage;
+  if (provider === 'codex' && event.type === 'turn.completed') usage = event.usage;
+  if (provider === 'claude' && event.type === 'result') usage = event.usage;
+  if (provider === 'muse' && event.payload_type === 'run.terminal.completed') usage = event.payload?.usage;
+  if (!usage) return null;
+  const input = count(usage.input_tokens);
+  const output = count(usage.output_tokens);
+  if (input === undefined || output === undefined) return null;
+  const cached = count(provider === 'claude' ? usage.cache_read_input_tokens : usage.cached_input_tokens);
+  const written = count(usage.cache_creation_input_tokens);
+  return {input: input + (provider === 'claude' ? (cached ?? 0) + (written ?? 0) : 0), output,
+    ...(cached !== undefined && {cached}), ...(written !== undefined && {cacheWrite: written}),
+    ...(count(usage.reasoning_output_tokens) !== undefined && {reasoning: usage.reasoning_output_tokens})};
+}
 
 export function objectReply(value) {
   let answer;
@@ -57,7 +74,7 @@ async function stop(child) {
 
 export async function runProvider(options) {
   const {stage, provider, cwd, write = false, model, effort, prompt, schema, signal, report, output,
-    images = [], image = false, providerOptions = {}} = options;
+    images = [], image = false, providerOptions = {}, onUsage} = options;
   const providerId = Object.hasOwn(providerIds, provider) && providerIds[provider];
   if (!providerId || (write && providerId !== 'codex')) throw Error('Unsupported provider for ' + stage + '.');
   if (image && providerId !== 'codex') throw Error('This planner provider does not support mockup generation.');
@@ -99,6 +116,8 @@ export async function runProvider(options) {
       try { event = JSON.parse(line); } catch { continue; }
       consumeAgentEvent(state, event);
       const kind = event.type ?? event.payload_type;
+      const usage = reportedUsage(providerId, event);
+      if (usage) onUsage?.(usage);
       if (kind === 'turn.completed') complete = true;
       if (kind === 'error' || kind === 'turn.failed') state.agentError ||= event.message || 'The provider did not complete the turn.';
       if (kind === 'item.completed' && event.item?.type === 'agent_message') answer = event.item.text;

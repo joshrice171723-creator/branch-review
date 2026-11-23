@@ -919,7 +919,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return {...receipt, id, evidence_path:relative};
   }
 
-  async function runConfigured(id, {name, phase, signal, benchmarks = false} = {}) {
+  async function runConfigured(id, {name, phase, signal, benchmarks = false, measure = (_name, run) => run()} = {}) {
     assert(phases.includes(phase), 'Choose baseline or after.');
     return mutate(async home => {
       const run = await selected(id, home);
@@ -944,7 +944,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       }
       await pin(run);
       const results = [];
-      for (const check of checks) results.push(await runPinnedCheck(run, check, phase, contract, signal));
+      for (const check of checks) results.push(await measure(check.name, () => runPinnedCheck(run, check, phase, contract, signal)));
       const gating = results.filter(row => configured.some(check => check.name === row.check && (check.required || check.benchmark)));
       return {checks:results, verdict:gating.every(passing) ? 'pass' : 'revise'};
     });

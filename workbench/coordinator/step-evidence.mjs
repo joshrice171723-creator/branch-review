@@ -5,17 +5,22 @@ export function buildTrace(history = []) {
   const visits = [];
   for (const [index, entry] of history.entries()) {
     const prior = visits.at(-1);
+    if (prior?.role === 'plan' && prior.next === entry && entry.stage === 'question_retry') {
+      prior.lastIndex = index;
+      prior.next = history[index + 1];
+    }
     if (entry.stage === 'question' && prior?.role === 'plan') prior.question = entry.detail;
     let role = buildStageRoles[entry.stage];
     if (!role) continue;
     if (entry.stage === 'building' && ['build', 'repair'].includes(prior?.role) && prior.next === entry) {
       prior.stage = 'building';
+      prior.lastIndex = index;
       prior.next = history[index + 1];
       continue;
     }
     if (entry.stage === 'build' && ['buildReview', 'finalReview', 'verify'].includes(prior?.role) &&
         typeof entry.detail === 'string') role = 'repair';
-    visits.push({id: String(index), role, stage: entry.stage, time: entry.time, entry, next: history[index + 1]});
+    visits.push({id: String(index), role, stage: entry.stage, time: entry.time, entry, lastIndex: index, next: history[index + 1]});
   }
   return visits;
 }
@@ -29,7 +34,7 @@ const inVisit = (visit, timestamp) => {
   return time >= visit.time * 1000 && (!visit.next || time <= visit.next.time * 1000);
 };
 
-function checkRows(run, visit) {
+export function checkRows(run, visit) {
   if (!visit) return [];
   const phase = visit.role === 'baseline' ? 'baseline' : 'after';
   const checkpoint = phase === 'baseline' ? 'build' : 'build_review';
