@@ -622,18 +622,31 @@ function designPanel(initialState) {
     }, "button primary");
     const fullTools = element("div", "project-fullscreen-tools", sendView,
       button("Exit full screen", () => document.exitFullscreen().catch(error => notify(error.message))), fullStatus);
-    const fullScreen = button("Full screen", () => {
+    function toolbarButton(label, glyph, action, iconClass = "") {
+      const control = button("", action, "button preview-icon-button");
+      control.title = label;
+      control.setAttribute("aria-label", label);
+      const icon = element("span", "preview-icon " + iconClass, glyph);
+      icon.setAttribute("aria-hidden", "true");
+      control.append(icon);
+      return control;
+    }
+    const fullScreen = toolbarButton("Full screen", "⛶", () => {
       if (viewport.querySelector("iframe")) viewport.requestFullscreen().catch(error => notify(error.message));
     });
-    const captureView = button("Capture this view", () => projectConversation.capturePreview?.());
-    const refreshView = button("Reload page", () => {
+    const captureView = toolbarButton("Capture this view", "", () => projectConversation.capturePreview?.(), "preview-camera-icon");
+    const refreshView = toolbarButton("Reload page", "↻", () => {
       const frame = viewport.querySelector("iframe");
       if (frame) frame.src = frame.src;
     });
-    const pages = element("div");
+    const pages = element("div", "project-preview-pages");
     const automaticControls = element("div", "design-stack");
-    const tools = element("div", "actions", open, fullScreen, refreshView, captureView);
-    mount.append(tools, pages, previewStatus, automaticControls, viewport);
+    const tools = element("div", "project-preview-toolbar", pages,
+      element("div", "actions", refreshView, captureView, fullScreen));
+    tools.setAttribute("role", "group");
+    tools.setAttribute("aria-label", "Project preview controls");
+    viewport.hidden = true;
+    mount.append(previewStatus, automaticControls, viewport);
     let process, checked, source, timer, pending = false, version = 0;
     let pageAddress = "", baseAddress = "";
     const publishView = () => {
@@ -642,7 +655,7 @@ function designPanel(initialState) {
     };
     function loadPage(url) {
       pageAddress = url;
-      viewport.replaceChildren(fullTools);
+      viewport.replaceChildren(tools, fullTools);
       if (url) {
         const frame = element("iframe");
         frame.title = projectState.project.label + " app preview";
@@ -651,17 +664,17 @@ function designPanel(initialState) {
         viewport.append(frame);
         open.href = url;
       }
-      fullScreen.hidden = refreshView.hidden = captureView.hidden = !url;
+      viewport.hidden = !url;
       publishView();
     }
     function showPages(url) {
-      pages.replaceChildren();
+      pages.replaceChildren(url ? element("small", "", new URL(url).pathname) : "");
       if (!url) return;
       api("quality/routes").then(({routes}) => {
         if (!mount.isConnected || baseAddress !== url) return;
         const paths = [...new Set((routes || []).filter(row => row.method === "GET" &&
           /^\/(?!\/)[^:*{}()?#\\]*$/.test(row.path)).map(row => row.path))].slice(0, 150);
-        if (paths.length) pages.append(field("Project page", select("", [["", "Preview start page"],
+        if (paths.length) pages.replaceChildren(field("Project page", select("", [["", "Preview start page"],
           ...paths.map(path => [path, path])], path => {
           loadPage(path ? new URL(path, url).href : url);
           return true;
@@ -837,11 +850,10 @@ function designPanel(initialState) {
       if (inPlan && !checked?.url) await startAutomatic();
       else await refresh();
     });
-    fullScreen.hidden = refreshView.hidden = captureView.hidden = true;
     const setup = box("Manage preview process", discovered, field("Preview mode", previewMode), field("Executable", program),
       field("Arguments (one literal argument per line)", args), field("Working directory", cwd),
       element("div", "actions", start, stop), processStatus, details);
-    const addressControls = element("div", "design-stack", field("App address", address), element("div", "actions", save, reload));
+    const addressControls = element("div", "design-stack", field("App address", address), element("div", "actions", save, reload, open));
     if (inPlan) return box("Live project preview", mount,
       element("details", "", element("summary", "", "Preview settings"), addressControls, setup));
     return element("div", "design-stack", box("Project app preview", addressControls, mount), setup);

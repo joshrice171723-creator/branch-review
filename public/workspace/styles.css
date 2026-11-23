@@ -227,9 +227,22 @@ summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .milestone button, .roadmap>button, .decision>.button { justify-self:start; }
 .mockup { display:block; max-width:100%; max-height:520px; object-fit:contain; }
 .milestone .mockup, .conversation .mockup { max-height:170px; }
-.preview-frame iframe { display:block; width:100%; min-height:60vh; border:1px solid var(--border); }
+.project-viewport { border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--surface); }
+.preview-frame iframe { display:block; width:100%; min-height:60vh; border:0; }
+.project-preview-toolbar { display:flex; justify-content:space-between; align-items:center; gap:8px;
+  padding:5px 8px; border-bottom:1px solid var(--border); background:var(--surface); }
+.project-preview-toolbar .actions { flex-wrap:nowrap; gap:4px; }
+.project-preview-pages { flex:1; min-width:0; overflow-wrap:anywhere; }
+.project-preview-pages .field { margin:0; display:flex; flex-direction:row; align-items:center; gap:8px; }
+.project-preview-pages .field > label { white-space:nowrap; }
+.project-preview-pages select { padding-block:4px; }
+.preview-icon-button { display:grid; place-items:center; min-width:34px; min-height:34px; padding:4px; }
+.preview-icon { display:block; font-size:1.2rem; line-height:1; }
+.preview-camera-icon { width:16px; height:12px; border:1.5px solid currentColor; border-radius:2px; display:grid; place-items:center; }
+.preview-camera-icon::before { content:""; width:5px; height:5px; border:1.5px solid currentColor; border-radius:50%; }
 .project-fullscreen-tools { display:none; }
 .project-viewport:fullscreen { display:flex; flex-direction:column; background:var(--surface, white); }
+.project-viewport:fullscreen .project-preview-toolbar { display:none; }
 .project-viewport:fullscreen .project-fullscreen-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 12px; }
 .project-viewport:fullscreen iframe { flex:1; min-height:0; border:0; background:white; }
 
