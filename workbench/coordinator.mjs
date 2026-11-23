@@ -177,10 +177,7 @@ export async function createCoordinator({
         }
         case 'POST design/build': return await builds.launch(data);
         case 'POST design/restart': return await builds.launch(data, true);
-        case 'POST design/archive': {
-          if (builds.busy()) throw Error('Wait for the current run before archiving.');
-          return await design.archive(data);
-        }
+        case 'POST design/archive': return await builds.archive(data);
         case 'POST design/continue': return await builds.advance(data);
         case 'POST design/retry-verification': return await builds.retryVerification(data);
         case 'POST design/cancel': return await builds.cancel(data);

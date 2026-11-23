@@ -183,6 +183,22 @@ for (const escalates of [false, true]) {
     else assert.deepEqual(run.audits.map(row => [row.stage, row.verdict]),
       [['plan_review', 'skipped'], ['build_review', 'pass'], ['final_review', 'skipped']]);
     assert.equal(run.lifecycle.status, 'completed');
+    if (!escalates) {
+      const commit = await git('rev-parse', 'HEAD');
+      const before = await coordinator.dispatch('design');
+      const archived = await post('design/archive', {revision: before.revision, draft: {message: 'Next idea'}});
+      assert.equal(archived.title, '');
+      assert.equal(archived.plan, '');
+      assert.deepEqual(archived.builds, []);
+      const entry = archived.conversations.at(-1);
+      assert.equal(entry.status, 'In review');
+      assert.deepEqual(entry.buildIds, [build.id]);
+      const record = await coordinator.dispatch('design/conversations', {id: entry.id});
+      assert.equal(record.plan, before.plan);
+      assert.equal(record.draft.message, 'Next idea');
+      assert.equal((await coordinator.dispatch('design/history')).at(-1).build, build.id);
+      assert.equal(await git('rev-parse', 'HEAD'), commit);
+    }
   });
 }
 

@@ -102,6 +102,8 @@ function connectProjectConversation(initial) {
   let key = designDraftKey(initial);
   let stored = designDraftFor(key);
   const archive = byId("archive-project-conversation");
+  const archiveStatus = byId("archive-project-conversation-status");
+  let archiveFeedback = "";
   const acceptedKey = "workbench.conversation.accepted:" + projectState.project.path;
   let accepted = {};
   try { accepted = JSON.parse(localStorage.getItem(acceptedKey)) || {}; } catch {}
@@ -153,9 +155,10 @@ function connectProjectConversation(initial) {
       current.tab || current.section, current.label || current.scenarioTitle].filter(Boolean).join(" / ");
     mockup.hidden = current.view !== "workflow" || Boolean(embedded && current.kind);
     planner.disabled = busy || Boolean(state?.question || state?.plannerRetry);
-    const unfinished = state?.builds?.some(build => !["closed", "retired"].includes(build.status));
-    archive.disabled = busy || Boolean(unfinished);
-    archive.title = unfinished ? "Finish or retire the current build before archiving." : "";
+    const building = ["working", "cancelling"].includes(state?.builds?.at(-1)?.status);
+    archive.disabled = busy || building;
+    archiveStatus.textContent = building ? "Wait for the build to stop before archiving." : archiveFeedback;
+    archiveStatus.hidden = !archiveStatus.textContent;
   }
   function showBuildDecision(task) {
     const waiting = task?.question || task?.question_error;
@@ -229,15 +232,27 @@ function connectProjectConversation(initial) {
   launch.onclick = () => visible() ? close() : open();
   launch.hidden = false;
   byId("close-project-conversation").onclick = () => close();
-  archive.onclick = () => perform("Archiving conversation…", async () => {
-    const next = await api("design/archive", {revision: state.revision,
-      draft: {title: stored.plan?.title, plan: stored.plan?.plan, message: composer.value}});
-    Object.assign(stored, {message: "", mockupMessage: "", plan: null, baseRevision: null, slice: ""});
-    persistDesignDraft(key, stored);
-    update(next, true);
-    notify("Conversation archived in History.");
-    composer.focus();
-  });
+  archive.onclick = async () => {
+    if (busy) return;
+    archiveFeedback = "Archiving conversation…";
+    busy = send.disabled = true;
+    showContext();
+    try {
+      const next = await api("design/archive", {revision: state.revision,
+        draft: {title: stored.plan?.title, plan: stored.plan?.plan, message: composer.value}});
+      Object.assign(stored, {message: "", mockupMessage: "", plan: null, baseRevision: null, slice: ""});
+      persistDesignDraft(key, stored);
+      showBuildDecision(null);
+      update(next, true);
+      archiveFeedback = "Conversation archived in History.";
+      composer.focus();
+    } catch (error) {
+      archiveFeedback = error.message;
+    } finally {
+      busy = send.disabled = false;
+      showContext();
+    }
+  };
   drawer.addEventListener("keydown", event => {
     if (event.key === "Escape") { event.preventDefault(); close(); }
   });

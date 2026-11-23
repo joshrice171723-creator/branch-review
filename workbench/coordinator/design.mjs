@@ -166,14 +166,12 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     return {active: conversationSummary(state), archived: [...(state.conversations || [])].reverse()};
   }
 
-  async function archive(payload) {
+  async function archive(payload, prepare) {
     const releases = [];
     try {
       for (const name of ['planner', 'guide', 'mockup']) releases.push(await files.acquire('.harness/design/' + name + '.owner'));
       return await edit(async state => {
         revision(state, payload);
-        if (state.builds.some(build => !['closed', 'retired'].includes(build.status)))
-          throw Error('Finish or retire the current build before archiving.');
         const draft = {};
         for (const field of ['title', 'plan', 'message']) {
           const value = payload.draft?.[field];
@@ -186,6 +184,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
           throw Error('There is no conversation or plan to archive.');
         const entry = {...conversationSummary(state), id: id(), archivedAt: now(), revision: state.revision,
           approved: state.approved, buildIds: state.builds.map(build => build.id), assetIds: state.assets.map(asset => asset.id)};
+        await prepare(state.builds.at(-1));
         await files.write('.harness/design/conversations/' + entry.id + '.json', {...entry,
           plan: state.plan, messages: state.messages, revisions: state.revisions, assets: state.assets,
           question: state.question, plannerRetry: state.plannerRetry ?? null, draft});

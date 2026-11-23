@@ -703,6 +703,20 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return {...result, url};
   }
 
+  async function archive(payload) {
+    if (busy()) throw Error('Wait for the build to stop before archiving.');
+    const release = await files.acquire(leasePath);
+    try {
+      return await design.archive(payload, async build => {
+        if (pendingStates.includes(build?.status)) throw Error('Wait for the build to stop before archiving.');
+        const running = await active();
+        if (running?.lifecycle.status === 'active' && build?.attempts.at(-1)?.task === running.id) {
+          await store.pause(running.id, 'Conversation archived.');
+        }
+      });
+    } finally { await release(); }
+  }
+
   async function decision(operation, payload) {
     const release = await files.acquire(leasePath);
     try {
@@ -1023,7 +1037,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
 
   const busy = () => operations > 0 || [...jobs.values()].some(entry => entry.active);
   void refreshRecovery(true).catch(() => {});
-  return {launch, advance, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
+  return {launch, advance, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, archive, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
     suspendRecovery() {
       if (busy() || closing || recoverySuspended) throw Error('Finish or cancel the active build before leaving this project.');
       recoverySuspended = true;
