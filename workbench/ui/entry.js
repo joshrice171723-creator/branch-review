@@ -67,6 +67,11 @@ export async function mount(root, hostOptions = {}) {
     if (shellHeader) headerObserver.observe(shellHeader);
     headerObserver.observe(workspaceNav);
     signal.addEventListener("abort", () => headerObserver.disconnect(), {once:true});
+    const reflectTheme = () => surface.dataset.theme = document.documentElement.dataset.theme || "classic";
+    const themeObserver = new MutationObserver(reflectTheme);
+    themeObserver.observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});
+    signal.addEventListener("abort", () => themeObserver.disconnect(), {once:true});
+    reflectTheme();
     measureHeaders();
     return workspace;
   } catch (error) {

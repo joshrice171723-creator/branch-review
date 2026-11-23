@@ -5,14 +5,7 @@
       <button data-view="quality">Quality</button>
       <button data-view="live"><span aria-hidden="true">▷</span> Live run</button>
       <button data-view="history"><span aria-hidden="true">◷</span> History</button>
-      <details class="workspace-tools">
-        <summary>Configure</summary>
-        <div class="workspace-tools-menu">
-          <button data-view="stages">Stage designer</button>
-          <button data-view="documents">Documents</button>
-          <button data-view="rules">Shared rules</button>
-        </div>
-      </details>
+      <button id="open-configure" type="button">Configure</button>
     </nav>
   </header>
   <div class="workspace">
@@ -29,6 +22,11 @@
         </div></div>
       </div>
       <section id="workflow-provider-status" class="panel panel-body" aria-label="Workflow providers" hidden></section>
+      <nav id="configure-sections" class="actions configure-sections" aria-label="Workflow configuration" hidden>
+        <button class="button" data-view="stages">Stage designer</button>
+        <button class="button" data-view="documents">Documents</button>
+        <button class="button" data-view="rules">Shared rules</button>
+      </nav>
       <div class="actions profile-actions" id="profile-actions" aria-label="Workflow profile" hidden>
         <button class="button primary" id="apply-profile">Apply profile</button>
         <button class="button" id="import">Import profile</button>
@@ -64,7 +62,7 @@
       </select></div>
       <div id="mockup-reference-controls">
         <label class="field"><span>Target screen</span><select id="mockup-target">
-          <option>Project preview</option><option>Plan</option><option>Preview</option><option>Build</option>
+          <option>Project preview</option><option>Plan</option>
         </select></label>
         <div class="actions">
           <button class="button" type="button" id="capture-mockup-reference">Capture screen</button>

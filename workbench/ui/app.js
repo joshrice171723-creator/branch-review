@@ -576,6 +576,10 @@ function render(design) {
   const [title, description] = titles[view];
   byId("profile-group").hidden = ["history", "live", "quality"].includes(view);
   byId("profile-actions").hidden = view !== "stages";
+  const configuring = ["stages", "documents", "rules"].includes(view);
+  byId("configure-sections").hidden = !configuring;
+  if (configuring) byId("open-configure").setAttribute("aria-current", "page");
+  else byId("open-configure").removeAttribute("aria-current");
   byId("view-title").textContent = title;
   byId("view-description").textContent = description;
   for (const tab of panelRoot.querySelectorAll("[data-profile]")) tab.setAttribute("aria-pressed", String(tab.dataset.profile === data.active));
@@ -773,13 +777,9 @@ panelRoot.querySelectorAll("[data-view]").forEach(node => node.addEventListener(
   view = node.dataset.view;
   projectConversation?.selectView();
   layoutSetting("view", view);
-  const tools = node.closest(".workspace-tools");
-  if (tools) {
-    tools.open = false;
-    tools.querySelector("summary").focus();
-  }
   render();
 }));
+byId("open-configure").onclick = () => openView("stages");
 panelRoot.querySelectorAll("[data-profile]").forEach(node => node.addEventListener("click", () => {
   if (data.active !== node.dataset.profile && apply(next => { next.active = node.dataset.profile; }, false)) {
     cancelCalls();

@@ -210,7 +210,7 @@ function designPanel(initialState) {
   let decisionKey;
   status.setAttribute("role", "status");
   panel.append(tabs, nextAction, status, liveDecision, body);
-  const names = ["Plan", "Mockups", "Preview", "Build"];
+  const names = embedded ? ["Plan", "Mockups"] : ["Plan", "Mockups", "Preview", "Build"];
   let tab = !embedded && names.includes(layoutSetting("tab")) ? layoutSetting("tab") : "Plan";
   let state = initialState || projectConversation?.current(), selectedAsset, busy = false;
   let draftKey = designDraftKey(state);
@@ -396,7 +396,7 @@ function designPanel(initialState) {
         if (await change("build", {stages: active().stages, decisions: launchForm.decisions},
           {wait: "Starting build…", done: "Build started.", onError})) {
           showPlanStartStatus("");
-          openTab("Build");
+          goBuild();
         }
       } catch (error) { onError(error); }
       finally {
@@ -994,6 +994,10 @@ function designPanel(initialState) {
   }
   function buildPanel() {
     const result = element("div", "design-stack");
+    if (embedded) {
+      result.classList.add("plan-build-section");
+      result.tabIndex = -1;
+    }
     const build = state.builds.at(-1);
     if (build) {
       const attempt = build.attempts.at(-1);
@@ -1050,7 +1054,7 @@ function designPanel(initialState) {
       result.append(info);
       if (embedded && hostOptions.workingFiles) result.append(changedFilesPanel(build));
     }
-    if (!build || ["closed", "retired"].includes(build.status)) {
+    if (!embedded && (!build || ["closed", "retired"].includes(build.status))) {
       const targets = [["plan", "Whole approved plan"]];
       for (const m of state.roadmap) targets.push(["milestone/" + m.id, "Milestone · " + m.title],
         ...m.slices.map(s => ["slice/" + s.id, "Slice · " + s.title]));
@@ -1175,12 +1179,13 @@ function designPanel(initialState) {
     const host = input(settings.host ?? (state.reviewHost || (projectState.host_links || [])
       .find(item => item.name.toLowerCase() === "branch review")?.url || ""), "Branch Review address", value => { settings.host = value; });
     host.dataset.designFocus = "review-host";
-    result.append(box("Build settings", detectedBranch, field("Git branch", branch),
+    const buildSettings = box("Build settings", detectedBranch, field("Git branch", branch),
       ...(embedded ? [] : [field("Branch Review address", host)]),
       button("Save build settings", () => change("settings", {branch: branch.value, preview: state.preview,
-        ...(embedded ? {} : {reviewHost: host.value.trim()})}))));
+        ...(embedded ? {} : {reviewHost: host.value.trim()})})));
     if (build) result.append(button(embedded ? "Show attempts" : "Show slice attempts", () => showDialog("Build attempts", designHistory())));
     result.append(progressPanel(null, syncProgress));
+    result.append(embedded ? element("details", "", element("summary", "", "Build settings"), buildSettings) : buildSettings);
     return result;
   }
   function openTab(name) {
@@ -1198,6 +1203,20 @@ function designPanel(initialState) {
     panelRoot.dispatchEvent(new CustomEvent("workbench-quality-focus", {detail: {section}}));
   }
   function goBuild(focus) {
+    if (embedded) {
+      if (tab !== "Plan") openTab("Plan");
+      const section = body.querySelector(".plan-build-section");
+      const target = focus && section?.querySelector('[data-design-focus="' + focus + '"]');
+      if (target) {
+        const settings = target.closest("details");
+        if (settings) settings.open = true;
+        target.focus();
+      } else {
+        section?.focus({preventScroll: true});
+        section?.scrollIntoView({block: "start"});
+      }
+      return;
+    }
     openTab("Build");
     if (focus) body.querySelector('[data-design-focus="' + focus + '"]')?.focus();
   }
@@ -1271,26 +1290,37 @@ function designPanel(initialState) {
       return node;
     }));
     const layout = layoutSetting("panes") || "beside";
+    const planEditor = tab === "Plan" ? editor() : null;
+    if (planEditor) {
+      const nextLayout = layout === "beside" ? "stack" : "beside";
+      const label = nextLayout === "stack" ? "Stack panes" : "Show panes side by side";
+      const toggle = button("", () => { layoutSetting("panes", nextLayout); draw(); }, "button plan-layout-toggle");
+      toggle.title = label;
+      toggle.setAttribute("aria-label", label);
+      toggle.dataset.designFocus = "pane-layout";
+      const icon = element("span", "plan-layout-icon");
+      icon.dataset.layout = nextLayout;
+      icon.setAttribute("aria-hidden", "true");
+      toggle.append(icon);
+      planEditor.querySelector(".panel-head")?.append(toggle);
+    }
     if (tab === "Plan" && embedded) {
       const columns = body.querySelector(":scope > [data-plan-columns]") ||
         element("div", "", preview(true), element("div"));
       columns.dataset.planColumns = "";
       columns.className = layout === "beside" ? "design-columns" : "design-stack";
-      columns.lastElementChild.replaceChildren(editor());
-      const progress = progressPanel(() => openTab("Build"), syncProgress);
+      columns.lastElementChild.replaceChildren(planEditor);
+      const progress = buildPanel();
       if (columns.parentNode === body) body.lastElementChild.replaceWith(progress);
       else body.replaceChildren(columns, progress);
     } else {
       if (tab !== "Preview") projectConversation.setPreview?.(null);
       body.replaceChildren(tab === "Plan" ? element("div","design-stack",
-        element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), editor()),
+        element("div", layout === "beside" ? "design-columns" : "design-stack", conversationActions(), planEditor),
         progressPanel(() => openTab("Build"), syncProgress)) :
         tab === "Mockups" ? mockups() : tab === "Preview" ? preview() : buildPanel());
     }
     guideNext();
-    if (tab === "Plan") tabs.append(button(layout === "beside" ? "Stack panes" : "Show panes side by side", () => {
-      layoutSetting("panes", layout === "beside" ? "stack" : "beside"); draw();
-    }));
     liveDecision.hidden = !["Plan", "Build"].includes(tab) || !liveDecision.childElementCount;
     if (focusKey) {
       const replacement = body.querySelector('[data-design-focus="' + CSS.escape(focusKey) + '"], [data-roadmap-id="' + CSS.escape(focusKey) + '"]');
@@ -1376,16 +1406,27 @@ function designPanel(initialState) {
       if (!await change("finding", {build, sha, reviewId, findingIds}, {wait: "Returning findings to the build…"})) {
         throw Error(status.textContent);
       }
-      openTab("Build");
+      goBuild();
       if (!await change("continue", {build}, {wait: "Starting repair…"})) throw Error(status.textContent);
     };
     projectConversation.goToDesign = (next, focus) => {
+      if (embedded && next === "Build") { goBuild(focus); return; }
+      if (embedded && next === "Preview") {
+        next = "Plan";
+        focus ||= "preview";
+      }
       if (next === "Plan" && focus === "plan") editPlan = true;
       if (next === "Plan" && focus === "plan-reading") editPlan = false;
       tab = next;
       layoutSetting("tab", tab);
       if (state) draw();
-      const focusWhenReady = () => body.querySelector('[data-design-focus="' + CSS.escape(focus) + '"]')?.focus();
+      const focusWhenReady = () => {
+        if (!focus) return;
+        const field = body.querySelector('[data-design-focus="' + CSS.escape(focus) + '"]');
+        const details = field?.closest("details");
+        if (details) details.open = true;
+        field?.focus();
+      };
       if (state) focusWhenReady();
       else panel.addEventListener("workbench-design-ready", focusWhenReady, {once: true});
     };
