@@ -55,5 +55,14 @@ export async function observeRuntime({preview, origin, desktop}) {
     signals.push(...(await desktop?.observations(origin, state.owned ? state.url : '') || []));
     host('desktop-diagnostics', 'Desktop diagnostics', '');
   } catch (error) { host('desktop-diagnostics', 'Desktop diagnostics', error.message); }
+  const failures = signals.filter(signal => signal.error);
+  for (const signal of failures) {
+    const related = failures.filter(other => other !== signal && other.owner === signal.owner)
+      .slice(0, 5).map(other => other.title + ': ' + other.error);
+    const launch = signal.owner === 'project' && state.settings ?
+      'Managed launch in ' + state.settings.cwd + ': ' + JSON.stringify(state.settings.argv) +
+      '. The launcher supplies BRANCH_REVIEW_PREVIEW_PARENT=' + origin + '.' : '';
+    signal.evidence = [launch, signal.evidence, ...related].filter(Boolean).join('\n');
+  }
   return signals;
 }
