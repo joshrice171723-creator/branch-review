@@ -657,13 +657,22 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
       state.recoveredPaths = recoveredPaths;
       await checkpoint('finish', 'Recovered verified changes from earlier attempts of this plan.');
     }
-    if (verificationOnly || retryRepair) {
+    if (attempt.automaticRecovery?.action === 'return-to-loop' && state.stage === 'evidence_blocked') {
+      const {reason} = state.history.at(-1).detail;
+      const stage = attempt.automaticRecovery.returnedStage;
+      if (state.checked_source !== (await readSource()).snapshot_sha256) {
+        return block(stage, 'Project source changed after the audit. Restore the checked files before continuing.', 'source_changed');
+      }
+      state.verificationOnly = false;
+      delete state.auditCorrection;
+      await returnTo(stage, 'repair', reason);
+    } else if (verificationOnly || retryRepair) {
       state.verificationOnly = Boolean(verificationOnly);
       state.resumeAudit = state.history.at(-1)?.detail?.stage ??
         (state.stage === 'stopped' ? state.history.at(-2)?.stage : undefined);
       delete state.auditCorrection;
       await checkpoint('checks', retryRepair ? 'Retry the build on the existing changes.' : 'Retry verification on the existing changes.');
-    } else if (state.stage === 'evidence_blocked' && !state.checked_source) {
+    } else if (state.stage === 'evidence_blocked' && (!state.checked_source || attempt.automaticRecovery?.resumeBlockedStage)) {
       const previous = state.history.at(-1).detail;
       delete state.auditCorrection;
       await checkpoint(previous.stage, 'Retry the blocked stage.');
@@ -756,7 +765,8 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
         const failedChecks = await checkPacket((state.checks ?? []).filter(row => row.exit_code !== 0));
         const prompt = 'Implement the reviewed method within the approved plan and task agreement. ' +
           'Workbench runs the pinned checks and owns the receipts. Use the supplied failures to focus any repair. ' +
-          'Do not repeat the pinned suite or create Git commits. ' +
+          'Do not repeat the pinned suite or create Git commits. When the audit needs missing evidence, address its finding and ' +
+          'run the relevant safe project tests if the task permits it. Give the auditor the actual command and observed result. ' +
           (visualRoute() ? 'Keep this change to cosmetic declarations in one existing CSS file. Changes outside that scope receive the full audit. ' : '') +
           'Keep the published workbench-quality.json and pre-existing changes intact. Report changes and evidence you actually observed.\n' +
           JSON.stringify({...context, method: state.plan, answers: state.answers, finding: state.finding, failedChecks,

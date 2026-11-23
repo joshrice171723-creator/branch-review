@@ -1228,10 +1228,10 @@ function designPanel(initialState) {
         info.append(element("p", "evidence-warning", state.resumeBlocker));
         if (build.error) info.append(element("details", "", element("summary", "", "Previous attempt error"),
           formatEvidenceText(build.error)));
-      } else if (build.error) info.append(element("div", "evidence-warning", formatEvidenceText(
-        build.error === "Enter an implementation method."
-          ? "The planner’s implementation steps could not be read. Select Resume run to retry planning."
-          : build.error)));
+      } else if (build.error) info.append(element("div", "evidence-warning",
+        element("p", "", stoppedSummary(build.error, build.recovery)),
+        ...(build.recovery?.message ? [element("p", "", build.recovery.message)] : []),
+        element("details", "", element("summary", "", "Technical details"), formatEvidenceText(build.error))));
       for (const [i, group] of build.groups.entries()) {
         if (group.sha && (i === latestReview || (build.status === "review" && i === build.index))) {
           info.append(embedded && build.mode === "task"

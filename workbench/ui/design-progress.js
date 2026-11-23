@@ -17,6 +17,13 @@ const designStageSteps = {
 const tokenNumber = new Intl.NumberFormat();
 const sentenceSegments = new Intl.Segmenter("en", {granularity: "sentence"});
 
+function stoppedSummary(message, recovery) {
+  return recovery?.summary || (/Runtime verification is blocked|unavailable after-build check/i.test(message)
+    ? "The audit needs a test result to confirm the change works."
+    : /preview setup|fetch failed/i.test(message) ? "The checks couldn’t connect to the project preview."
+    : "The build couldn’t finish this step.");
+}
+
 function formatEvidenceText(value) {
   const content = element("div", "formatted-evidence");
   let list;
@@ -229,7 +236,7 @@ function progressPanel(openBuild, onProgress) {
     baseline:{name:"Baseline checks",icon:"✓",kind:"Gate"},repair:{name:"Repair",icon:"↺",kind:"Agent"},
     humanReview:{name:"Branch Review",icon:"◇",kind:"Gate"},push:{name:"Push to GitHub",icon:"↑",kind:"Gate"}
   };
-  const isRecovery=text=>/^(Recovering |Reusing current receipt|Checking a specific gap|Retrying |Retry the blocked stage)/.test(text);
+  const isRecovery=text=>/^(Coordinator is sending |Recovering |Reusing current receipt|Checking a specific gap|Retrying |Retry the blocked stage)/.test(text);
   function draw() {
     const focused=activeElement();
     const focus=box.contains(focused)?focused.dataset.stageKey:null;
@@ -267,6 +274,8 @@ function progressPanel(openBuild, onProgress) {
       const next=attempt?history[history.indexOf(attempt)+1]:null;
       const live=Boolean(current?.running && last===attempt && attempt);
       const failed=failure?.role===key;
+      const stoppedRecovery=failed ? failure.recovery : null;
+      const recovering=stoppedRecovery && ["queued","reviewing","waiting","resuming"].includes(stoppedRecovery.status);
       const needsEvidence=current?.evidenceRequest?.role===key;
       const waiting=key==="plan" && current?.stage==="question" || key==="humanReview" && gate?.waiting;
       const skipped=config?.enabled===false || ["plan_skip","final_skip"].includes(attempt?.stage);
@@ -276,7 +285,7 @@ function progressPanel(openBuild, onProgress) {
       const recovery=live && ((current.events || []).findLast(event => isRecovery(event.text))?.text ||
         (isRecovery(attempt.reason) ? attempt.reason : ""));
       const budgetStopped=failed && /^PROVIDER_(?:CALL_TIMEOUT|(?:TASK_TIME|USAGE)_BUDGET)$/.test(failure.errorCode || "");
-      const status=failed?(limited?"Quota reached":budgetStopped?"Limit reached":failure.repairLimit?"Repair limit reached":"Stopped"):
+      const status=failed?(recovering?"Recovering":limited?"Quota reached":budgetStopped?"Limit reached":failure.repairLimit?"Repair limit reached":"Stopped"):
         needsEvidence?"Needs evidence":skipped?"Skipped":waiting?"Waiting for you":live?(recovery?"Recovering":"Running"):isReturn?"Returned":
         completed?"Complete":key==="repair"&&!attempt?"If requested":key==="push"?"On request":attempt?"Paused":"Upcoming";
       const reviewTarget=key==="humanReview" && gate?.target;
@@ -321,15 +330,20 @@ function progressPanel(openBuild, onProgress) {
         const reset = /resets at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(failure.message)?.[1];
         const resetTime = reset && new Date(reset);
         detail.append(element("div","run-map-error",
-          element("strong","",limited?"Provider quota reached":budgetStopped?"Provider limit reached":
+          element("strong","",recovering?"Coordinator recovery":limited?"Provider quota reached":budgetStopped?"Provider limit reached":
             failure.repairLimit?"Repair limit reached":"Stage stopped"),
-          ...(config?.provider ? [element("p","","Stopped attempt · " + agentLabel(config))] : []),
-          ...(failure.savedAgent ? [element("p","","Saved agent · " + agentLabel(failure.savedAgent))] : []),
-          formatEvidenceText(failure.message.replace(/\s*\[request_id=[^\]]+\]/i,"")),
+          element("p","",stoppedSummary(failure.message, stoppedRecovery)),
+          ...(stoppedRecovery?.message && stoppedRecovery.message !== failure.message ?
+            [element("p","",stoppedRecovery.message)] : []),
           ...(resetTime && !Number.isNaN(resetTime.valueOf()) ? [element("p","","Quota resets " +
             resetTime.toLocaleString(undefined,{dateStyle:"medium",timeStyle:"short"}) + " local time.")] : []),
           ...(failure.resumeBlocker ? [element("p","",failure.resumeBlocker)] :
-            limited ? [element("p","","Resume after the quota resets.")] : [])));
+            limited && !recovering ? [element("p","","Resume after the quota resets.")] : []),
+          element("details","run-attempt-notes",element("summary","","Technical details"),
+            ...(config?.provider ? [element("p","","Stopped attempt · " + agentLabel(config))] : []),
+            ...(failure.savedAgent ? [element("p","","Saved agent · " + agentLabel(failure.savedAgent))] : []),
+            formatEvidenceText(failure.message.replace(/\s*\[request_id=[^\]]+\]/i,"")),
+            ...(stoppedRecovery?.detail ? [formatEvidenceText(stoppedRecovery.detail)] : []))));
       }
       const evidence=attempt?.evidence || gate?.evidence?.[key] || {};
       let titles=steps;

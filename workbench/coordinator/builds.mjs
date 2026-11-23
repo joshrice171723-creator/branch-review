@@ -15,6 +15,7 @@ const pendingStates = ['working', 'cancelling'];
 const closedStates = ['closed', 'retired'];
 const decisionStages = ['question', 'question_retry', 'evidence'];
 const budgetErrors = ['PROVIDER_CALL_TIMEOUT', 'PROVIDER_TASK_TIME_BUDGET', 'PROVIDER_USAGE_BUDGET'];
+const handlingStop = status => ['queued', 'reviewing', 'resuming'].includes(status);
 const repairLimitMessage = 'This run reached its repair limit. Review the last audit before starting another build.';
 const workflowChangedMessage = build => 'Agent settings changed after this run started. ' + (build.mode === 'task'
   ? 'Restart the build to use the saved settings.'
@@ -74,6 +75,7 @@ function groupMembers(state, payload) {
 
 export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => [], supervise, prepareBrowserRecovery}) {
   const jobs = new Map();
+  const recovering = new Set();
   let recoveryTimer;
   let recoverySuspended = false;
   let closing = false;
@@ -281,6 +283,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     build.status = 'working';
     delete build.error;
     delete build.attention;
+    delete build.recovery;
     const recoveredPaths = automaticRecovery?.kind === 'handoff' ? automaticRecovery.paths : undefined;
     return {build: structuredClone(build), attempt, task, answer, verificationOnly, retryRepair,
       recoveredPaths, step: recoveredPaths ? 'finish' : verificationOnly || retryRepair ? 'checks' : loop?.stage};
@@ -309,8 +312,24 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       } else {
         build.status = 'failed';
         build.error = job.error || loop?.finding || 'The build stopped before verification.';
+        if (supervise) build.recovery = {attempt: attempt.id, status: 'queued', message: 'Coordinator will review this stop.'};
       }
     });
+  }
+
+  function stopSummary(error, kind) {
+    if (kind === 'missing_observation' || kind === 'missing_check' || /Runtime verification is blocked/i.test(error)) {
+      return 'The audit needs a test result to confirm the change works.';
+    }
+    if (kind === 'check_environment' || /preview setup|fetch failed/i.test(error)) {
+      return 'The checks couldn’t connect to the project preview.';
+    }
+    if (kind === 'failed_check') return 'A required test failed when the build checked the changes again.';
+    if (kind === 'verification_defect') return 'The audit found a problem with the change.';
+    if (kind === 'source_changed' || kind === 'checkout_ownership') {
+      return 'The project files changed, so the build paused to protect your work.';
+    }
+    return 'The build couldn’t finish this step.';
   }
 
   async function publishAttention(build, attempt, recoveryError, diagnosis) {
@@ -321,10 +340,13 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       ({baseline: 'Baseline checks', checks: 'Project checks', repair: 'Repair'})[role] ?? 'Build';
     const reason = (build.error || attempt.error || 'The build stopped.')
       .replace(/\s*\[request_id=[^\]]+\]/gi, '').trim().slice(0, 2800);
-    const fingerprint = hash(JSON.stringify([attempt.task, role, attempt.errorCode ?? detail?.kind, reason]));
-    if (build.attention?.fingerprint === fingerprint) return;
+    const fingerprint = hash(JSON.stringify([attempt.id, role, attempt.errorCode ?? detail?.kind, reason]));
     const budget = budgetErrors.includes(attempt.errorCode);
-    const next = budget
+    const next = diagnosis?.exhausted
+      ? 'I reached your repair limit. The build needs your attention.'
+      : diagnosis?.workflowStop
+        ? 'Your workflow says to stop here. The build is waiting for you.'
+        : budget
       ? 'Retry to resume under the current workflow.'
       : detail?.kind === 'no_task_changes' || detail?.kind === 'checkout_ownership'
         ? 'I need you to decide which changes belong to this build before I can include them in a commit.'
@@ -335,17 +357,24 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const receiptNote = checked.length
       ? 'I kept ' + checked.length + ' passing check ' + (checked.length === 1 ? 'receipt.' : 'receipts.') : '';
     const recoveryNote = attempt.automaticRecovery?.resetAt ? 'I retried this stage after the provider reset.' : '';
-    const text = ['“' + (build.title || 'Current build') + '” needs attention at ' + stage + '.',
-      reason, diagnosis, receiptNote, recoveryNote, recoveryError && 'Automatic recovery could not start. ' + recoveryError, next].filter(Boolean).join('\n\n');
+    const summary = diagnosis?.summary || stopSummary(reason, detail?.kind);
+    const text = [summary, recoveryNote, next].filter(Boolean).join('\n\n');
+    const details = [reason, diagnosis?.reason, receiptNote, recoveryError && 'Automatic recovery could not start. ' + recoveryError]
+      .filter(Boolean).join('\n\n');
     await design.edit(state => {
       const current = state.builds.at(-1);
-      if (current?.id !== build.id || current.status !== 'failed' || current.attempts.at(-1)?.id !== attempt.id ||
-          current.attention?.fingerprint === fingerprint) return;
+      if (current?.id !== build.id || current.status !== 'failed' || current.attempts.at(-1)?.id !== attempt.id) return;
       const existing = state.messages.find(row => row.buildAttention?.fingerprint === fingerprint);
       const message = existing ?? {id: id(), author: 'agent', coordinator: true, time: now(), text,
-        buildAttention: {fingerprint, stage, buildId: build.id, task: attempt.task}, choices: ['Build status']};
-      if (!existing) state.messages.push(message);
+        buildAttention: {fingerprint, stage, buildId: build.id, task: attempt.task, details}, choices: ['Build status']};
+      if (existing) {
+        message.text = text;
+        message.buildAttention.details = details;
+      } else state.messages.push(message);
       current.attention = {id: message.id, fingerprint};
+      if (supervise) current.recovery = {attempt: attempt.id, status: 'blocked',
+        message: 'Coordinator couldn’t continue on its own.', summary,
+        ...(recoveryError || diagnosis?.reason ? {detail: [diagnosis?.reason, recoveryError].filter(Boolean).join('\n')} : {})};
     });
   }
 
@@ -366,9 +395,13 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     execution.done = (async () => {
       let loop;
       try {
-        if (attempt.automaticRecovery?.kind === 'supervisor') {
-          await audit.activity(task.id, prepared.step, 'Coordinator', attempt.automaticRecovery.reason || 'Retrying after reviewing the failure.');
+        if (attempt.automaticRecovery?.reason) {
+          const {summary, reason, action} = attempt.automaticRecovery;
+          const message = action === 'return-to-loop' ? 'Coordinator is sending the audit finding back through the build workflow.' : summary || reason;
+          await audit.activity(task.id, prepared.step, 'Coordinator', message);
         }
+        if (prepared.stoppedBuild) await prepareStoppedChecks(prepared.stoppedBuild, attempt.automaticRecovery,
+          {signal: controller.signal, waitForReady: true});
         loop = await audit.workflow({...prepared, signal: controller.signal,
           setCancellable: value => { job.cancellable = value; },
           refresh: stage => { job.step = stage; },
@@ -434,10 +467,14 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       let prepared, preparation = [];
       const state = await design.edit(async state => {
         const build = await change(state);
+        let stoppedBuild;
         if (['failed', 'cancelled'].includes(build.status) && approved(state, build)) {
-          preparation = await prepareStoppedChecks(build, automaticRecovery);
+          if (automaticRecovery?.supervised) {
+            if (automaticRecovery.action !== 'return-to-loop') stoppedBuild = structuredClone(build);
+          } else preparation = await prepareStoppedChecks(build, automaticRecovery);
         }
         prepared = await newAttempt(state, build, answer, verificationOnly, automaticRecovery);
+        prepared.stoppedBuild = stoppedBuild;
       });
       const job = start(prepared, release);
       handedOff = true;
@@ -495,7 +532,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return state;
   }
 
-  async function prepareStoppedChecks(build, recovery) {
+  async function prepareStoppedChecks(build, recovery, {signal, waitForReady} = {}) {
     const attempt = build.attempts.at(-1);
     const loop = await files.read(statePath(attempt.task), {});
     const stage = loop.stage === 'evidence_blocked' ? loop.history.at(-1)?.detail?.stage : loop.stage;
@@ -504,17 +541,17 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const blocker = await resumeBlocker(build);
     if (blocker) throw Error(blocker);
     const output = stage === 'baseline' && await store.restoreBrowserBaseline(attempt.task);
-    let preview;
-    const rerunSetup = recovery?.action === 'rerun-declared-setup';
-    if (prepareBrowserRecovery && (rerunSetup || await store.needsBrowserPreview(attempt.task))) {
-      preview = await prepareBrowserRecovery({rerunSetup, taskId: attempt.task});
-      if (preview.state === 'ready') await verifyBrowserPreview(await store.browserCheckUrl());
-      else if (preview.state !== 'pending') throw Error(preview.message);
-      preview = preview.message;
-    }
     if (loop.stage === 'evidence_blocked' && loop.checked_source &&
         (await store.snapshot(attempt.task, {record: false})).snapshot_sha256 !== loop.checked_source) {
       throw Error('The checkout differs from the source recorded for verification.');
+    }
+    let preview;
+    const rerunSetup = recovery?.action === 'rerun-declared-setup';
+    if (prepareBrowserRecovery && (rerunSetup || await store.needsBrowserPreview(attempt.task))) {
+      preview = await prepareBrowserRecovery({rerunSetup, taskId: attempt.task, signal, waitForReady});
+      if (preview.state === 'ready') await verifyBrowserPreview(await store.browserCheckUrl(), signal);
+      else if (preview.state !== 'pending') throw Error(preview.message);
+      preview = preview.message;
     }
     if (output) await audit.activity(attempt.task, stage, 'Coordinator', 'Moved recorded browser results to ' + output);
     return [output && 'Moved the recorded browser output outside the checkout.', preview].filter(Boolean);
@@ -524,6 +561,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return (await drive(async state => {
       const build = current(state, payload.build);
       if (!['ready', 'failed', 'cancelled'].includes(build.status)) throw Error('This build is waiting for another action.');
+      if (build.status === 'failed' && handlingStop(build.recovery?.status)) {
+        throw Error('Coordinator is already handling this stop.');
+      }
       return build;
     })).state;
   }
@@ -532,6 +572,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const stopped = current(await design.read(), id);
     const stoppedAttempt = stopped.attempts.at(-1);
     if (stopped.status !== 'failed' || !stoppedAttempt) throw Error('Choose the stopped build.');
+    if (handlingStop(stopped.recovery?.status)) return stopped.recovery.message;
     const verificationOnly = await verificationAvailable(stopped);
     const {preparation} = await drive(async state => {
       const build = current(state, id);
@@ -546,6 +587,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return (await drive(state => {
       const build = current(state, payload.build);
       if (build.status !== 'failed') throw Error('Select the stopped build.');
+      if (handlingStop(build.recovery?.status)) throw Error('Coordinator is already handling this stop.');
       return build;
     }, undefined, true)).state;
   }
@@ -561,39 +603,85 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     }
   }
 
+  async function recoveryStatus(build, attempt, status, message, decision) {
+    await design.edit(state => {
+      const current = state.builds.at(-1);
+      if (current?.id === build.id && current.status === 'failed' && current.attempts.at(-1)?.id === attempt.id) {
+        current.recovery = {attempt: attempt.id, status, message,
+          ...(decision && {decision, summary: decision.summary || undefined})};
+        if (status === 'reviewing') delete current.attention;
+      }
+    });
+  }
+
   async function superviseStop(build, attempt) {
-    if (!supervise || build.attention || !attempt.task) return null;
     const loop = await files.read(statePath(attempt.task), {});
-    const run = await store.getRun(attempt.task);
+    let readFailure;
+    const run = await store.getRun(attempt.task).catch(error => { readFailure = error.message; return null; });
     const detail = loop.stage === 'evidence_blocked' ? loop.history.at(-1)?.detail : null;
-    const source = await store.snapshot(attempt.task, {record: false});
+    const stage = detail?.stage ?? loop.stage;
+    const source = await store.snapshot(attempt.task, {record: false})
+      .catch(error => { readFailure = error.message; return null; });
     const ownership = ['source_changed', 'checkout_ownership'].includes(detail?.kind) ||
       /source changed|checkout changed|configured branch changed/i.test(attempt.error ?? '');
-    const previous = build.attempts.filter(row => row.task === attempt.task && row.automaticRecovery?.kind === 'supervisor');
-    const limit = selectedProfile(run.task.profile)?.stages.buildReview.limit;
-    if (Number.isInteger(limit) && previous.length >= limit) return {reason: 'Coordinator reached the configured repair loop limit.'};
-    const canVerify = Boolean(verificationCheckpoint(run, loop));
-    await audit.activity(attempt.task, loop.stage ?? 'plan', 'Coordinator', 'Reviewing the build failure for recovery.');
-    const diagnosis = await supervise({build, attempt, failure: redact(build.error ?? attempt.error ?? ''), evidence: {
-      detail, canVerify, ownership, managedBrowser: Boolean(prepareBrowserRecovery && await store.needsBrowserPreview(attempt.task).catch(() => false)),
-      previous: previous.map(row => ({action: row.automaticRecovery.action, reason: row.automaticRecovery.reason, error: redact(row.error ?? '')})),
-      checks: run.checks.slice(-8).map(row => ({name: row.check, code: row.exit_code,
-        sourceChanged: row.source_changed, inputsChanged: row.inputs_changed,
-        output: redact([row.spawn_error, row.stderr_preview, row.stdout_preview].filter(Boolean).join('\n')).slice(0, 1200)}))
-    }});
+    const previous = build.attempts.filter(row => row.task === attempt.task &&
+      (row.automaticRecovery?.supervised || ['supervisor', 'handoff', 'browserBaseline'].includes(row.automaticRecovery?.kind)));
+    const limit = selectedProfile(run?.task.profile)?.stages.buildReview.limit;
+    const canVerify = Boolean(run && verificationCheckpoint(run, loop));
+    const checkStage = ['baseline', 'checks'].includes(stage);
+    const managedBrowser = Boolean(checkStage && prepareBrowserRecovery && await store.needsBrowserPreview(attempt.task).catch(() => false));
+    const returnedStage = detail?.kind === 'failed_check' && canVerify ? 'build_review' : stage;
+    const auditRoute = ['build_review', 'final_review'].includes(returnedStage) &&
+      selectedProfile(run?.task.profile)?.stages[returnedStage === 'build_review' ? 'buildReview' : 'finalReview']?.route;
+    const routeFinding = ['missing_observation', 'missing_check', 'verification_defect', 'failed_check'].includes(detail?.kind);
+    const canReturn = Boolean(canVerify && auditRoute !== 'stop' && auditRoute &&
+      run?.lifecycle.status === 'active' && loop.checked_source === source?.snapshot_sha256 &&
+      routeFinding);
+    const exhausted = Number.isInteger(limit) && previous.length >= limit;
+    await audit.activity(attempt.task, stage ?? 'plan', 'Coordinator', 'Reviewing the stopped stage for automatic recovery.').catch(() => {});
+    let diagnosis;
+    try {
+      diagnosis = await supervise({build, attempt, failure: redact(build.error ?? attempt.error ?? ''), evidence: {
+        detail, canVerify, canReturn, auditRoute, ownership, managedBrowser, exhausted, readFailure,
+        previous: previous.map(row => ({action: row.automaticRecovery.action, reason: row.automaticRecovery.reason, error: redact(row.error ?? '')})),
+        checks: (run?.checks ?? []).slice(-8).map(row => ({name: row.check, code: row.exit_code, sourceChanged: row.source_changed,
+          inputsChanged: row.inputs_changed, output: redact([row.spawn_error, row.stderr_preview, row.stdout_preview]
+            .filter(Boolean).join('\n')).slice(0, 1200)}))
+      }});
+    } catch (error) {
+      diagnosis = {reason: 'Coordinator’s diagnosis could not finish. ' + redact(error.message)};
+    }
     const reason = typeof diagnosis?.reason === 'string' ? redact(diagnosis.reason).slice(0, 1200) : '';
-    const prepare = ['prepare-environment', 'rerun-declared-setup'].includes(diagnosis?.action);
-    const stage = detail?.stage ?? loop.stage;
-    if (prepare && (!['baseline', 'checks'].includes(stage) || !prepareBrowserRecovery ||
-        !await store.needsBrowserPreview(attempt.task))) return {reason};
-    if (ownership || !['retry', 'verify', 'prepare-environment', 'rerun-declared-setup'].includes(diagnosis?.action) ||
-        (diagnosis.action === 'verify' && !canVerify) ||
-        (diagnosis.action === 'retry' && loop.stage === 'evidence_blocked' && !canVerify)) return {reason};
-    const action = prepare ? diagnosis.action : canVerify ? 'verify' : 'retry';
-    if (previous.some(row => row.automaticRecovery.action === action && row.error === attempt.error)) return {reason};
-    return {kind: 'supervisor', action, verificationOnly: canVerify, reason, source: {
-      head: source.head, branch: source.branch, index_sha256: source.index_sha256, snapshot_sha256: source.snapshot_sha256
-    }};
+    if (exhausted || run?.lifecycle.cause === 'repair_limit') {
+      return {exhausted: true, reason: 'Coordinator reached the configured repair loop limit.'};
+    }
+    if (!source || !run) return {reason: readFailure || 'Coordinator could not read the saved build.'};
+    const savedSource = {head: source.head, branch: source.branch, index_sha256: source.index_sha256, snapshot_sha256: source.snapshot_sha256};
+    if (ownership) return {reason: reason || 'The checkout changed outside this recovery.'};
+    const alreadyTried = action => previous.some(row => row.automaticRecovery.action === action &&
+      row.error === attempt.error && row.automaticRecovery.source?.snapshot_sha256 === savedSource.snapshot_sha256);
+    const summary = typeof diagnosis?.summary === 'string' ? redact(diagnosis.summary).replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+    if (canReturn && !alreadyTried('return-to-loop')) {
+      return {kind: 'supervisor', supervised: true, action: 'return-to-loop', verificationOnly: false,
+        reason: reason || 'Coordinator is sending the audit finding through the configured workflow.',
+        summary: summary || stopSummary(attempt.error, detail?.kind), source: savedSource, returnedStage};
+    }
+    if (canReturn) {
+      return {summary: 'The repair came back with the same problem.', reason: reason || 'The repair produced no new evidence.'};
+    }
+    const environmentFailed = managedBrowser && (detail?.kind === 'check_environment' || diagnosis?.action === 'prepare-environment' ||
+      diagnosis?.action === 'rerun-declared-setup');
+    if (routeFinding && returnedStage && auditRoute === 'stop') {
+      return {summary, workflowStop: true, reason: 'This workflow is set to stop at this audit.'};
+    }
+    const choices = environmentFailed ? ['prepare-environment', 'rerun-declared-setup'] :
+      canVerify ? ['verify'] : stage && stage !== 'stopped' ? ['retry'] : [];
+    const preferred = choices.includes(diagnosis?.action) ? diagnosis.action : undefined;
+    const action = [preferred, ...choices].find(candidate => candidate && !alreadyTried(candidate));
+    if (!action) return {summary, reason: reason || 'Repeating the same recovery did not resolve this stop.'};
+    return {kind: 'supervisor', supervised: true, action, summary, verificationOnly: canVerify && !environmentFailed,
+      resumeBlockedStage: environmentFailed || !canVerify, reason: reason ||
+      'Coordinator will retry the stopped stage from its saved checkpoint.', source: savedSource};
   }
 
   async function refreshRecovery(reconnectPending = false) {
@@ -612,7 +700,32 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       }
       return refreshRecovery();
     }
-    if (build.status !== 'failed') return;
+    if (build.status !== 'failed' || recovering.has(attempt.id) ||
+        build.recovery?.attempt === attempt.id && build.recovery.status === 'blocked') return;
+    recovering.add(attempt.id);
+    try {
+      await recoverStoppedBuild(state, build, attempt);
+    } catch (error) {
+      await publishAttention(build, attempt, error.message);
+    } finally {
+      recovering.delete(attempt.id);
+    }
+  }
+
+  async function recoverStoppedBuild(state, build, attempt) {
+    let decision;
+    if (supervise) {
+      if (build.recovery?.attempt === attempt.id && build.recovery.status === 'waiting' && build.recovery.decision) {
+        decision = build.recovery.decision;
+      } else {
+        await recoveryStatus(build, attempt, 'reviewing', 'Coordinator is reviewing this stop.');
+        decision = await superviseStop(build, attempt);
+      }
+      if (decision.exhausted) {
+        await publishAttention(build, attempt, null, decision);
+        return;
+      }
+    }
     let recovery = await providerLimitFor(attempt);
     let deadline = Date.parse(recovery?.resetAt);
     if (attempt.step === 'evidence_blocked' && build.mode === 'task' &&
@@ -646,24 +759,14 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         deadline = Date.now();
       }
     }
-    if (!Number.isFinite(deadline) && !budgetErrors.includes(attempt.errorCode)) {
-      try {
-        const decision = await superviseStop(build, attempt);
-        if (decision?.kind) {
-          recovery = decision;
-          deadline = Date.now();
-        } else if (decision?.reason) {
-          await publishAttention(build, attempt, null, decision.reason);
-          return;
-        }
-      } catch (error) {
-        await publishAttention(build, attempt, error.message);
-        return;
-      }
+    if (!Number.isFinite(deadline) && decision?.kind) {
+      recovery = decision;
+      deadline = Date.now();
     }
+    if (recovery && supervise) recovery = {...recovery, supervised: true};
     const tried = build.attempts.some(row => row.task === attempt.task && isDeepStrictEqual(row.automaticRecovery, recovery));
     if (!Number.isFinite(deadline) || tried) {
-      try { await publishAttention(build, attempt); }
+      try { await publishAttention(build, attempt, null, decision); }
       catch (error) {
         if (error.message === 'This checkout already has an active Workbench operation.') scheduleRecovery(refreshRecovery, 1000);
         else throw error;
@@ -672,10 +775,14 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     }
     const wait = deadline - Date.now();
     if (wait > 0) {
+      if (supervise) await recoveryStatus(build, attempt, 'waiting', 'Coordinator will retry after the provider quota resets.', decision);
       scheduleRecovery(refreshRecovery, wait);
       return;
     }
     try {
+      if (supervise) await recoveryStatus(build, attempt, 'resuming', recovery.action === 'return-to-loop'
+        ? 'Coordinator is sending the audit finding back through the build workflow.'
+        : 'Coordinator is restarting the build from where it stopped.', recovery);
       await drive(async state => {
         const next = state.builds.at(-1);
         if (next?.id !== build.id || next.status !== 'failed' || next.attempts.at(-1)?.id !== attempt.id) {
@@ -691,7 +798,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       }, undefined, recovery.kind === 'supervisor' && recovery.verificationOnly, recovery);
     } catch (error) {
       if (error.message === 'This checkout already has an active Workbench operation.') scheduleRecovery(refreshRecovery, 1000);
-      else await publishAttention(build, attempt, error.message);
+      else await publishAttention(build, attempt, error.message, decision);
     }
   }
 
@@ -962,7 +1069,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const attempt = build?.attempts.at(-1);
     const group = build && currentGroup(build);
     const buildStamp = {revision: state.revision, approved: state.approved, build: build?.id ?? null,
-      status: build?.status ?? null, index: build?.index ?? null, error: build?.error ?? null, attempt: attempt ?? null,
+      status: build?.status ?? null, index: build?.index ?? null, error: build?.error ?? null, attempt: attempt ?? null, recovery: build?.recovery ?? null,
       groups: (build?.groups ?? []).map(row => ({sha: row.sha, approval: row.reviews.at(-1) ?? null, pushed: row.pushed ?? null}))};
     if (!attempt || build.status === 'retired') return {run: null, review: null, buildStamp};
     const task = await store.getRun(attempt.task);
@@ -991,6 +1098,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       failure = {role: failedRole, message: build.error.slice(0, 4000), repairLimit: task.lifecycle.cause === 'repair_limit',
         resumeBlocker: await resumeBlocker(build, task),
         providerLimit: await providerLimitFor(attempt, task), errorCode: attempt.errorCode ?? null,
+        recovery: build.recovery?.attempt === attempt.id ? build.recovery : null,
         savedAgent: changed.includes(stage) ? agentSettings(selectedProfile(saved).stages[stage]) : null};
     }
     const activity = await files.bytes(loopPath(attempt.task) + '/activity.jsonl', 32_000_000, Buffer.alloc(0));
@@ -1025,6 +1133,8 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return {id: build.id, title: build.title || 'Current build', state: build.status, stage,
       pendingQuestion: build.status === 'question' ? loop.question : undefined,
       waitingForReview: build.status === 'review', failure: build.error?.slice(0, 4000),
+      failureSummary: build.error && (build.recovery?.summary || stopSummary(build.error, detail?.kind)),
+      recoveryMessage: build.recovery?.message,
       activity: typeof detail === 'string' ? detail.slice(0, 800) : detail?.reason?.slice(0, 800)};
   }
 

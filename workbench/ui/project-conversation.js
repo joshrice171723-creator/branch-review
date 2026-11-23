@@ -591,6 +591,8 @@ function connectProjectConversation(initial) {
       .map(item => {
         const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Coordinator"),
           element("p", "conversation-text", item.text));
+        if (item.buildAttention?.details) row.append(element("details", "",
+          element("summary", "", "Technical details"), formatEvidenceText(item.buildAttention.details)));
         if (item.asset) row.append(assetImage(item.asset, "Generated mockup"));
         if (item.proposal) row.append(proposalCard(item));
         if (item.choices) row.append(element("div", "answer-choices", ...item.choices.map(choice =>

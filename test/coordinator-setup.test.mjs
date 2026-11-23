@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
+import {createServer} from 'node:http';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,9 +25,11 @@ async function fixture(t, files, options = {}) {
   await git('add', '.');
   await git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'Fixture');
   const store = createStore(repository);
+  const {configureStore, ...coordinatorOptions} = options;
+  configureStore?.(store);
   const environment = createEnvironment({repository, local: path.join(temp, 'data'), store});
   const coordinator = await createCoordinator({repository, store, git, prepareBuild: environment.prepareBuild,
-    ...options, runtimeHealth: options.runtimeHealth && {...options.runtimeHealth, directory: path.join(temp, 'health')}});
+    ...coordinatorOptions, runtimeHealth: options.runtimeHealth && {...options.runtimeHealth, directory: path.join(temp, 'health')}});
   t.after(async () => {
     await coordinator.close();
     await environment.close();
@@ -190,9 +193,17 @@ test('a direct recovery instruction resumes the stopped build without drafting a
   assert.equal(resumed.builds[0].attempts[0].task, resumed.builds[0].attempts[1].task);
 });
 test('Retry checks the stopped baseline before starting another attempt', async t => {
+  let diagnosed = 0;
   const {store, coordinator, git} = await fixture(t, {'greeting.txt': 'Before'}, {
-    invoke: async ({stage}) => ({text: JSON.stringify(stage === 'plan' ? {plan: ['Update the greeting.']} :
-      {verdict: 'pass', reason: 'The plan covers the greeting.'})})
+    superviseFailures: true,
+    invoke: async ({stage, prompt}) => {
+      if (prompt.startsWith('Supervise this stopped Branch Review build')) {
+        diagnosed++;
+        return {text: JSON.stringify({action: 'retry', reason: 'Check the stopped checkout.'})};
+      }
+      return {text: JSON.stringify(stage === 'plan' ? {plan: ['Update the greeting.']} :
+        {verdict: 'pass', reason: 'The plan covers the greeting.'})};
+    }
   });
   const argv = ['node', '-e', "require('node:fs').writeFileSync('external-change.txt', 'keep me')"];
   await store.setProfile({...await store.getProfile(), checks: [{name: 'fixture', argv, cwd: '.', required: true, benchmark: false}]});
@@ -207,6 +218,116 @@ test('Retry checks the stopped baseline before starting another attempt', async 
     await delay(100);
   }
   await assert.rejects(post('continue', {build: build.id}), /baseline differs in external-change.txt/);
+  assert.equal(diagnosed, 1);
   assert.equal((await coordinator.dispatch('design')).builds.at(-1).attempts.length, 1);
   assert.match(await git('status', '--porcelain'), /external-change.txt/);
+});
+
+test('every preview stop is supervised and failed preparation restarts the same build again', async t => {
+  const server = createServer((_request, response) => response.end('ready'));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = 'http://127.0.0.1:' + server.address().port + '/';
+  const diagnostics = [];
+  let previewCalls = 0, builds = 0;
+  const ready = {state: 'ready', message: 'Preview responded.'};
+  const {store, coordinator} = await fixture(t, {'greeting.txt': 'Before'}, {
+    superviseFailures: true,
+    configureStore: store => {
+      store.needsBrowserPreview = async () => true;
+      store.browserCheckUrl = async () => url;
+    },
+    prepareBrowserRecovery: async ({rerunSetup} = {}) => {
+      previewCalls++;
+      if (previewCalls === 2 || previewCalls === 3) return {state: 'blocked', message: 'Preview connection refused.'};
+      if (previewCalls === 4) assert.equal(rerunSetup, true);
+      return ready;
+    },
+    invoke: async ({stage, prompt, cwd}) => {
+      if (prompt.startsWith('Supervise this stopped Branch Review build')) {
+        diagnostics.push(prompt);
+        return {text: JSON.stringify({action: 'report', reason: 'The preview did not respond.'})};
+      }
+      if (stage === 'plan') return {text: JSON.stringify({plan: ['Update greeting.']})};
+      if (stage === 'plan_review') return {text: JSON.stringify({verdict: 'pass', reason: 'Plan is ready.'})};
+      if (stage === 'build') {
+        builds++;
+        await writeFile(path.join(cwd, 'greeting.txt'), 'After');
+        return {text: 'Updated the greeting.'};
+      }
+      return {text: JSON.stringify({verdict: 'pass', reason: 'The check passed.',
+        criteria: ['correctness', 'human_readability', 'maintainability', 'performance', 'failure_handling', 'scope_and_constraints']
+          .map(id => ({id, verdict: 'pass', evidence: ['The check and source confirm the change.'], reason: ''}))})};
+    }
+  });
+  const profile = await store.getProfile();
+  await store.setProfile({...profile, checks: [{name: 'fixture', argv: ['node', '-e', 'process.exit(0)'],
+    required: true, benchmark: false, cwd: '.'}]});
+  const post = (route, data) => coordinator.dispatch('design/' + route, data, {method: 'POST'});
+  const {revision} = await post('draft', {...plan, revision: 0, mode: 'task'});
+  await post('approve', {revision, mode: 'task'});
+  const started = await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
+    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+  let build;
+  for (let index = 0; index < 400; index++) {
+    build = (await coordinator.dispatch('design')).builds.at(-1);
+    if (build.status === 'review' || build.attention) break;
+    await delay(150);
+  }
+  assert.equal(build.status, 'review', build.attention?.id || build.error);
+  assert.equal(build.id, started.builds[0].id);
+  assert.equal(builds, 1);
+  assert.equal(diagnostics.length, 2);
+  assert.ok(diagnostics.every(value => value.includes('Preview connection refused.')));
+  assert.equal(new Set(build.attempts.map(row => row.task)).size, 1);
+  assert.deepEqual(build.attempts.slice(1).map(row => row.automaticRecovery.action), ['prepare-environment', 'rerun-declared-setup']);
+});
+
+test('Coordinator returns a missing audit result through the configured repair loop', async t => {
+  const finding = 'A delivery test result is missing for the saved preference.';
+  let builderCalls = 0, diagnoses = 0;
+  const {store, coordinator} = await fixture(t, {'greeting.txt': 'Before'}, {
+    superviseFailures: true,
+    invoke: async ({stage, prompt, cwd}) => {
+      if (prompt.startsWith('Supervise this stopped Branch Review build')) {
+        diagnoses++;
+        assert.match(prompt, /"canReturn":true/);
+        return {text: JSON.stringify({action: 'return-to-loop', reason: finding,
+          summary: 'The audit needs one more test result.'})};
+      }
+      if (stage === 'plan') return {text: JSON.stringify({plan: ['Update greeting.']})};
+      if (stage === 'plan_review') return {text: JSON.stringify({verdict: 'pass', reason: 'Plan is ready.'})};
+      if (stage === 'build') {
+        builderCalls++;
+        if (builderCalls === 2) assert.ok(prompt.includes(finding));
+        await writeFile(path.join(cwd, 'greeting.txt'), builderCalls === 1 ? 'After' : 'Verified greeting');
+        return {text: builderCalls === 1 ? 'Updated greeting.' : 'Added the focused check result.'};
+      }
+      if (builderCalls === 1) return {text: JSON.stringify({verdict: 'needs_evidence', reason: finding})};
+      return {text: JSON.stringify({verdict: 'pass', reason: 'The check passed.',
+        criteria: ['correctness', 'human_readability', 'maintainability', 'performance', 'failure_handling', 'scope_and_constraints']
+          .map(id => ({id, verdict: 'pass', evidence: ['The check and source confirm the change.'], reason: ''}))})};
+    }
+  });
+  await store.setProfile({...await store.getProfile(), checks: [{name: 'fixture', argv: ['node', '-e', 'process.exit(0)'],
+    required: true, benchmark: false, cwd: '.'}]});
+  const checks = (await store.effectiveConfig()).checks;
+  const post = (route, data) => coordinator.dispatch('design/' + route, data, {method: 'POST'});
+  const {revision} = await post('draft', {...plan, revision: 0, mode: 'task'});
+  await post('approve', {revision, mode: 'task'});
+  const started = await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
+    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+  let build;
+  for (let index = 0; index < 400; index++) {
+    build = (await coordinator.dispatch('design')).builds.at(-1);
+    if (build.status === 'review' || build.attention) break;
+    await delay(150);
+  }
+  assert.equal(build.status, 'review', build.error);
+  assert.equal(build.id, started.builds[0].id);
+  assert.equal(builderCalls, 2);
+  assert.equal(diagnoses, 1);
+  assert.equal(build.attempts[1].task, build.attempts[0].task);
+  assert.equal(build.attempts[1].automaticRecovery.action, 'return-to-loop');
+  assert.deepEqual((await store.effectiveConfig()).checks, checks);
 });

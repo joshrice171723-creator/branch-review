@@ -323,23 +323,36 @@ export function createEnvironment({repository, store, local, projectId, defaultP
           await delay(500, undefined, {signal});
           state = await app.status();
         }
-        if (!state.owned || state.state !== 'running' || state.settings?.mode !== 'web') return null;
-        const deadline = AbortSignal.timeout(5000);
-        const response = await fetch(state.url, {redirect: 'manual', signal: signal ? AbortSignal.any([signal, deadline]) : deadline});
-        await response.body?.cancel();
-        return response.status;
+        if (!state.owned || state.state !== 'running' || state.settings?.mode !== 'web') return {};
+        let connectionError;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const deadline = AbortSignal.timeout(5000);
+          try {
+            const response = await fetch(state.url, {redirect: 'manual', signal: signal ? AbortSignal.any([signal, deadline]) : deadline});
+            await response.body?.cancel();
+            return {status: response.status};
+          } catch (error) {
+            signal?.throwIfAborted();
+            connectionError = error.cause?.code || error.message;
+            if (attempt < 2) await delay(500, undefined, {signal});
+          }
+        }
+        return {connectionError};
       }
-      let status = await check();
+      let result = await check();
       const expectedSource = (await store.snapshot?.(taskId, {record: false}))?.snapshot_sha256;
       const outdated = state.owned && ((expectedRevision && state.revision !== expectedRevision) ||
         (expectedSource && state.source !== expectedSource));
-      const retrying = status >= 500 || outdated || (rerunSetup && state.owned);
+      const retrying = result.status >= 500 || Boolean(result.connectionError) || outdated || (rerunSetup && state.owned);
       if (retrying) {
         await app.stop();
         state = await startPreview(app, {rerunSetup, taskId, signal});
-        status = await check();
+        result = await check();
       }
       const report = (stateName, message) => ({state: stateName, message, url: state.url || '', revision: state.revision ?? null, source: state.source ?? null});
+      const {status, connectionError} = result;
+      if (connectionError) return report('blocked', 'The managed preview could not answer at ' + state.url +
+        (retrying ? ' after restart. ' : '. ') + redact(connectionError));
       if (status >= 400) return report('blocked', ['The managed preview responded with HTTP ' + status +
         (retrying ? ' after a restart.' : '.'), state.log && redact(state.log).slice(-750)].filter(Boolean).join('\n'));
       if (status >= 200 && status < 300 && (!expectedRevision || state.revision === expectedRevision) &&
