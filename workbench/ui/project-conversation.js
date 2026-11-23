@@ -1,5 +1,22 @@
 "use strict";
 
+function buildEvidenceAnswer(task, submit) {
+  const note = element("textarea");
+  note.maxLength = 8000;
+  note.rows = 4;
+  const send = button("Send evidence and retry audit", async () => {
+    if (send.disabled) return;
+    send.disabled = true;
+    try { await submit(note.value.trim()); }
+    finally { send.disabled = !note.value.trim(); }
+  }, "button primary");
+  send.disabled = true;
+  note.addEventListener("input", () => { send.disabled = !note.value.trim(); });
+  return element("div", "design-stack", formatEvidenceText(task.question),
+    element("p", "", "Include the check command or report path, the result, and any observations the auditor requested."),
+    field("Evidence for this audit", note), send);
+}
+
 let projectConversation;
 
 function conversationHistory() {
@@ -117,7 +134,9 @@ function connectProjectConversation(initial) {
     const signature = waiting ? JSON.stringify([task.id, task.question_id, task.question, task.suggestions, task.question_error]) : "";
     if (signature === buildQuestionKey) return;
     buildQuestionKey = signature;
-    const label = waiting ? "Project conversation · Reply needed" : "Project conversation";
+    const evidence = task?.decision_kind === "evidence";
+    const label = evidence ? "Project conversation · Evidence needed" :
+      waiting ? "Project conversation · Reply needed" : "Project conversation";
     launch.textContent = label;
     buildDecisionCard.replaceChildren();
     buildDecisionCard.hidden = !waiting;
@@ -125,7 +144,7 @@ function connectProjectConversation(initial) {
     const feedback = element("p", "", "");
     feedback.setAttribute("role", "status");
     const answer = async message => {
-      feedback.textContent = "Sending your answer…";
+      feedback.textContent = evidence ? "Sending evidence to the audit…" : "Sending your answer…";
       try {
         await api("chat", task.question ? {message, task: task.id, question: task.question,
           question_id: task.question_id} : {message});
@@ -134,8 +153,9 @@ function connectProjectConversation(initial) {
         update(next, true);
       } catch (error) { feedback.textContent = error.message; }
     };
-    buildDecisionCard.append(element("h3", "", "Build needs your answer"),
-      task.question ? planningAnswer(task.question, task.suggestions, answer) :
+    buildDecisionCard.append(element("h3", "", evidence ? "Audit needs evidence" : "Build needs your answer"),
+      evidence ? buildEvidenceAnswer(task, answer) :
+        task.question ? planningAnswer(task.question, task.suggestions, answer) :
         element("div", "", element("p", "", task.question_error),
           button("Retry suggestions", () => answer("/run"))), feedback);
   }

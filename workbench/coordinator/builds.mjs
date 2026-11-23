@@ -3,11 +3,13 @@ import {id, now, runPattern, sentence} from './files.mjs';
 import {checkMode, hash, jsonHash, selectedProfile} from './design.mjs';
 import {commitment, currentGroup, loopPath, markerPath, statePath} from './audit.mjs';
 import {buildStageRoles, buildTrace, checkRows, gateEvidence, stageEvidence} from './step-evidence.mjs';
-import {readMetrics, visitMetrics} from './build-metrics.mjs';
+import {legacyProviderMetrics, readMetrics, visitMetrics} from './build-metrics.mjs';
 
 const leasePath = '.harness/design/build.owner';
 const pendingStates = ['working', 'cancelling'];
 const closedStates = ['closed', 'retired'];
+const decisionStages = ['question', 'question_retry', 'evidence'];
+const repairLimitMessage = 'This run reached its repair limit. Review the last audit before starting another build.';
 const workflowChangedMessage = build => 'Agent settings changed after this run started. ' + (build.mode === 'task'
   ? 'Restart the build to use the saved settings.'
   : 'Retire the run and start a new build to use the saved settings.');
@@ -38,6 +40,19 @@ function approved(state, build) {
   return state.approved === build.revision && state.revision === build.revision &&
     !state.question && !state.plannerRetry;
 }
+function pendingReply(loop) {
+  if (loop?.stage === 'evidence') return {question: loop.evidenceRequest.text, question_id: loop.evidenceRequest.id,
+    decision_kind: 'evidence', evidence_stage: loop.evidenceRequest.stage};
+  if (loop?.stage === 'question') return {question: loop.question, question_id: loop.question_id, suggestions: loop.suggestions};
+  return null;
+}
+function validateReply(loop, task, payload, message) {
+  if (loop?.stage === 'question_retry' && message === '/run') return;
+  const pending = pendingReply(loop);
+  if (!pending || payload.task !== task || payload.question !== pending.question ||
+      payload.question_id !== pending.question_id || message === '/run') throw Error('The pending build decision changed.');
+  if (pending.decision_kind === 'evidence') sentence(message, 'an evidence note', 8000);
+}
 function groupMembers(state, payload) {
   if (state.mode === 'task') return [['task']];
   const {scope = 'plan', key, frequency = 'slice'} = payload;
@@ -53,6 +68,7 @@ function groupMembers(state, payload) {
 
 export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => []}) {
   const jobs = new Map();
+  let legacyMetrics;
   const providerReady = row => ['ready', 'unverified'].includes(row.status);
   const providerMessage = row => row.roles.join(', ') + ' · ' + row.message;
 
@@ -73,10 +89,21 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const runs = await store.listRuns();
     return runs.active ? store.getRun(runs.active) : null;
   }
+  async function metricsFor(task, build, visits) {
+    const folder = loopPath(task);
+    const recorded = await readMetrics(files, folder);
+    const last = build.attempts.findLast(row => row.task === task);
+    if (recorded.length || !last?.finished) return recorded;
+    if (legacyMetrics?.attempt !== last.id) {
+      legacyMetrics = {attempt: last.id, calls: legacyProviderMetrics(files, folder, visits).catch(() => [])};
+    }
+    return legacyMetrics.calls;
+  }
   async function resumeBlocker(build, run) {
     const attempt = build?.attempts.at(-1);
     if (!attempt || !['failed', 'cancelled'].includes(build.status)) return '';
     const pinned = run ?? await store.getRun(attempt.task);
+    if (pinned.lifecycle.cause === 'repair_limit') return repairLimitMessage;
     return changedAgents(pinned.task.profile, await store.getProfile()).length ? workflowChangedMessage(build) : '';
   }
   async function profileMatches(build, profile) {
@@ -186,9 +213,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         build.status = group.pending.length ? 'ready' : 'review';
       } else if (job.state === 'cancelled') {
         build.status = 'cancelled';
-      } else if (['question', 'question_retry'].includes(loop?.stage)) {
+      } else if (decisionStages.includes(loop?.stage)) {
         build.status = 'question';
-        attempt.outcome = loop.stage === 'question' ? 'waiting for answer' : 'retry suggestions';
+        attempt.outcome = {question: 'waiting for answer', question_retry: 'retry suggestions', evidence: 'waiting for evidence'}[loop.stage];
       } else {
         build.status = 'failed';
         build.error = job.error ?? loop?.finding ?? 'The build stopped before verification.';
@@ -215,7 +242,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
                 state.branch !== build.branch) throw Error('The approved plan or configured branch changed.');
           }});
         job.response = loop.stage === 'completed' ? loop.summary ?? 'Verified for Branch Review.' :
-          loop.stage === 'question' ? loop.question : '';
+          pendingReply(loop)?.question ?? '';
         job.state = loop.stage === 'stopped' ? 'failed' : 'completed';
         if (loop.stage === 'stopped') job.error = loop.finding;
       } catch (error) {
@@ -340,7 +367,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const loop = await files.read(statePath(attempt.task), {});
       const result = attempt.job ? await files.read(loopPath(attempt.task) + '/jobs/' + attempt.job + '.json') : null;
       const job = result ?? {id: attempt.job,
-        state: loop.stage === 'completed' || loop.stage === 'question' || loop.stage === 'question_retry' ? 'completed' :
+        state: loop.stage === 'completed' || decisionStages.includes(loop.stage) ? 'completed' :
           build.status === 'cancelling' ? 'cancelled' : 'failed',
         error: loop.stage === 'completed' ? '' : 'Recovered the saved build checkpoint.'};
       if (job.state === 'cancelled') await store.pause(attempt.task, 'Task cancelled.').catch(() => {});
@@ -450,9 +477,8 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       if (agreement.missing_required.length) throw Error('Record the required task answers before running it.');
       const loop = await files.read(statePath(task.id), {});
       if (loop.stage === 'stopped') throw Error('This task reached its recorded stop condition.');
-      if (loop.stage === 'question') {
-        if (payload.task !== task.id || payload.question !== loop.question || payload.question_id !== loop.question_id ||
-            message === '/run') throw Error('Answer the current task question.');
+      if (decisionStages.includes(loop.stage)) {
+        validateReply(loop, task.id, payload, message);
       } else if (message !== '/run') {
         throw Error('Use /run to continue this task.');
       }
@@ -462,7 +488,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const build = {standalone: true, branch, base, index: 0, title: task.action, plan: task.scope,
         attachments: {}, preserved: {}, groups: [{findings: []}], decisions: agreement.answers};
       const attempt = {id: id(), job: id(), task: task.id, started: now(), outcome: 'running'};
-      const job = start({build, attempt, task, answer: loop.stage === 'question' ? message : undefined}, release);
+      const job = start({build, attempt, task, answer: pendingReply(loop) ? message : undefined}, release);
       started = true;
       return job;
     } finally {
@@ -488,10 +514,8 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const next = current(currentState, build.id);
       const task = next.attempts.at(-1)?.task;
       const loop = task && await files.read(statePath(task));
-      if (next.status !== 'question' || (message === '/run' ? loop?.stage !== 'question_retry' :
-          loop?.stage !== 'question' || payload.task !== task || payload.question !== loop.question || payload.question_id !== loop.question_id)) {
-        throw Error('The pending build decision changed.');
-      }
+      if (next.status !== 'question') throw Error('The pending build decision changed.');
+      validateReply(loop, task, payload, message);
       return next;
     }, message === '/run' ? undefined : message)).job;
   }
@@ -524,7 +548,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const loop = running ? await files.read(statePath(running.id), {}) : {};
     const task = running ? {id: running.id, status: running.lifecycle.status, lifecycle: running.lifecycle,
       action: running.action, answers: Object.fromEntries((running.answers ?? []).map(item => [item.question, item.option])),
-      ...(loop.stage === 'question' ? {question: loop.question, question_id: loop.question_id, suggestions: loop.suggestions} : {}),
+      ...pendingReply(loop),
       ...(loop.stage === 'question_retry' ? {question_error: loop.question_error} : {})} : null;
     const jobsData = [...jobs.values()].map(entry => entry.job);
     const {questions} = await store.questions(running?.id);
@@ -546,7 +570,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const checks = (await store.executionConfig(attempt.task)).checks;
     const statuses = evidence => Object.fromEntries(Object.entries(evidence).map(([key, row]) => [key, row.status]));
     const visits = buildTrace(loop.history);
-    const metrics = await readMetrics(files, loopPath(attempt.task));
+    const metrics = await metricsFor(attempt.task, build, visits);
     const windows = build.attempts.filter(row => row.task === attempt.task);
     const attempts = visits.map(visit => {
       const {id, role, stage, time, entry} = visit;
@@ -563,8 +587,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const saved = await store.getProfile();
       const stage = failedRole === 'repair' ? 'build' : failedRole;
       const changed = changedAgents(task.task.profile, saved);
-      failure = {role: failedRole, message: build.error.slice(0, 4000),
-        resumeBlocker: changed.length ? workflowChangedMessage(build) : '',
+      failure = {role: failedRole, message: build.error.slice(0, 4000), repairLimit: task.lifecycle.cause === 'repair_limit',
+        resumeBlocker: task.lifecycle.cause === 'repair_limit' ? repairLimitMessage :
+          changed.length ? workflowChangedMessage(build) : '',
         savedAgent: changed.includes(stage) ? agentSettings(selectedProfile(saved).stages[stage]) : null};
     }
     const activity = await files.bytes(loopPath(attempt.task) + '/activity.jsonl', 32_000_000, Buffer.alloc(0));
@@ -575,6 +600,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       .map(row => ({time: row.timestamp, text: row.activity, actor: row.actor}));
     return {buildStamp, run: {id: attempt.task, title: task.action, stage: loop.stage ?? '', lifecycle: task.lifecycle.status,
       running: pendingStates.includes(build.status), attempts, events: latest, failure,
+      evidenceRequest: loop.stage === 'evidence' ? {role: buildStageRoles[loop.evidenceRequest.stage], text: loop.evidenceRequest.text} : null,
       stages: selectedProfile(task.task.profile)?.stages ?? {}, checks,
       question: ['question', 'question_retry'].includes(loop.stage) ? loop.question : ''},
       review: {waiting: build.status === 'review', approved: !!group.sha && group.reviews.at(-1)?.sha === group.sha,
@@ -601,7 +627,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const run = await store.getRun(id);
       evidence = stageEvidence(run, build, found, trace);
       metrics = visitMetrics(found, build.attempts.filter(row => row.task === id),
-        await readMetrics(files, loopPath(id)), ['baseline', 'checks'].includes(role) ? checkRows(run, found) : []);
+        await metricsFor(id, build, trace), ['baseline', 'checks'].includes(role) ? checkRows(run, found) : []);
     }
     const timing = Object.hasOwn(metrics?.steps ?? {}, key) ? metrics.steps[key] : undefined;
     const record = Object.hasOwn(evidence, key) ? evidence[key] :

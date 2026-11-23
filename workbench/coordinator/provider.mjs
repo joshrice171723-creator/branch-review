@@ -157,7 +157,7 @@ export async function runProvider(options) {
 
 export function auditSchema(stage, withCriteria) {
   const fields = {
-    verdict: {type: 'string', enum: ['pass', 'replan', ...(stage === 'plan_review' ? [] : ['repair'])]},
+    verdict: {type: 'string', enum: ['pass', 'replan', 'needs_evidence', ...(stage === 'plan_review' ? [] : ['repair'])]},
     reason: {type: 'string'}
   };
   if (withCriteria) {

@@ -15,6 +15,32 @@ const designStageSteps = {
 };
 
 const tokenNumber = new Intl.NumberFormat();
+const sentenceSegments = new Intl.Segmenter("en", {granularity: "sentence"});
+
+function formatEvidenceText(value) {
+  const content = element("div", "formatted-evidence");
+  let list;
+  for (const raw of value.trim().split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) { list = undefined; continue; }
+    const bullet = /^[-*•]\s+(.+)$/.exec(line);
+    const numbered = /^\d+[.)]\s+(.+)$/.exec(line);
+    if (bullet || numbered) {
+      const tag = bullet ? "ul" : "ol";
+      if (list?.localName !== tag) { list = element(tag); content.append(list); }
+      list.append(element("li", "", (bullet || numbered)[1]));
+      continue;
+    }
+    list = undefined;
+    const heading = /^(?:#{1,6}\s+(.+)|\*\*([^*]{1,70})\*\*)$/.exec(line);
+    if (heading) { content.append(element("strong", "", heading[1] || heading[2])); continue; }
+    const sentences = [...sentenceSegments.segment(line)].map(row => row.segment);
+    for (let i=0;i<sentences.length;i+=3) {
+      content.append(element("p", "", sentences.slice(i,i+3).join("").trim()));
+    }
+  }
+  return content;
+}
 
 function durationText(milliseconds) {
   if (milliseconds < 1000) return "<1s";
@@ -51,6 +77,20 @@ function visitLabels(attempts, agentStage) {
   const calls = measured.flatMap(attempt => attempt.metrics.providers);
   return [elapsed, ...(agentStage ? [element("span", "", tokenLabel(calls,
     measured.some(attempt => !attempt.metrics.providers.length)))] : [])];
+}
+
+function runStepLabels() {
+  return element("li", "run-step-labels", ...["Step","Status","Elapsed","Tokens","Evidence"].map(label => element("span","",label)));
+}
+
+function runStepRow({title, status, time, calls, inspect}) {
+  const elapsed = elapsedLabel(time) || element("span","step-elapsed","—");
+  if(!time)elapsed.title="Elapsed time unavailable";
+  const tokens = element("span","step-tokens",calls ? tokenLabel(calls).replace(/ tokens$/, "").replace(/^Tokens /, "") : "—");
+  tokens.title = calls ? tokenLabel(calls) : "No model call in this step";
+  return element("li","",element("span","run-step-title",title),
+    element("span","run-step-status",...(status==="Running"?[element("span","runtime-spinner")]:[]),status),
+    elapsed,tokens,inspect || element("span"));
 }
 
 function providerMetrics(calls) {
@@ -108,7 +148,7 @@ function stepEvidenceButton(title, run, role, visit, key, label = "View evidence
 
 function renderStepEvidence(section, route) {
   const block = element("section", "design-stack", element("h3", "", section.title));
-  if (section.text) block.append(element("p", "step-evidence-text", section.text));
+  if (section.text) block.append(formatEvidenceText(section.text));
   if (section.fields?.length) {
     const fields = element("dl", "step-evidence-fields");
     for (const [label, value] of section.fields) fields.append(element("dt", "", label), element("dd", "", String(value)));
@@ -117,7 +157,7 @@ function renderStepEvidence(section, route) {
   for (const criterion of section.criteria ?? []) {
     block.append(element("article", "design-stack",
       element("strong", "", criterion.id.replaceAll("_", " ") + " · " + criterion.verdict.replaceAll("_", " ")),
-      ...(criterion.reason ? [element("p", "step-evidence-text", criterion.reason)] : []),
+      ...(criterion.reason ? [formatEvidenceText(criterion.reason)] : []),
       ...(criterion.evidence?.length ? [element("ul", "", ...criterion.evidence.map(value => element("li", "", value)))] : [])));
   }
   for (const check of section.checks ?? []) {
@@ -193,7 +233,7 @@ function progressPanel(openBuild, onProgress) {
     const last=history.at(-1);
     const failure=current?.failure;
     const gate=previewNext?null:group;
-    const pick=selectedStage || failure?.role || (gate?.waiting?"humanReview":last?.role || "plan");
+    const pick=selectedStage || failure?.role || current?.evidenceRequest?.role || (gate?.waiting?"humanReview":last?.role || "plan");
     mode.hidden=!run;
     log.hidden=!run;
     mode.textContent=previewNext?"Show current run":"Preview next build";
@@ -209,12 +249,14 @@ function progressPanel(openBuild, onProgress) {
       const next=attempt?history[history.indexOf(attempt)+1]:null;
       const live=Boolean(current?.running && last===attempt && attempt);
       const failed=failure?.role===key;
+      const needsEvidence=current?.evidenceRequest?.role===key;
       const waiting=key==="plan" && current?.stage==="question" || key==="humanReview" && gate?.waiting;
       const skipped=config?.enabled===false || attempt?.stage==="final_skip";
       const isReturn=next?.reason && ["plan","repair"].includes(next.role);
       const completed=Boolean(attempt && (next || current?.stage==="completed")) || key==="humanReview" && gate?.approved || key==="push" && gate?.pushed;
       const limited=failed && /\b429\b|rate_limit_error|quota exhausted/i.test(failure.message);
-      const status=failed?(limited?"Quota reached":"Stopped"):skipped?"Skipped":waiting?"Waiting for you":live?"Running":isReturn?"Returned":
+      const status=failed?(limited?"Quota reached":failure.repairLimit?"Repair limit reached":"Stopped"):
+        needsEvidence?"Needs evidence":skipped?"Skipped":waiting?"Waiting for you":live?"Running":isReturn?"Returned":
         completed?"Complete":key==="repair"&&!attempt?"If requested":key==="push"?"On request":attempt?"Paused":"Upcoming";
       const card=button("",()=>{selectedStage=key;draw();},"stage-card run-map-card");
       card.dataset.stageKey=key;card.dataset.status=status;
@@ -232,6 +274,8 @@ function progressPanel(openBuild, onProgress) {
       if(key!==pick)continue;
       detail.dataset.stageKey=key;
       detail.replaceChildren(element("h3","",role.name),element("p","stage-meta",config?.provider || (key==="humanReview"?"Human":"Workbench")));
+      if(needsEvidence)detail.append(element("div","run-map-error",element("strong","","Audit needs evidence"),
+        formatEvidenceText(current.evidenceRequest.text)));
       if(metrics.length)detail.append(element("p","step-runtime",element("span","",
         attempts.length>1?"Across "+attempts.length+" attempts":"Elapsed"),...visitLabels(attempts,agentStage && !skipped),
         ...(key==="push" && Number.isFinite(gate?.pushMs)?[elapsedLabel({milliseconds:gate.pushMs})]:[])));
@@ -241,10 +285,10 @@ function progressPanel(openBuild, onProgress) {
         const reset = /resets at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(failure.message)?.[1];
         const resetTime = reset && new Date(reset);
         detail.append(element("div","run-map-error",
-          element("strong","",limited?"Provider quota reached":"Stage stopped"),
+          element("strong","",limited?"Provider quota reached":failure.repairLimit?"Repair limit reached":"Stage stopped"),
           ...(config?.provider ? [element("p","","Stopped attempt · " + agentLabel(config))] : []),
           ...(failure.savedAgent ? [element("p","","Saved agent · " + agentLabel(failure.savedAgent))] : []),
-          element("p","",failure.message.replace(/\s*\[request_id=[^\]]+\]/i,"")),
+          formatEvidenceText(failure.message.replace(/\s*\[request_id=[^\]]+\]/i,"")),
           ...(resetTime && !Number.isNaN(resetTime.valueOf()) ? [element("p","","Quota resets " +
             resetTime.toLocaleString(undefined,{dateStyle:"medium",timeStyle:"short"}) + " local time.")] : []),
           ...(failure.resumeBlocker ? [element("p","",failure.resumeBlocker)] :
@@ -265,7 +309,7 @@ function progressPanel(openBuild, onProgress) {
       const timedStep=Object.entries(attempt?.metrics?.steps || {}).find(([,time])=>time.runningSince!=null)?.[0];
       const cursor=timedStep!==undefined && !checkStage?Number(timedStep):
         verdict?titles.length-1:hasAgentEvent && titles.length>1?1:0;
-      const list=element("ol","run-map-steps");
+      const list=element("ol","run-map-steps",runStepLabels());
       for(const [i,title] of titles.entries()){
         let state=failed?"Stopped":completed?"Complete":live?(i<cursor?"Complete":i===cursor?"Running":"Upcoming"):"Upcoming";
         if(live && checkStage){
@@ -282,15 +326,9 @@ function progressPanel(openBuild, onProgress) {
         if(live && time?.runningSince!=null)state="Running";
         if(hasEvidence)state=evidence[stepKey];
         else if(completed && !skipped)state="No result";
-        const row=element("li","",element("span","",title),element("small","",state));
-        const stepLabels=time?[elapsedLabel(time)]:[];
-        if(stepKey==="1" && agentStage && attempt?.metrics?.providers.length) {
-          stepLabels.push(element("span","",tokenLabel(attempt.metrics.providers)));
-        }
-        if(stepLabels.length)row.append(element("span","step-runtime",...stepLabels));
-        if(state==="Running")row.prepend(element("span","runtime-spinner"));
-        if(hasEvidence || hasTiming)row.append(stepEvidenceButton(title,current,key,attempt?.id,stepKey));
-        list.append(row);
+        list.append(runStepRow({title,status:state,time,
+          calls:stepKey==="1" && agentStage && attempt && !skipped ? attempt.metrics?.providers || [] : null,
+          inspect:hasEvidence || hasTiming ? stepEvidenceButton(title,current,key,attempt?.id,stepKey) : null}));
       }
       detail.append(list);
       if(waiting && current?.question && key==="plan")detail.append(element("p","",String(current.question)));
@@ -301,21 +339,22 @@ function progressPanel(openBuild, onProgress) {
         archive.open=expanded===key;
         for(const [attemptIndex,a] of attempts.entries()){
           const following=history[history.indexOf(a)+1];
-          const line=element("p","",new Date(a.time*1000).toLocaleTimeString()+" · "+(a.reason ||
-            (following?.reason && ["plan","repair"].includes(following.role)?following.reason:"Entered "+role.name)));
+          const reason=a.reason || (following?.reason && ["plan","repair"].includes(following.role)?following.reason:"");
+          const line=element("p","",element("strong","","Attempt "+(attemptIndex+1)),
+            " · "+new Date(a.time*1000).toLocaleTimeString());
           const summary=visitLabels([a],agentStage && !skipped);
           if(summary.length)line.append(element("span","step-runtime",...summary));
-          const previous=element("ul","run-map-steps");
+          const previous=element("ul","run-map-steps",runStepLabels());
           for(const [stepKey,status] of Object.entries(a.evidence || {})){
             const title=checkStage?stepKey:steps[Number(stepKey)];
             const timing=a.metrics?.steps || {};
-            const time=Object.hasOwn(timing,stepKey)?elapsedLabel(timing[stepKey]):null;
-            previous.append(element("li","",element("span","",title),element("small","",status),
-              ...(time?[time]:[]),
-              stepEvidenceButton(title,current,key,a.id,stepKey,"View "+title+" for attempt "+(attemptIndex+1))));
+            previous.append(runStepRow({title,status,time:Object.hasOwn(timing,stepKey)?timing[stepKey]:null,
+              calls:stepKey==="1" && agentStage && !skipped ? a.metrics?.providers || [] : null,
+              inspect:stepEvidenceButton(title,current,key,a.id,stepKey,"View "+title+" for attempt "+(attemptIndex+1))}));
           }
           archive.append(line);
-          if(previous.childElementCount)archive.append(previous);
+          if(reason)archive.append(element("details","run-attempt-notes",element("summary","","Read attempt notes"),formatEvidenceText(reason)));
+          if(previous.childElementCount>1)archive.append(previous);
         }
         detail.append(archive);
       }

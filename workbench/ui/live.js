@@ -64,7 +64,8 @@ function livePanel() {
         jobId = reply.id;
         status.textContent = reply.response || "Run started.";
       });
-      if (task.question) form.append(planningAnswer(task.question, task.suggestions, resume));
+      if (task.question) form.append(task.decision_kind === "evidence" ? buildEvidenceAnswer(task, resume) :
+        planningAnswer(task.question, task.suggestions, resume));
       else {
         if (task.question_error) form.append(element("p", "evidence-warning", task.question_error));
         form.append(button(task.question_error ? "Retry suggestions" : "Run task", () => resume("/run"), "button primary"));

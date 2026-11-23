@@ -51,7 +51,7 @@ export function stageEvidence(run, build, visit, visits) {
     'Thinking level': config.effort});
   const instructions = config?.instructions && text('Stage instructions', config.instructions);
   const plan = text('Approved plan', build.plan);
-  const methodVisit = visits.findLast(item => item.entry.stage === 'plan_review' && item.time <= visit.time);
+  const methodVisit = visits.findLast(item => item.entry.stage === 'plan_review' && item.entry.detail?.plan && item.time <= visit.time);
   const method = methodVisit?.entry.detail?.plan && text('Implementation steps', methodVisit.entry.detail.plan);
   if (role === 'plan') {
     const recorded = next?.stage === 'plan_review' ? text('Implementation steps', next.detail?.plan) :
@@ -82,7 +82,7 @@ export function stageEvidence(run, build, visit, visits) {
     const receipts = role === 'planReview' ? [] : checkRows(run, checkVisit);
     const input = result(plan, method, agent, instructions, receipts.length && checks(receipts));
     if (!verdict) return stage === 'final_skip' ? {} : {0: input};
-    const status = {pass: 'Passed', repair: 'Returned', replan: 'Returned', skipped: 'Skipped'}[verdict.verdict];
+    const status = {pass: 'Passed', repair: 'Returned', replan: 'Returned', needs_evidence: 'Needs evidence', skipped: 'Skipped'}[verdict.verdict];
     const recorded = {status, sections: [facts('Recorded verdict', {Verdict: status, Decision: verdict.verdict,
       Auditor: verdict.actor, 'Recorded at': verdict.at, Rubric: verdict.rubric_id, 'Quality revision': verdict.quality_revision,
       'Source snapshot': verdict.snapshot_sha256, 'Plan fingerprint': verdict.plan_sha256}),

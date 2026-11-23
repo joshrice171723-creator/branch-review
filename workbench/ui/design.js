@@ -1133,6 +1133,7 @@ function designPanel(initialState) {
     const build = state.builds.at(-1);
     if (build) {
       const attempt = build.attempts.at(-1);
+      const evidenceNeeded = build.status === "question" && attempt?.step === "evidence";
       const labels = {ready: "Ready to continue", working: "Running", cancelling: "Cancelling",
         cancelled: "Cancelled", failed: "Needs attention", question: "Waiting for an answer",
         review: "Waiting for Branch Review", closed: "Complete", retired: "Retired"};
@@ -1200,7 +1201,10 @@ function designPanel(initialState) {
           }
         }));
       }
-      const headingText = element("strong", "", labels[build.status] || build.status);
+      if (evidenceNeeded) controls.prepend(
+        ...(embedded ? [button("Open Project conversation", () => projectConversation.open(), "button primary")] : []),
+        button("Open Quality checks", () => goQuality("checks")));
+      const headingText = element("strong", "", evidenceNeeded ? "Waiting for audit evidence" : labels[build.status] || build.status);
       const info = box("Current build", element("p", "design-build-status", headingText, " · Revision " + build.revision), controls);
       if (canRestart) info.append(element("p", "", "Restart uses the saved workflow and approved plan. Existing working changes stay on disk outside the new build’s commit."));
       if (state.restartRequired) {
@@ -1208,15 +1212,15 @@ function designPanel(initialState) {
           canRestart ? "The branch changed after this run started. Restart from the current commit." :
             "The branch changed after this run started. Retire this run, then start a new build from the current commit."));
         if (build.error) info.append(element("details", "", element("summary", "", "Previous attempt error"),
-          element("p", "", build.error)));
+          formatEvidenceText(build.error)));
       } else if (state.resumeBlocker) {
         info.append(element("p", "evidence-warning", state.resumeBlocker));
         if (build.error) info.append(element("details", "", element("summary", "", "Previous attempt error"),
-          element("p", "", build.error)));
-      } else if (build.error) info.append(element("p", "evidence-warning",
+          formatEvidenceText(build.error)));
+      } else if (build.error) info.append(element("div", "evidence-warning", formatEvidenceText(
         build.error === "Enter an implementation method."
           ? "The planner’s implementation steps could not be read. Select Resume run to retry planning."
-          : build.error));
+          : build.error)));
       for (const [i, group] of build.groups.entries()) {
         if (group.sha && (i === latestReview || (build.status === "review" && i === build.index))) {
           info.append(embedded && build.mode === "task"
@@ -1427,7 +1431,8 @@ function designPanel(initialState) {
     if (activeBuild) {
       const resumeLabel = state.restartRequired || state.resumeBlocker ? "View the stopped build" : "Resume the run";
       const label = {ready: "Continue the build", review: "Review checked work", failed: resumeLabel,
-        cancelled: resumeLabel, question: "Answer the build question"}[build.status] || "View the current build";
+        cancelled: resumeLabel, question: build.attempts.at(-1)?.step === "evidence" ? "Review the evidence request" :
+          "Answer the build question"}[build.status] || "View the current build";
       next = [label, () => goBuild()];
     } else if (state.question || state.plannerRetry) next = ["Resolve the planning decision", () => projectConversation.open()];
     else if (localDraft.plan) next = ["Save the local draft", focus("plan-save")];
@@ -1528,10 +1533,13 @@ function designPanel(initialState) {
           await refreshLive();
         } catch (error) { status.textContent = error.message; }
       };
-      if (embedded && (task?.question || task?.question_error)) liveDecision.append(box("Build decision",
-        element("p", "", task.question ? "The build is waiting for your answer." : "The planner needs to retry its suggested answers."),
+      const evidence = task?.decision_kind === "evidence";
+      if (embedded && (task?.question || task?.question_error)) liveDecision.append(box(evidence ? "Audit needs evidence" : "Build decision",
+        element("p", "", evidence ? "Open the audit’s request and send the result to continue this build." :
+          task.question ? "The build is waiting for your answer." : "The planner needs to retry its suggested answers."),
         button("Open Project conversation", () => projectConversation.open(), "button primary")));
-      if (!embedded && task?.question) liveDecision.append(box("Build decision", planningAnswer(task.question, task.suggestions, answer)));
+      if (!embedded && task?.question) liveDecision.append(box(evidence ? "Audit needs evidence" : "Build decision",
+        evidence ? buildEvidenceAnswer(task, answer) : planningAnswer(task.question, task.suggestions, answer)));
       if (!embedded && task?.question_error) liveDecision.append(box("Build decision", element("p", "", task.question_error),
         button("Retry suggestions", () => answer("/run"))));
       decisionKey = key;

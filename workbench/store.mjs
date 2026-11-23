@@ -986,7 +986,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       if (folder === 'audits') {
         const auditStages = ['plan_review', 'build_review', 'final_review'];
         assert(auditStages.includes(data.stage), 'Choose a supported audit stage.');
-        assert(['pass', 'replan', 'repair'].includes(data.verdict) ||
+        assert(['pass', 'replan', 'repair', 'needs_evidence'].includes(data.verdict) ||
           data.verdict === 'skipped' && data.stage === 'final_review' && skipsFinal(task), 'The audit verdict conflicts with the pinned profile.');
         assert(filled(data.reason) && digestPattern.test(data.plan_sha256 ?? ''), 'Record the audit evidence and plan fingerprint.');
         assert(data.snapshot_sha256 === snapshot.snapshot_sha256, 'The audit is for a different source snapshot.');

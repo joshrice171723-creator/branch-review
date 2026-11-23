@@ -1,3 +1,5 @@
+import {readdir} from 'node:fs/promises';
+
 const metricPath = folder => folder + '/metrics.jsonl';
 
 export async function readMetrics(files, folder) {
@@ -13,6 +15,24 @@ export async function readMetrics(files, folder) {
 }
 
 export const appendMetric = (files, folder, value) => files.append(metricPath(folder), value).catch(() => {});
+
+export async function legacyProviderMetrics(files, folder, visits) {
+  const prefix = folder + '/provider-calls';
+  const calls = await readdir(await files.path(prefix), {withFileTypes: true}).catch(() => []);
+  const rows = await Promise.all(calls.filter(row => row.isDirectory() && /^[a-f0-9]{32}$/.test(row.name)).map(async row => {
+    const [request, result] = await Promise.all([
+      files.read(prefix + '/' + row.name + '/request.json'), files.read(prefix + '/' + row.name + '/result.json')
+    ]).catch(() => []);
+    const startedAt = Date.parse(request?.time);
+    const finishedAt = Date.parse(result?.time);
+    if (!request?.provider || !Number.isFinite(startedAt) || !Number.isFinite(finishedAt) || finishedAt < startedAt) return null;
+    const visit = visits.find(item => item.entry.stage === request.stage && startedAt >= item.time * 1000 &&
+      (!item.next || startedAt < item.next.time * 1000));
+    return visit ? {id: row.name, visit: Number(visit.id), provider: request.provider, model: request.model,
+      startedAt, finishedAt, outcome: 'complete'} : null;
+  }));
+  return rows.filter(Boolean).sort((a, b) => a.startedAt - b.startedAt);
+}
 
 function elapsed(start, end, windows) {
   let milliseconds = 0;
