@@ -168,7 +168,6 @@ function connectProjectConversation(initial) {
       return;
     }
     if (!message.trim() && !state.messages.length) { composer.focus(); return; }
-    if (stored.plan) { status.textContent = "Save or discard your local plan draft first."; return; }
     submit("guide", {message: message.trim() || "Draft a plan from this conversation.",
       context: context(), preparePlan: true, ...(changeScreenshot && {changeScreenshot})}, message);
   };
@@ -409,12 +408,26 @@ function connectProjectConversation(initial) {
       return;
     }
     if (proposal.kind === "plan") {
-      if (stored.plan) { status.textContent = "Save or discard your local plan draft first."; return; }
-      stored.plan = embedded || proposal.mode === "task" ? {title: proposal.title, plan: proposal.plan} :
+      const draft = embedded || proposal.mode === "task"
+        ? {title: proposal.title?.trim() || titleFromPlan(proposal.plan), plan: proposal.plan} :
         {plan: proposal.plan, roadmap: structuredClone(proposal.roadmap)};
-      stored.baseRevision = proposal.revision;
-      persistDesignDraft(key, stored);
-      route("workflow", "Plan", embedded && !proposal.title ? "plan-title" : review ? "plan-reading" : "plan");
+      const openDraft = () => {
+        stored.plan = draft;
+        stored.baseRevision = proposal.revision;
+        persistDesignDraft(key, stored);
+        status.textContent = "";
+        route("workflow", "Plan", review ? "plan-reading" : "plan");
+      };
+      if (stored.plan && JSON.stringify(stored.plan) !== JSON.stringify(draft)) {
+        const keep = button("Keep current draft", () => dialog.close());
+        showDialog("Replace unsaved draft?",
+          element("p", "", "Use the plan from this conversation in place of your unsaved edits."),
+          ...(draft.title ? [element("p", "", element("strong", "", draft.title))] : []),
+          element("details", "", element("summary", "", "Preview incoming plan"), element("pre", "", draft.plan)),
+          element("div", "actions", keep,
+            button("Replace draft", () => { dialog.close(); openDraft(); }, "button primary")));
+        keep.focus();
+      } else openDraft();
     } else {
       const preview = Object.hasOwn(proposal.fields, "preview");
       route("workflow", preview ? "Preview" : "Build", preview ? "preview" : "branch");
