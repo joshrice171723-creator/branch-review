@@ -57,6 +57,17 @@ export async function mount(root, hostOptions = {}) {
     }),...styles]);
     signal.throwIfAborted();
     container.hidden = false;
+    const shellHeader = document.querySelector("body > .topbar");
+    const workspaceNav = surface.querySelector(".compact-nav");
+    const measureHeaders = () => {
+      surface.style.setProperty("--shell-header-height", (shellHeader?.offsetHeight || 0) + "px");
+      surface.style.setProperty("--workspace-nav-height", workspaceNav.offsetHeight + "px");
+    };
+    const headerObserver = new ResizeObserver(measureHeaders);
+    if (shellHeader) headerObserver.observe(shellHeader);
+    headerObserver.observe(workspaceNav);
+    signal.addEventListener("abort", () => headerObserver.disconnect(), {once:true});
+    measureHeaders();
     return workspace;
   } catch (error) {
     dispose();

@@ -47,6 +47,9 @@ select:focus-visible {
   display: none !important;
 }
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   height: 66px;
   display: flex;
   align-items: center;

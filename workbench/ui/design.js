@@ -540,9 +540,25 @@ function designPanel(initialState) {
       Promise.resolve(hostOptions.openPreview(open.href)).catch(error => notify(error.message));
     };
     const previewStatus = element("p", "design-status");
-    const viewport = element("div");
+    const viewport = element("div", "project-viewport");
+    const fullStatus = element("span", "");
+    fullStatus.setAttribute("role", "status");
+    const sendView = button("Capture and send to change", async () => {
+      sendView.disabled = true;
+      fullStatus.textContent = "Capturing project view…";
+      try {
+        const saved = await projectConversation.capturePreview?.({sendToChange: true, openDrawer: false});
+        if (!saved) { fullStatus.textContent = "Capture unavailable. Choose this tab in Chrome, or upload a screenshot."; return; }
+        if (document.fullscreenElement) await document.exitFullscreen();
+        fullStatus.textContent = "";
+        projectConversation.open();
+      } catch (error) { fullStatus.textContent = error.message; }
+      finally { sendView.disabled = false; }
+    }, "button primary");
+    const fullTools = element("div", "project-fullscreen-tools", sendView,
+      button("Exit full screen", () => document.exitFullscreen().catch(error => notify(error.message))), fullStatus);
     const fullScreen = button("Full screen", () => {
-      viewport.querySelector("iframe")?.requestFullscreen().catch(error => notify(error.message));
+      if (viewport.querySelector("iframe")) viewport.requestFullscreen().catch(error => notify(error.message));
     });
     const captureView = button("Capture this view", () => projectConversation.capturePreview?.());
     const refreshView = button("Reload page", () => {
@@ -561,7 +577,7 @@ function designPanel(initialState) {
     };
     function loadPage(url) {
       pageAddress = url;
-      viewport.replaceChildren();
+      viewport.replaceChildren(fullTools);
       if (url) {
         const frame = element("iframe");
         frame.title = projectState.project.label + " app preview";

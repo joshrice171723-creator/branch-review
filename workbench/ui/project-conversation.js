@@ -18,7 +18,15 @@ function connectProjectConversation(initial) {
   const referenceFile = byId("mockup-reference-file");
   const referenceStatus = byId("mockup-reference-status");
   const capture = byId("capture-mockup-reference");
-  let reference, referencePage, livePreview;
+  let reference, referencePage, livePreview, changeScreenshot;
+  const changeAttachment = byId("change-screenshot");
+  function showChangeScreenshot() {
+    changeAttachment.hidden = !changeScreenshot;
+    byId("change-screenshot-label").textContent = changeScreenshot ?
+      "Attached project screenshot" + (changeScreenshot.page ? " · " + changeScreenshot.page : "") : "";
+    showContext();
+  }
+  byId("remove-change-screenshot").onclick = () => { changeScreenshot = undefined; showChangeScreenshot(); };
   const planner = byId("update-plan-with-conversation");
   const models = Object.entries(modelCatalog).filter(([, catalog]) => catalog?.models)
     .flatMap(([provider, catalog]) => [["" + provider + ":", provider + " default"],
@@ -91,15 +99,17 @@ function connectProjectConversation(initial) {
     event.preventDefault();
     const message = composer.value;
     if (!message.trim()) return;
-    submit("guide", {message, context: context()}, message);
+    const attachment = changeScreenshot;
+    submit("guide", {message, context: context(), ...(attachment && {changeScreenshot: attachment})}, message);
   };
   planner.onclick = () => {
     const message = composer.value;
     if (!message.trim()) { composer.focus(); return; }
-    submit("chat", {message}, message);
+    if (changeScreenshot) submit("guide", {message, context: context(), changeScreenshot}, message);
+    else submit("chat", {message}, message);
   };
   function setReference(source, target = mockupTarget.value, page = "") {
-    if (target !== mockupTarget.value) return;
+    if (target !== mockupTarget.value) return false;
     const canvas = document.createElement("canvas");
     const width = source.videoWidth || source.width;
     const height = source.videoHeight || source.height;
@@ -112,6 +122,7 @@ function connectProjectConversation(initial) {
     referenceImage.src = reference;
     referenceImage.hidden = false;
     referenceStatus.textContent = (page || target) + " screenshot attached.";
+    return true;
   }
   function updateMockupControls() {
     byId("mockup-reference-controls").hidden = mockupSource.value !== "screen";
@@ -139,18 +150,18 @@ function connectProjectConversation(initial) {
     } catch (error) { referenceStatus.textContent = error.message; }
   };
   capture.hidden = !navigator.mediaDevices?.getDisplayMedia;
-  async function captureReference() {
+  async function captureReference({sendToChange = false, openDrawer = true} = {}) {
     const target = mockupTarget.value;
     const project = target === "Project preview";
     const view = livePreview;
     if (project && (!view?.frame.isConnected || !globalThis.CropTarget?.fromElement)) {
       referenceStatus.textContent = "Load the project preview in Chrome, or upload a screenshot.";
-      open();
-      return;
+      if (openDrawer) open();
+      return false;
     }
     if (!project && context().tab !== target) {
       referenceStatus.textContent = "Open " + target + " before capturing, or upload a screenshot.";
-      return;
+      return false;
     }
     let stream;
     capture.disabled = true;
@@ -168,15 +179,23 @@ function connectProjectConversation(initial) {
       video.srcObject = stream;
       await video.play();
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      setReference(video, target, project ? new URL(view.address).pathname : "");
-    } catch { referenceStatus.textContent = "Screen capture was unavailable. Upload a screenshot instead."; }
+      const saved = setReference(video, target, project ? new URL(view.address).pathname : "");
+      if (saved && sendToChange) {
+        changeScreenshot = {image: reference, page: referencePage};
+        showChangeScreenshot();
+      }
+      return saved;
+    } catch {
+      referenceStatus.textContent = "Screen capture was unavailable. Upload a screenshot instead.";
+      return false;
+    }
     finally {
       stream?.getTracks().forEach(track => track.stop());
       capture.disabled = false;
-      open();
+      if (openDrawer) open();
     }
   }
-  capture.onclick = captureReference;
+  capture.onclick = () => captureReference();
   byId("generate-conversation-mockup").onclick = () => {
     const brief = composer.value;
     const activeContext = context();
@@ -231,6 +250,10 @@ function connectProjectConversation(initial) {
       const mode = embedded || current.mode === "task" ? {mode: "task"} : {};
       const next = await api("design/" + action, {revision: current.revision, ...mode, ...body, conversationModel});
       if (submitted !== undefined && composer.value === submitted) editComposer("");
+      if (body.changeScreenshot && body.changeScreenshot === changeScreenshot) {
+        changeScreenshot = undefined;
+        showChangeScreenshot();
+      }
       outgoing = undefined;
       update(next, true);
     });
@@ -360,14 +383,14 @@ function connectProjectConversation(initial) {
   if (initialSlice) slice = {section: "slice", id: initialSlice[0], label: initialSlice[1]};
   return {open, update, current: () => state, context: showContext,
     setPreview(value) { livePreview = value; showContext(); },
-    capturePreview() {
+    capturePreview(options) {
       mockupSource.value = "screen";
       if (mockupTarget.value !== "Project preview") {
         mockupTarget.value = "Project preview";
         mockupTarget.onchange();
       }
       updateMockupControls();
-      return captureReference();
+      return captureReference(options);
     },
     openMockup() { open(); mockupTarget.focus(); },
     selectView() { review = {}; showContext(); },

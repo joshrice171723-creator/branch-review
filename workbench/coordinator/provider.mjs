@@ -152,7 +152,7 @@ export function auditSchema(stage, withCriteria) {
   return {type: 'object', properties: fields, required: Object.keys(fields), additionalProperties: false};
 }
 
-function validPng(data) {
+export function validPng(data) {
   if (!Buffer.isBuffer(data) || data.length > 32_000_000 || data.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
     throw Error('The provider did not return a supported PNG.');
   }

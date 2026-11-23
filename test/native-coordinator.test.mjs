@@ -126,12 +126,13 @@ test('keeps a planning question until it has distinct suggestions and applies pr
     {plan: '## Acceptance criteria\n- Use Welcome.', message: 'Drafted the greeting.'},
     {message: 'Here is the proposal.', proposal: {kind: 'plan', title: 'Edit title', plan: 'Revised plan'}}
   ];
-  let prompt, requestedModel, requestedEffort;
+  let prompt, requestedModel, requestedEffort, attachedImages;
   let mockupRequest;
   const coordinator = await createCoordinator({repository, store, git, invoke: async request => {
     prompt = request.prompt;
     requestedModel = request.model;
     requestedEffort = request.effort;
+    attachedImages = request.images;
     return {text: JSON.stringify(replies.shift())};
   }, image: async request => { mockupRequest = request; return Buffer.from('mockup bytes'); }});
   const action = (name, data) => coordinator.dispatch(name, data, {method: 'POST'});
@@ -140,13 +141,17 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   assert.deepEqual(state.question.suggestions, ['Hello', 'Welcome']);
   await assert.rejects(action('design/answer', {revision: state.revision, mode: 'task', id: 'stale', message: 'Welcome'}), /question has changed/);
   state = await action('design/answer', {revision: state.revision, mode: 'task', id: state.question.id, message: 'Welcome'});
+  const screenshot = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1sAAAAASUVORK5CYII=';
   state = await action('design/guide', {revision: state.revision, mode: 'task', message: 'Revise this plan.',
+    changeScreenshot: {image: 'data:image/png;base64,' + screenshot, page: '/appointments'},
     conversationModel: {provider: 'Codex', model: 'gpt-6.2-sol', effort: 'low'},
     context: {view: 'workflow', tab: 'Plan', projectPage: '/appointments', activeProject: 'Other project', conversationOpen: false}});
   const context = JSON.parse(prompt.split('\n').find(line => line.startsWith('{"activeProject":')));
   assert.equal(context.activeProject, path.basename(repository));
   assert.equal(context.conversationOpen, true);
   assert.deepEqual(context.screen, {view: 'workflow', tab: 'Plan', projectPage: '/appointments'});
+  assert.deepEqual(context.screenshot, {page: '/appointments'});
+  assert.equal((await readFile(attachedImages[0])).toString('base64'), screenshot);
   assert.match(context.planControls['Draft a plan'], /focuses the message box/);
   assert.equal(requestedModel, 'gpt-6.2-sol');
   assert.equal(requestedEffort, 'low');

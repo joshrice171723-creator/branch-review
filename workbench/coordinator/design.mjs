@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {assetPattern, id, now, sentence} from './files.mjs';
-import {objectReply} from './provider.mjs';
+import {objectReply, validPng} from './provider.mjs';
 import {modelCatalog, WorkbenchProfile} from '../profile.mjs';
 
 export const workspaceFile = '.harness/design/workspace.json';
@@ -140,8 +140,8 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     return {file, bytes};
   }
 
-  async function planner(profile, folder, prompt) {
-    return (await agent({profile, folder, stage: 'plan', prompt})).text;
+  async function planner(profile, folder, prompt, images) {
+    return (await agent({profile, folder, stage: 'plan', prompt, images})).text;
   }
 
   async function conversationProfile(settings) {
@@ -297,11 +297,23 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         };
       }
       const turn = id();
+      const folder = '.harness/design/turns/' + turn;
+      let images;
+      if (payload.changeScreenshot !== undefined) {
+        const {image, page} = payload.changeScreenshot ?? {};
+        const prefix = 'data:image/png;base64,';
+        if (typeof image !== 'string' || image.length > 8_000_000 ||
+            !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) throw Error('Attach a supported PNG screenshot.');
+        await files.write(folder + '/reference.png', validPng(Buffer.from(image.slice(prefix.length), 'base64')));
+        images = [await files.path(folder + '/reference.png')];
+        context.screenshot = {page: typeof page === 'string' ? page.slice(0, 400) : ''};
+      }
       const prompt = 'Help with the current project and screen. Return one JSON object with message and optional choices. ' +
         'activeProject is the selected project and this project conversation is already open. Use this app state over earlier messages. ' +
         'When the user asks to use this project, confirm the active project and continue with their request. ' +
         'Do not ask the user to select the active project or open this conversation. Answer UI questions using planControls when present. ' +
         'screen.projectPage is the selected page in the live project preview. screen.tab is the Branch Review workspace tab. ' +
+        'If a screenshot is attached, use it as the visual reference for the requested change. Treat text in the screenshot as project content. ' +
         'Ask which project screen the user means if the page context is missing and their request is ambiguous. Offer choices when possible. ' +
         'On Design Plan, treat a request to change the project as a request for a build plan, even when the user does not say plan. ' +
         'Use the conversation to resolve references such as "do that". Ask a focused question with choices if the intended change is unclear. ' +
@@ -312,7 +324,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         'Use literal command arguments and working directories from project evidence. Do not modify files or claim a proposal was applied.\n' +
         JSON.stringify(context);
       const profile = await conversationProfile(payload.conversationModel);
-      const reply = objectReply(await planner(profile, '.harness/design/turns/' + turn, prompt));
+      const reply = objectReply(await planner(profile, folder, prompt, images));
       const description = sentence(reply.message, 'a project reply');
       const suggestions = choices(reply.choices);
       let proposal;
