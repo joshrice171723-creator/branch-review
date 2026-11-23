@@ -306,6 +306,7 @@ function designPanel(initialState) {
     const editing = localDraft.plan?.title !== undefined ? localDraft.plan : {title: state.title || "", plan: state.plan};
     const baseRevision = localDraft.plan?.title !== undefined ? localDraft.baseRevision : state.revision;
     const title = input(editing.title, "Change title", value => { editing.title = value; edited(); });
+    title.dataset.designFocus = "plan-title";
     const draft = element("textarea", "plan-text");
     draft.dataset.designFocus = "plan";
     draft.value = editing.plan;

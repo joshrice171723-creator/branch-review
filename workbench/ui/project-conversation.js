@@ -397,7 +397,7 @@ function connectProjectConversation(initial) {
         {plan: proposal.plan, roadmap: structuredClone(proposal.roadmap)};
       stored.baseRevision = proposal.revision;
       persistDesignDraft(key, stored);
-      route("workflow", "Plan", "plan");
+      route("workflow", "Plan", embedded && !proposal.title ? "plan-title" : "plan");
     } else {
       const preview = Object.hasOwn(proposal.fields, "preview");
       route("workflow", preview ? "Preview" : "Build", preview ? "preview" : "branch");
@@ -409,7 +409,7 @@ function connectProjectConversation(initial) {
     const preview = proposal.kind === "plan" ? proposal.plan :
       JSON.stringify(proposal.kind === "quality" ? proposal.definition : proposal.fields, null, 2);
     const action = accepted[item.id] ? button("Undo", () => perform("Undoing proposal…", () => revise(item, true))) :
-      button(proposal.kind === "plan" ? "Save and review plan" : "Apply",
+      button(proposal.kind === "plan" ? "Save to Plan" : "Apply",
         () => perform("Applying proposal…", () => revise(item, false)), "button primary");
     return element("div", "conversation-proposal", element("strong", "", proposal.title),
       element("details", "", element("summary", "", "Proposed changes"), element("pre", "", preview)),
@@ -427,6 +427,15 @@ function connectProjectConversation(initial) {
           element("p", "conversation-text", item.text));
         if (item.asset) row.append(assetImage(item.asset, "Generated mockup"));
         if (item.proposal) row.append(proposalCard(item));
+        else if (embedded && item.author === "agent" && !item.asset && !item.decision &&
+            /^\s*(?:#{1,6}\s+|\*\*)?(?:Plan|Acceptance criteria)\b/im.test(item.text)) {
+          row.append(button("Send to Plan", () => {
+            const heading = /^#{1,6}\s+(.+)$/m.exec(item.text)?.[1]?.trim();
+            const title = state.title || (heading && !/^(plan|acceptance criteria|verification)$/i.test(heading)
+              ? heading.slice(0, 240) : "");
+            edit({kind: "plan", mode: "task", title, plan: item.text, revision: state.revision});
+          }));
+        }
         if (item.choices) row.append(element("div", "answer-choices", ...item.choices.map(choice =>
           button(choice, () => { editComposer(choice); composer.focus(); }))));
         return row;
