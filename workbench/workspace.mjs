@@ -31,7 +31,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   const readEnvironment = (route,params=new URLSearchParams()) => environment.dispatch('GET',route,{},params);
   coordinator = await createCoordinator({
     repository,store:tasks,git,review,push,providerOptions,
-    stageToolCall:call,
+    stageToolCall:call, prepareBuild: environment.prepareBuild,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
       directory: diagnostics.healthDirectory,
       observe: () => observeRuntime(diagnostics),
@@ -45,6 +45,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     },
     providerProbe:(provider,override)=>probeProvider(provider,override,{liveMuse:false}),
     projectEvidence:()=>readEnvironment('project-capabilities'),
+    saveQualityDraft: payload => quality.mcp('quality_draft', payload),
     qualityDraft:()=>quality.dispatch('GET','quality',{},new URLSearchParams()),
     validateQuality:definition=>quality.dispatch('POST','quality/validate',{definition},new URLSearchParams())
   });

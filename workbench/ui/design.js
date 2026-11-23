@@ -386,7 +386,7 @@ function designPanel(initialState) {
     const rendered = element("div", "plan-readable");
     rendered.dataset.designFocus = "plan-reading";
     rendered.tabIndex = -1;
-    const placeholder = element("p", "", "Draft the plan in Project conversation or select Edit plan.");
+    const placeholder = element("p", "", "Draft the plan in Coordinator or select Edit plan.");
     const toggle = button("✎", () => {
       editPlan = !editPlan;
       if (!editPlan) planHeight = Math.max(340, draft.offsetHeight);
@@ -671,7 +671,7 @@ function designPanel(initialState) {
     }
     selectSlice(slices.some(row => row[0] === localDraft.slice) ? localDraft.slice : "");
     return box("Design context", field("Current slice", select(localDraft.slice, [["", "Whole plan"], ...slices], selectSlice)),
-      button("Open project conversation", () => projectConversation.open()));
+      button("Open Coordinator", () => projectConversation.open()));
   }
   function mockups() {
     const assets = state.assets;
@@ -1265,7 +1265,7 @@ function designPanel(initialState) {
         }));
       }
       if (evidenceNeeded) controls.prepend(
-        ...(embedded ? [button("Open Project conversation", () => projectConversation.open(), "button primary")] : []),
+        ...(embedded ? [button("Open Coordinator", () => projectConversation.open(), "button primary")] : []),
         button("Open Quality checks", () => goQuality("checks")));
       const headingText = element("strong", "", evidenceNeeded ? "Waiting for audit evidence" : labels[build.status] || build.status);
       const info = box("Current build", element("p", "design-build-status", headingText, " · Revision " + build.revision), controls);
@@ -1601,7 +1601,7 @@ function designPanel(initialState) {
       if (embedded && (task?.question || task?.question_error)) liveDecision.append(box(evidence ? "Audit needs evidence" : "Build decision",
         element("p", "", evidence ? "Open the audit’s request and send the result to continue this build." :
           task.question ? "The build is waiting for your answer." : "The planner needs to retry its suggested answers."),
-        button("Open Project conversation", () => projectConversation.open(), "button primary")));
+        button("Open Coordinator", () => projectConversation.open(), "button primary")));
       if (!embedded && task?.question) liveDecision.append(box(evidence ? "Audit needs evidence" : "Build decision",
         evidence ? buildEvidenceAnswer(task, answer) : planningAnswer(task.question, task.suggestions, answer)));
       if (!embedded && task?.question_error) liveDecision.append(box("Build decision", element("p", "", task.question_error),

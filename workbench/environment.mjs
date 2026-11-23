@@ -1,10 +1,15 @@
 import {lstat, mkdir, readdir, realpath, rmdir, unlink} from 'node:fs/promises';
 import path from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
+import {redact} from '../jobs.mjs';
 import {discoverCapabilities, readInstruction} from './environment/discovery.mjs';
 import {atomicJson, boundedText, plainPath, stableId} from './environment/paths.mjs';
 import {PreviewProcess, previewAddress, programAvailable} from './environment/preview.mjs';
 
 const kitKind = 'branch-review-workbench-profile';
+const smokePath = 'test/branch-review-smoke.cjs';
+const smokeCheck = {name: 'coordinator_smoke', argv: ['node', '--test', smokePath], cwd: '.',
+  required: true, benchmark: false, phases: ['after'], input_paths: [smokePath]};
 const managedNames = ['scratch', 'tmp'];
 const isMissing = error => error.code === 'ENOENT';
 const missing = (error, value = null) => { if (isMissing(error)) return value; throw error; };
@@ -302,6 +307,73 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     return app.start();
   }
 
+  async function previewForPlan(inventory, previewId) {
+    try {
+      const candidate = inventory.previews.find(row => row.id === previewId && row.url && ['web', 'external'].includes(row.mode));
+      let state = await autoPreview({retry: true, id: candidate?.id});
+      const app = await getPreview();
+      async function check() {
+        for (let attempt = 0; state.state === 'starting' && attempt < 10; attempt++) {
+          await delay(500);
+          state = await app.status();
+        }
+        if (!state.owned || state.state !== 'running' || state.settings?.mode !== 'web') return null;
+        const response = await fetch(state.url, {redirect: 'manual', signal: AbortSignal.timeout(5000)});
+        await response.body?.cancel();
+        return response.status;
+      }
+      let status = await check();
+      const retrying = status >= 500;
+      if (retrying) {
+        await app.stop();
+        state = await app.start();
+        status = await check();
+      }
+      if (status >= 400) return ['The managed preview responded with HTTP ' + status +
+        (retrying ? ' after a restart.' : '.'), state.log && redact(state.log).slice(-750)].filter(Boolean).join('\n');
+      if (status) return retrying ? 'The managed preview responded after restart.' : 'The preview responded.';
+      if (state.state === 'starting') return 'The preview is starting.';
+      if (state.state === 'external' || await savedPreview?.()) return 'Using the saved preview address.';
+      return [state.message || 'The preview is unavailable.',
+        state.state === 'exited' && state.log && redact(state.log).slice(-750)].filter(Boolean).join('\n');
+    } catch (error) {
+      return 'Preview setup did not finish. ' + redact(error.message);
+    }
+  }
+
+  function prepareBuild({checkId, previewId} = {}) {
+    return write(async () => {
+      const root = await repo();
+      const profile = await store.getProfile();
+      const config = await store.effectiveConfig();
+      const inventory = await capabilities({routes: false});
+      if (!config.checks.some(row => row.required || row.benchmark)) {
+        if (config.quality_revision) throw Error('The published Quality policy lacks a required check.');
+        const preferred = ['test', 'check', 'typecheck', 'lint', 'build'];
+        const ordered = [...(checkId ? inventory.checks.filter(row => row.id === checkId) : []),
+          ...preferred.flatMap(kind => inventory.checks.filter(row => row.kind === kind))];
+        let discovered;
+        for (const candidate of ordered) {
+          if (!preferred.includes(candidate.kind)) continue;
+          const cwd = await plainPath(root, candidate.cwd, {directory: true}).catch(missing);
+          if (cwd && await programAvailable(candidate.argv[0], cwd)) { discovered = candidate; break; }
+        }
+        const required = discovered ? checkDefinition(discovered) : smokeCheck;
+        const checks = profile.checks.filter(row => row.name !== required.name);
+        await store.setProfile({...profile, checks: [...checks, required]});
+      } else if (!await store.profileApplied()) {
+        await store.setProfile(profile);
+      }
+      const effective = await store.effectiveConfig();
+      const smoke = !effective.quality_revision && effective.checks.some(row => row.name === smokeCheck.name &&
+        row.argv.join(' ') === smokeCheck.argv.join(' ')) &&
+        !await plainPath(root, smokePath).catch(missing) ? smokePath : '';
+      const previewMessage = await previewForPlan(inventory, previewId);
+      return {checks: effective.checks.filter(row => row.required || row.benchmark).map(row => row.name),
+        smoke, previewMessage};
+    });
+  }
+
   async function dispatch(method, route, payload = {}, searchParams = new URLSearchParams()) {
     const endpoint = route.replace(/^\/?(?:api\/)?(?:workspace\/)?/, '');
     const requestedProject = payload?.projectId || searchParams.get('projectId');
@@ -343,7 +415,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     }
   }
 
-  return {inspect, prepare, cleanupPreview, cleanup, capabilities, exportProfile, importProfile, checkedPreview, dispatch,
+  return {inspect, prepare, prepareBuild, cleanupPreview, cleanup, capabilities, exportProfile, importProfile, checkedPreview, dispatch,
     recoverPreview: () => write(async () => {
       const app = await getPreview();
       const state = await app.status();

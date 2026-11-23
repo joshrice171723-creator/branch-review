@@ -21,7 +21,7 @@ let projectConversation;
 
 function conversationHistory() {
   const body = element("div", "panel-body design-stack");
-  const panel = element("section", "panel", heading("Project conversations"), body);
+  const panel = element("section", "panel", heading("Coordinator conversations"), body);
   queueMicrotask(async () => {
     try {
       const {active, archived} = await api("design/conversations");
@@ -46,7 +46,7 @@ function conversationHistory() {
             if (record.draft?.message) transcript.append(element("p", "conversation-text", "Unsent message · " + record.draft.message));
             const messages = element("ol", "conversation");
             for (const item of record.messages) {
-              const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Project agent"),
+              const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Coordinator"),
                 element("p", "conversation-text", item.text));
               if (item.asset) row.append(assetImage(item.asset, "Archived mockup"));
               if (item.proposal?.plan) row.append(element("details", "", element("summary", "", "Proposed plan"),
@@ -117,7 +117,7 @@ function connectProjectConversation(initial) {
   composer.value = stored.message;
 
   function syncLauncher() {
-    launch.textContent = "Project conversation" +
+    launch.textContent = "Coordinator" +
       (decisionLabel ? " · " + decisionLabel : buildAttention ? " · Build needs attention" : "");
     launch.toggleAttribute("data-build-attention", Boolean(buildAttention));
   }
@@ -136,7 +136,7 @@ function connectProjectConversation(initial) {
       renderMessages();
       messages.scrollTop = messages.scrollHeight;
     } else if (changed && message.id !== seenAttention) {
-      notify("Build needs attention. Open Project conversation.");
+      notify("Build needs attention. Open Coordinator.");
     }
   }
 
@@ -273,8 +273,8 @@ function connectProjectConversation(initial) {
     const message = composer.value;
     const latest = state.messages.findLast(item => item.author === "agent" && !item.asset && !item.decision && !item.coordinator);
     const plan = planFromReply(latest);
-    if (!message.trim() && !changeScreenshot && plan) {
-      edit(plan, true);
+    if (!message.trim() && !changeScreenshot && latest?.proposal?.kind === 'plan' && plan.revision === state.revision) {
+      submit('guide', {preparePlan: true, proposalId: latest.id});
       return;
     }
     if (!message.trim() && !state.messages.length) { composer.focus(); return; }
@@ -456,7 +456,7 @@ function connectProjectConversation(initial) {
     outgoing = body.message || undefined;
     renderMessages();
     if (outgoing) messages.scrollTop = messages.scrollHeight;
-    await perform(action === "image" ? "Generating mockup…" : "Working on your message…", async () => {
+    await perform(action === "image" ? "Generating mockup…" : body.preparePlan ? "Preparing the project…" : "Working on your message…", async () => {
       const current = await api("design");
       const mode = embedded || current.mode === "task" ? {mode: "task"} : {};
       const next = await api("design/" + action, {revision: current.revision, ...mode, ...body, conversationModel});
@@ -464,6 +464,11 @@ function connectProjectConversation(initial) {
       if (body.changeScreenshot && body.changeScreenshot === changeScreenshot) {
         changeScreenshot = undefined;
         showChangeScreenshot();
+      }
+      if (next.messages.at(-1)?.projectPrepared) {
+        const savedProfile = await api("profile");
+        data = {...data, checks: savedProfile.checks};
+        projectState.profile_applied = true;
       }
       outgoing = undefined;
       update(next, true);
@@ -584,7 +589,7 @@ function connectProjectConversation(initial) {
       const scrollEnd = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 28;
       messages.replaceChildren(...state.messages.filter(item => !item.decision || item.decision !== state.question?.id)
       .map(item => {
-        const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Workbench coordinator"),
+        const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Coordinator"),
           element("p", "conversation-text", item.text));
         if (item.asset) row.append(assetImage(item.asset, "Generated mockup"));
         if (item.proposal) row.append(proposalCard(item));

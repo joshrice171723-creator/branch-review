@@ -44,9 +44,25 @@ export async function createHealthReviewer({directory, observe, repair, restartR
     }
     await writes.catch(error => { saved = undefined; throw error; });
   };
+  async function report({title, issue, request}) {
+    const key = 'host/report:' + clean(title).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    let row = rows.find(item => item.key === key && item.state !== 'recovered');
+    if (!row) {
+      row = {id: randomUUID(), key, owner: 'host', title: clean(title), error: clean(issue),
+        evidence: clean(request), state: 'detected', reported: true, detectedAt: clock(), observations: 1, attempts: 0};
+      rows.unshift(row);
+    } else if (row.state === 'verifying') {
+      failed(row, 'The user reported the issue again after restart. ' + clean(issue));
+      row.error = clean(issue);
+      row.evidence = clean(request);
+    }
+    await persist();
+    return {id: row.id, state: row.state};
+  }
   async function run() {
     if (paused || controller.signal.aborted) return;
-    const signals = await observe();
+    const signals = [...await observe(), ...rows.filter(row => row.reported && ['detected', 'retrying'].includes(row.state))
+      .map(row => ({owner: 'host', id: row.key.slice(5), title: row.title, error: row.error, evidence: row.evidence}))];
     checkedAt = clock();
     const seen = new Set();
     let next;
@@ -109,7 +125,7 @@ export async function createHealthReviewer({directory, observe, repair, restartR
         const stillFailing = async () => {
           if (paused || stop.aborted || !await idle()) return false;
           const latest = (await observe()).find(item => item.owner + '/' + item.id === row.key);
-          applying = Boolean(latest && clean(latest.error) === row.error && await idle() && !paused && !stop.aborted);
+          applying = Boolean((row.reported || latest && clean(latest.error) === row.error) && await idle() && !paused && !stop.aborted);
           return applying;
         };
         const prior = rows.filter(item => item.files).flatMap(item =>
@@ -151,7 +167,7 @@ export async function createHealthReviewer({directory, observe, repair, restartR
     timer.unref();
   }
   if (start) schedule();
-  return {tick, busy: () => applying,
+  return {tick, report, busy: () => applying,
     status: () => ({error: lastError, checkedAt, maxAttempts, incidents: structuredClone(rows)}),
     suspend() {
       paused = true;

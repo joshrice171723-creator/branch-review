@@ -14,7 +14,7 @@ import {openStageMcp, selectStageTools, toolDescriptions} from './mcp.mjs';
 const checklist = ['Inspect the commit diff', 'Check the included scope', 'Review the recorded project checks'];
 
 export async function createCoordinator({
-  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe, stageToolCall,
+  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe, stageToolCall, prepareBuild, saveQualityDraft,
   invoke = runProvider, image = generateMockup, runtimeHealth
 }) {
   const root = await realpath(repository);
@@ -126,7 +126,8 @@ export async function createCoordinator({
     }
   }
 
-  const design = createDesign({files, store, git, agent, projectName: path.basename(root), projectEvidence, validateQuality,
+  const design = createDesign({files, store, git, agent, projectName: path.basename(root), projectEvidence, validateQuality, prepareBuild, saveQualityDraft,
+    repairApp: runtimeHealth && (issue => health.report(issue)),
     buildContext: build => builds.conversationContext(build),
     retryBuildVerification: build => builds.retryVerification({build}),
     qualityDraft: async () => {
