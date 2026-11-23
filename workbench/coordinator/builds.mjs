@@ -1,3 +1,4 @@
+import {redact} from '../../jobs.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {assetPattern, id, now, runPattern, sentence} from './files.mjs';
 import {checkMode, hash, jsonHash, selectedProfile, workspaceFile} from './design.mjs';
@@ -81,7 +82,7 @@ function groupMembers(state, payload) {
   return frequency === 'plan' ? [selected.flat()] : selected;
 }
 
-export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => []}) {
+export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => [], supervise}) {
   const jobs = new Map();
   let recoveryTimer;
   let recoverySuspended = false;
@@ -338,7 +339,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     });
   }
 
-  async function publishAttention(build, attempt, recoveryError) {
+  async function publishAttention(build, attempt, recoveryError, diagnosis) {
     const loop = await files.read(statePath(attempt.task), {});
     const detail = loop.stage === 'evidence_blocked' ? loop.history?.at(-1)?.detail : null;
     const role = buildStageRoles[detail?.stage ?? attempt.step];
@@ -364,7 +365,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const recoveryNote = attempt.automaticRecovery?.kind === 'stageTimeout' ? 'I retried this stage with a longer call allowance.' :
       attempt.automaticRecovery?.resetAt ? 'I retried this stage after the provider reset.' : '';
     const text = ['“' + (build.title || 'Current build') + '” needs attention at ' + stage + '.',
-      reason, receiptNote, recoveryNote, recoveryError && 'Automatic recovery could not start. ' + recoveryError, next].filter(Boolean).join('\n\n');
+      reason, diagnosis, receiptNote, recoveryNote, recoveryError && 'Automatic recovery could not start. ' + recoveryError, next].filter(Boolean).join('\n\n');
     await design.edit(state => {
       const current = state.builds.at(-1);
       if (current?.id !== build.id || current.status !== 'failed' || current.attempts.at(-1)?.id !== attempt.id ||
@@ -397,6 +398,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       try {
         if (attempt.automaticRecovery?.kind === 'stageTimeout') {
           await audit.activity(task.id, prepared.step, 'Workbench', 'Retrying the audit with more time.');
+        }
+        if (attempt.automaticRecovery?.kind === 'supervisor') {
+          await audit.activity(task.id, prepared.step, 'Coordinator', attempt.automaticRecovery.reason || 'Retrying after reviewing the failure.');
         }
         loop = await audit.workflow({...prepared, signal: controller.signal,
           setCancellable: value => { job.cancellable = value; },
@@ -546,6 +550,36 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     }
   }
 
+  async function superviseStop(build, attempt) {
+    if (!supervise || build.attention || !attempt.task) return null;
+    const loop = await files.read(statePath(attempt.task), {});
+    const run = await store.getRun(attempt.task);
+    const detail = loop.stage === 'evidence_blocked' ? loop.history.at(-1)?.detail : null;
+    const source = await store.snapshot(attempt.task, {record: false});
+    const ownership = ['source_changed', 'checkout_ownership'].includes(detail?.kind) ||
+      /source changed|checkout changed|configured branch changed/i.test(attempt.error ?? '');
+    const previous = build.attempts.filter(row => row.task === attempt.task && row.automaticRecovery?.kind === 'supervisor');
+    if (previous.length >= 5) return {reason: 'The Coordinator reached its five-attempt recovery limit.'};
+    const canVerify = Boolean(verificationCheckpoint(run, loop));
+    await audit.activity(attempt.task, loop.stage ?? 'plan', 'Coordinator', 'Reviewing the build failure for recovery.');
+    const diagnosis = await supervise({build, attempt, failure: redact(build.error ?? attempt.error ?? ''), evidence: {
+      detail, canVerify, ownership,
+      previous: previous.map(row => ({action: row.automaticRecovery.action, reason: row.automaticRecovery.reason, error: redact(row.error ?? '')})),
+      checks: run.checks.slice(-8).map(row => ({name: row.check, code: row.exit_code,
+        sourceChanged: row.source_changed, inputsChanged: row.inputs_changed,
+        output: redact([row.spawn_error, row.stderr_preview, row.stdout_preview].filter(Boolean).join('\n')).slice(0, 1200)}))
+    }});
+    const reason = typeof diagnosis?.reason === 'string' ? redact(diagnosis.reason).slice(0, 1200) : '';
+    if (ownership || !['retry', 'verify'].includes(diagnosis?.action) ||
+        (diagnosis.action === 'verify' && !canVerify) ||
+        (diagnosis.action === 'retry' && loop.stage === 'evidence_blocked' && !canVerify)) return {reason};
+    const action = canVerify ? 'verify' : 'retry';
+    if (previous.some(row => row.automaticRecovery.action === action && row.error === attempt.error)) return {reason};
+    return {kind: 'supervisor', action, reason, source: {
+      head: source.head, branch: source.branch, index_sha256: source.index_sha256, snapshot_sha256: source.snapshot_sha256
+    }};
+  }
+
   async function refreshRecovery(reconnectPending = false) {
     if (closing || recoverySuspended) return;
     const state = await files.read(workspaceFile);
@@ -599,6 +633,21 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         deadline = Date.now();
       }
     }
+    if (!Number.isFinite(deadline) && !budgetErrors.includes(attempt.errorCode)) {
+      try {
+        const decision = await superviseStop(build, attempt);
+        if (decision?.kind) {
+          recovery = decision;
+          deadline = Date.now();
+        } else if (decision?.reason) {
+          await publishAttention(build, attempt, null, decision.reason);
+          return;
+        }
+      } catch (error) {
+        await publishAttention(build, attempt, error.message);
+        return;
+      }
+    }
     const tried = build.attempts.some(row => row.task === attempt.task && isDeepStrictEqual(row.automaticRecovery, recovery));
     if (!Number.isFinite(deadline) || tried) {
       try { await publishAttention(build, attempt); }
@@ -614,13 +663,19 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       return;
     }
     try {
-      await drive(state => {
+      await drive(async state => {
         const next = state.builds.at(-1);
         if (next?.id !== build.id || next.status !== 'failed' || next.attempts.at(-1)?.id !== attempt.id) {
           throw Error('The run has already changed.');
         }
+        if (recovery.kind === 'supervisor') {
+          const source = await store.snapshot(attempt.task, {record: false});
+          if (Object.entries(recovery.source).some(([key, value]) => source[key] !== value)) {
+            throw Error('The checkout changed after the Coordinator reviewed the failure.');
+          }
+        }
         return next;
-      }, undefined, false, recovery);
+      }, undefined, recovery.kind === 'supervisor' && recovery.action === 'verify', recovery);
     } catch (error) {
       if (error.message === 'This checkout already has an active Workbench operation.') scheduleRecovery(refreshRecovery, 1000);
       else await publishAttention(build, attempt, error.message);

@@ -3,6 +3,7 @@ import {lstat, readFile, readdir, realpath} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
+import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import {id, now, sentence} from './files.mjs';
 import {hash, questionContract, resolveQuestion, selectedProfile, stageKeys} from './design.mjs';
@@ -55,6 +56,37 @@ async function relevantNotes(repository, vaults, request) {
     }
   }
   return matches.map(({path, passage}) => ({path, passage}));
+}
+
+export async function runProtectedChecks({read, run, report, signal, wait = delay}) {
+  const expected = await read();
+  const same = current => ['snapshot_sha256', 'head', 'branch', 'index_sha256']
+    .every(key => current[key] === expected[key]);
+  let result = await run();
+  signal.throwIfAborted();
+  let current = await read();
+  const changed = () => !same(current) || result.checks.some(row => row.source_changed);
+  if (!changed()) return {result, current};
+  await report('Source changed during checks. Waiting for the original checkout before retrying verification.');
+  for (let sample = 0; sample < 5; sample++) {
+    await wait(1000, undefined, {signal});
+    current = await read();
+    if (same(current)) break;
+  }
+  if (same(current)) {
+    await report('The original checkout is back. Retrying checks once.');
+    result = await run();
+    signal.throwIfAborted();
+    current = await read();
+    if (!changed()) return {result, current};
+  }
+  const paths = [...new Set([...Object.keys(expected.files), ...Object.keys(current.files)])]
+    .filter(name => expected.files[name] !== current.files[name]);
+  const identity = [['head', 'commit'], ['branch', 'branch'], ['index_sha256', 'staged changes']]
+    .filter(([key]) => expected[key] !== current[key]).map(([, label]) => label);
+  const details = [...identity, ...paths.slice(0, 10), ...(paths.length > 10 ? ['and ' + (paths.length - 10) + ' more files'] : [])];
+  return {result, current, blocked: details.length ? 'Still changed: ' + details.join(', ') + '.' :
+    'The check changed source again while it was running.'};
 }
 
 export function createAudit({repository, files, git, store, agent}) {
@@ -382,16 +414,15 @@ export function createAudit({repository, files, git, store, agent}) {
     async function checkStage(phase) {
       const stage = phase === 'after' ? 'checks' : 'baseline';
       await activity(run, stage, 'Workbench', 'Started configured ' + phase + ' checks');
-      const before = await readSource();
-      const result = await store.runChecks(run, {phase, signal, measure, reusePassing: phase === 'after'});
-      signal.throwIfAborted();
-      const after = await readSource();
-      if (before.snapshot_sha256 !== after.snapshot_sha256) throw Error('Project source changed during checks. Restore the expected source and retry.');
+      const {result, current, blocked} = await runProtectedChecks({read: readSource,
+        run: () => store.runChecks(run, {phase, signal, measure, reusePassing: phase === 'after'}),
+        report: message => activity(run, stage, 'Workbench', message), signal});
+      if (blocked) return block(stage, 'Project source changed during checks. ' + blocked, 'source_changed');
       for (const row of result.checks) {
         await activity(run, stage, 'Workbench', (row.reused ? 'Reused passing receipt for ' :
           row.exit_code === 0 && !row.source_changed ? 'Passed ' : 'Failed ') + row.check);
       }
-      return {checks: result.checks, passed: result.verdict === 'pass', source: after.snapshot_sha256};
+      return {checks: result.checks, passed: result.verdict === 'pass', source: current.snapshot_sha256};
     }
 
     function afterChecks() {

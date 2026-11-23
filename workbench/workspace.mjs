@@ -31,7 +31,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   const readEnvironment = (route,params=new URLSearchParams()) => environment.dispatch('GET',route,{},params);
   coordinator = await createCoordinator({
     repository,store:tasks,git,review,push,providerOptions,
-    stageToolCall:call, prepareBuild: environment.prepareBuild,
+    stageToolCall:call, superviseFailures:true, prepareBuild: environment.prepareBuild,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
       directory: diagnostics.healthDirectory,
       observe: () => observeRuntime(diagnostics),

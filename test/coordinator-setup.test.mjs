@@ -69,10 +69,21 @@ test('sending a saved proposal prepares its check and starts the detected previe
 });
 
 test('a project without checks receives a required after-build smoke test in the plan', async t => {
+  let interrupted = false, supervised = 0;
   const {send, store, coordinator, git} = await fixture(t, {'greeting.txt': 'Before'}, {
+    superviseFailures: true,
     invoke: async ({stage, prompt, cwd}) => {
+      if (prompt.startsWith('Supervise this stopped Branch Review build')) {
+        supervised++;
+        assert.match(prompt, /Temporary connection interruption/);
+        return {text: JSON.stringify({action: 'retry', reason: 'The planning connection was interrupted.'})};
+      }
       if (prompt.startsWith('You are the Branch Review Coordinator')) {
         return {text: JSON.stringify({message: 'Drafted the plan.', proposal: plan})};
+      }
+      if (stage === 'plan' && !interrupted) {
+        interrupted = true;
+        throw Error('Temporary connection interruption');
       }
       if (stage === 'plan') return {text: JSON.stringify({plan: ['Update the greeting and add a smoke test.']})};
       if (stage === 'plan_review') return {text: JSON.stringify({verdict: 'pass', reason: 'The plan covers both requirements.'})};
@@ -101,12 +112,15 @@ test('a project without checks receives a required after-build smoke test in the
   await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed', code_changes: 'allow_scoped',
     migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
   let build;
-  for (let attempt = 0; attempt < 200; attempt++) {
+  for (let attempt = 0; attempt < 400; attempt++) {
     build = (await coordinator.dispatch('design')).builds.at(-1);
-    if (['review', 'failed'].includes(build.status)) break;
+    if (build.status === 'review' || build.attention) break;
     await delay(150);
   }
   assert.equal(build.status, 'review', build.error);
+  assert.equal(supervised, 1);
+  assert.equal(build.attempts.at(-1).automaticRecovery?.kind, 'supervisor');
+  assert.equal(build.attempts[0].task, build.attempts.at(-1).task);
   const run = build.attempts.at(-1).task;
   const receipt = (await store.getRun(run)).checks.find(row => row.check === check.name && row.phase === 'after');
   assert.equal(receipt?.exit_code, 0);
