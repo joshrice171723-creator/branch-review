@@ -1205,7 +1205,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     });
   }
 
-  async function changeLifecycle(id, operation, reason) {
+  async function changeLifecycle(id, operation, reason, verificationSource) {
     assert(filled(reason), 'Record the reason for this task action.');
     return mutate(async home => {
       const run = await selected(id, home);
@@ -1217,7 +1217,8 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       if (operation === 'pause' || operation === 'stop' || operation === 'limit') {
         assert(state.status === 'active', 'Only an active task accepts this action.');
       } else if (operation === 'retryVerification') {
-        assert(state.status === 'stopped' && state.cause === 'repair_limit', 'Select a build stopped at its repair limit.');
+        assert(state.status === 'active' || state.status === 'stopped' && state.cause === 'repair_limit',
+          'Select a build stopped during verification.');
       } else if (operation === 'resume') {
         assert(['paused', 'stopped'].includes(state.status), 'Only a paused or stopped task can resume.');
       } else {
@@ -1236,7 +1237,8 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       const snapshot = await sourceSnapshot(await resolvedRoot, run.task);
       const common = {reason:reason.trim(), at:now(), snapshot_sha256:snapshot.snapshot_sha256};
       if (operation === 'retryVerification') {
-        assert(state.snapshot_sha256 === snapshot.snapshot_sha256, 'Restore the stopped build’s source before retrying verification.');
+        assert(snapshot.snapshot_sha256 === (state.status === 'stopped' ? state.snapshot_sha256 : verificationSource),
+          'Restore the stopped build’s source before retrying verification.');
         const pinned = await pinnedConfiguration(run);
         const current = await effectiveConfig();
         const additions = run.task.quality || current.quality_revision ? [] : current.checks.filter(check =>
@@ -1298,6 +1300,6 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),
     pause:(id, reason) => changeLifecycle(id, 'pause', reason), stop:(id, reason) => changeLifecycle(id, 'stop', reason),
     stopAtLimit:(id, reason) => changeLifecycle(id, 'limit', reason),
-    retryVerification:id => changeLifecycle(id, 'retryVerification', 'User requested verification only.'),
+    retryVerification:(id, source) => changeLifecycle(id, 'retryVerification', 'User requested verification only.', source),
     resume:(id, reason = 'Explicit resume request') => changeLifecycle(id, 'resume', reason)};
 }

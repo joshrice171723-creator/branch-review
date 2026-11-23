@@ -99,7 +99,7 @@ test('restarts a stopped build with saved agent settings and preserves working c
   assert.equal(await readFile(path.join(repository, 'greeting.txt'), 'utf8'), 'Edit kept from the stopped build');
 });
 
-test('retries verification on the stopped source without rebuilding it', async t => {
+test('retries verification on the blocked source without rebuilding it', async t => {
   const {git, store, repository} = await fixture(t);
   const profile = await store.getProfile();
   profile.profiles[profile.active].stages.buildReview.limit = 1;
@@ -113,7 +113,7 @@ test('retries verification on the stopped source without rebuilding it', async t
       return {text: 'Updated greeting.'};
     }
     if (stage === 'build_review' && !prompt.includes('"check":"desktop_acceptance"')) {
-      return {text: JSON.stringify({verdict: 'repair', reason: 'The acceptance check is missing.'})};
+      return {text: JSON.stringify({verdict: 'needs_evidence', reason: 'The acceptance check is missing.'})};
     }
     return {text: JSON.stringify({verdict: 'pass', reason: 'Reviewed current evidence.', ...(stage === 'final_review' && {criteria})})};
   }});
@@ -124,6 +124,8 @@ test('retries verification on the stopped source without rebuilding it', async t
   await post('design/approve', {revision: draft.revision, mode: 'task'});
   await post('design/build', {revision: draft.revision, mode: 'task', decisions});
   const stopped = await waitForBuild(coordinator, 'failed');
+  assert.equal(stopped.attempts.at(-1).step, 'evidence_blocked');
+  assert.equal((await coordinator.dispatch('design')).verificationAvailable, true);
   const count = builderCalls;
   const task = stopped.attempts.at(-1).task;
   profile.checks.push({name: 'desktop_acceptance', argv: ['node', '-e', 'process.exit(0)'],

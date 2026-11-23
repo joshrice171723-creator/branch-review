@@ -107,12 +107,20 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (attempt.step === 'evidence_blocked') return 'Runtime verification is blocked. Configure the missing check before starting another build.';
     return changedAgents(pinned.task.profile, await store.getProfile()).length ? workflowChangedMessage(build) : '';
   }
+  function verificationCheckpoint(run, loop) {
+    if (loop?.design_sha) return null;
+    if (run?.lifecycle.status === 'active' && loop?.stage === 'evidence_blocked' && loop.checked_source) {
+      return loop.checked_source;
+    }
+    if (run?.lifecycle.cause === 'repair_limit' && loop?.stage === 'stopped' &&
+        ['build_review', 'final_review'].includes(loop.history.at(-2)?.stage)) return run.lifecycle.snapshot_sha256;
+    return null;
+  }
   async function verificationAvailable(build) {
     const attempt = build?.attempts.at(-1);
-    if (build?.status !== 'failed' || attempt?.step !== 'stopped') return false;
+    if (build?.status !== 'failed' || !['stopped', 'evidence_blocked'].includes(attempt?.step)) return false;
     const [run, loop] = await Promise.all([store.getRun(attempt.task), files.read(statePath(attempt.task))]);
-    return run.lifecycle.cause === 'repair_limit' && !loop?.design_sha &&
-      ['build_review', 'final_review'].includes(loop?.history.at(-2)?.stage);
+    return Boolean(verificationCheckpoint(run, loop));
   }
   async function profileMatches(build, profile) {
     if (build.profile === jsonHash(profile)) return true;
@@ -154,10 +162,11 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (!member) throw Error('This group is waiting for Branch Review.');
     const prior = previous?.slice === member && previous.outcome !== 'completed'
       ? await store.getRun(previous.task) : null;
+    let verificationSource;
     if (verificationOnly) {
       const loop = prior && await files.read(statePath(prior.id));
-      if (prior?.lifecycle.cause !== 'repair_limit' || loop?.stage !== 'stopped' ||
-          !['build_review', 'final_review'].includes(loop.history.at(-2)?.stage) || loop.design_sha) {
+      verificationSource = verificationCheckpoint(prior, loop);
+      if (!verificationSource) {
         throw Error('Select a build stopped during audit before it produced a review commit.');
       }
       if (await commitment(git, build.branch) !== build.base) throw Error('Restore the stopped build’s branch and commit.');
@@ -205,7 +214,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const saved = await files.read(markerPath(task.id));
     if (!saved) await files.write(markerPath(task.id), marker);
     else if (!isDeepStrictEqual(saved, marker)) throw Error('The recorded build scope changed.');
-    if (verificationOnly) await store.retryVerification(task.id);
+    if (verificationOnly) await store.retryVerification(task.id, verificationSource);
     const attempt = {id: id(), job: id(), slice: member, task: task.id, started: now(), outcome: 'running',
       reason: group.findings.at(-1)?.text ?? previous?.error ?? ''};
     build.attempts.push(attempt);
