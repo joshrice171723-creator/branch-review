@@ -228,15 +228,28 @@ async function launch() {
     if(!settings.projects?.[key] || key===path.resolve(savedConfig.repository).toLowerCase())throw Error('Choose a different saved project to remove.');
     settings.hiddenProjects=[...new Set([...(settings.hiddenProjects || []),key])];settings.recentProjects=(settings.recentProjects || []).filter(p=>p!==key);await writeFile(settingsPath,JSON.stringify({...settings,home}));return true;
   });
-  ipcMain.handle('review:choose-repository', async (event,requested) => {
+  let discoveredProjects = new Map();
+  ipcMain.handle('review:find-projects', async (event, query) => {
+    trusted(event);
+    discoveredProjects.clear();
+    const reply = await control('/api/workspace/mcp', {jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: {name: 'find_local_projects', arguments: {query}}});
+    const projects = reply.result?.structuredContent?.projects;
+    if (!projects) throw Error(reply.error?.message || reply.result?.content?.[0]?.text || 'Project search failed.');
+    discoveredProjects = new Map(projects.map(project => [path.resolve(project.path).toLowerCase(), project.path]));
+    const current = path.resolve(savedConfig.repository).toLowerCase();
+    return projects.map(project => ({...project, current: path.resolve(project.path).toLowerCase() === current}));
+  });
+  ipcMain.handle('review:choose-repository', async (event,requested,discovered=false) => {
     trusted(event);
     let chosen;
     if(requested!==undefined){
       const key=typeof requested==='string'?path.resolve(requested).toLowerCase():'';
-      if(!settings.projects?.[key])throw Error('Choose a saved project from the list.');
+      const folder=discovered===true ? discoveredProjects.get(key) : settings.projects?.[key] && requested;
+      if(!folder)throw Error('Choose a project from the list.');
       if(key===path.resolve(savedConfig.repository).toLowerCase())return null;
-      if(!await availableRepository(key,exec))throw Error('This project folder is unavailable. Use Locate folder to find it.');
-      const repository=(await exec('git',['rev-parse','--show-toplevel'],{cwd:key,windowsHide:true})).stdout.trim();
+      if(!await availableRepository(folder,exec))throw Error('This project folder is unavailable. Find it again or browse for the folder.');
+      const repository=(await exec('git',['rev-parse','--show-toplevel'],{cwd:folder,windowsHide:true})).stdout.trim();
       if(path.resolve(repository).toLowerCase()!==key)throw Error('This folder now belongs to a different project. Choose it as a new project.');
       chosen={repository,projectInfo:await detectProject(repository)};
     }else chosen=await chooseRepository({dialog,window,exec,detectProject,repository:savedConfig.repository});

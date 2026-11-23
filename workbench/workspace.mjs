@@ -7,6 +7,7 @@ import {inspectRun} from './history.mjs';
 import {probeProvider} from '../providers.mjs';
 import {modelCatalog, WorkbenchProfile, presetDocuments} from './profile.mjs';
 import {toolDescriptions, workspaceMcp} from './mcp.mjs';
+import discovery from '../desktop/project-discovery.cjs';
 
 const environmentRoutes = new Set([
   'environment','project-capabilities','project-instruction','design/preview',
@@ -63,6 +64,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   async function call(name,values) {
     if (name.startsWith('quality_')) return quality.mcp(name,values);
     switch(name) {
+      case 'find_local_projects': return {projects:await discovery.findLocalProjects(values.query)};
       case 'get_profile': return tasks.getProfile();
       case 'inspect_run': return inspectRun(repository,values.runId);
       case 'project_capabilities': return readEnvironment('project-capabilities');

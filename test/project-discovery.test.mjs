@@ -51,3 +51,19 @@ test('identifies a main checkout and its linked worktree without exposing remote
     assert.ok(!JSON.stringify(result).includes('password'));
   }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('returns verified Git roots and accepts a quoted folder path', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branch-review-local-projects-'));
+  try {
+    const repo = path.join(root, 'orchard-lantern');
+    const nested = path.join(repo, 'src');
+    const invalid = path.join(root, 'orchard-lantern-broken');
+    await mkdir(nested, {recursive: true});
+    await mkdir(path.join(invalid, '.git'), {recursive: true});
+    execFileSync('git', ['init', repo], {stdio: 'pipe'});
+    const found = await discovery.findLocalProjects('Pull in my Orchard Lantern project', root);
+    assert.deepEqual(found.map(row => row.path), [repo]);
+    assert.deepEqual((await discovery.findLocalProjects('Open "' + nested + '"', root)).map(row => row.path), [repo]);
+    assert.deepEqual(await discovery.findLocalProjects(invalid, root), []);
+  } finally { await rm(root, {recursive: true, force: true}); }
+});

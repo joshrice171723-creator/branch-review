@@ -11,7 +11,12 @@ function tool(name,description,properties={},required=[],write=false) {
   return {name,description,inputSchema:{type:'object',properties,required,additionalProperties:false},write};
 }
 
+const localProjectSearch = {
+  ...tool('find_local_projects','Find local Git folders by project name or absolute folder path.',{query:string},['query']),
+  local:true
+};
 const tools = [
+  localProjectSearch,
   tool('get_profile','Read the applied workflow profile.'),
   tool('inspect_run','Read the stage transitions, checks, and original receipts for a run.',{runId:{...string,pattern:'^\\d{8}T\\d{12}-[a-f0-9]{8}$'}}),
   tool('project_capabilities','Discover checks, preview commands, files, and Git references.'),
@@ -46,7 +51,7 @@ function checkValue(value,rule) {
 }
 
 export function toolDescriptions() {
-  return tools.map(({name,description,write})=>({name,description,app:name.startsWith('app_'),stageAllowed:!write,
+  return tools.filter(item=>!item.local).map(({name,description,write})=>({name,description,app:name.startsWith('app_'),stageAllowed:!write,
     access:write?'Project writes':name==='quality_routes'?'Reads or runs project code':'Read only'}));
 }
 
@@ -68,8 +73,9 @@ export async function workspaceMcp(message,{call,getProfile,verified,stageTools}
   if (method==='ping') return reply({});
   const allowed = (await getProfile())?.permittedTools || [];
   const visible = tools.filter(item=>(!item.name.startsWith('app_') || allowed.includes(item.name)) &&
+    (!item.local || verified && !stageTools) &&
     (!stageTools || !item.write && stageTools.includes(item.name)));
-  if (method==='tools/list') return reply({tools:visible.map(({write,...definition})=>definition)});
+  if (method==='tools/list') return reply({tools:visible.map(({write,local,...definition})=>definition)});
   if (method!=='tools/call') return error(-32601,'Unknown method.');
   const definition = visible.find(item=>item.name===params.name);
   if (!definition) return error(-32602,'Unknown tool.');
@@ -92,7 +98,7 @@ import {randomUUID} from 'node:crypto';
 
 
 export function selectStageTools(stage, selections, {scope = '', evidenceOnly = false} = {}) {
-  if (Array.isArray(selections)) return tools.filter(item=>!item.write && selections.includes(item.name)).map(item=>item.name);
+  if (Array.isArray(selections)) return tools.filter(item=>!item.local && !item.write && selections.includes(item.name)).map(item=>item.name);
   if (evidenceOnly) return [];
   const selected = new Set();
   if (stage === 'plan' || stage === 'plan_review') selected.add('project_capabilities');

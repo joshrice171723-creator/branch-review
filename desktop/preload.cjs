@@ -1,7 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 if (process.isMainFrame) contextBridge.exposeInMainWorld('desktop', {
   openSetupHelp: key => ipcRenderer.invoke('review:setup-help',key),
-  chooseRepository: path => ipcRenderer.invoke('review:choose-repository',path),
+  chooseRepository: (path, discovered) => ipcRenderer.invoke('review:choose-repository',path,discovered),
+  findProjects: query => ipcRenderer.invoke('review:find-projects',query),
   recentProjects: () => ipcRenderer.invoke('review:recent-projects'),
   forgetProject: path => ipcRenderer.invoke('review:forget-project',path),
   capture: rect => ipcRenderer.invoke('review:capture',rect),

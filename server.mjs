@@ -607,7 +607,7 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }
-    if(req.method!=='GET'||!['/','/app.js','/apex-panel.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/photo-markup.js','/branch-history.js','/batch-review.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css','/theme.js'].includes(url.pathname))return json(res,404,{error:'Not found'});
+    if(req.method!=='GET'||!['/','/app.js','/apex-panel.js','/error-message.js','/workflow.js','/project-picker.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/photo-markup.js','/branch-history.js','/batch-review.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css','/theme.js'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
     const parent = process.env.BRANCH_REVIEW_PREVIEW_PARENT || '';
     const frameAncestor = /^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(parent) ? parent : "'none'";

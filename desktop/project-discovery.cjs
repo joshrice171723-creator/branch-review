@@ -4,7 +4,7 @@ const {promisify}=require('node:util');
 const {createHash}=require('node:crypto');
 const os=require('node:os'),path=require('node:path');
 const ignored=new Set(['node_modules','.git','.hg','.svn','vendor','dist','build','.next','__pycache__','cache','caches','system volume information','$recycle.bin','windows','program files','program files (x86)']);
-const stop=new Set(['please','project','projects','bring','open','find','load','working','worked','using','review','branch','application','app','into','here','that','this','with','from','folder','want','could','would','like','my','the','for','and','one','it','me','to','go','an','on','at','of','in','up','be','we','us','as','am','is']);
+const stop=new Set(['please','project','projects','bring','open','find','load','working','worked','using','review','branch','application','app','into','here','that','this','with','from','folder','want','could','would','like','my','the','for','and','one','it','me','to','go','named','called','computer','pull','import','clone','an','on','at','of','in','up','be','we','us','as','am','is']);
 async function localDrives(home){
   if(process.platform!=='win32' || path.resolve(home).toLowerCase()!==path.resolve(os.homedir()).toLowerCase())return [];
   try{const shell=path.join(process.env.SystemRoot || 'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');const result=await promisify(execFile)(shell,['-NoProfile','-NonInteractive','-Command',"Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { $_.DeviceID }"],{windowsHide:true,timeout:4000,maxBuffer:10000});const current=path.parse(home).root.toLowerCase();return result.stdout.split(/\s+/).filter(drive=>/^[a-z]:$/i.test(drive)).map(drive=>drive+'\\').filter(root=>root.toLowerCase()!==current); }catch{return [];}
@@ -43,4 +43,14 @@ async function describeProjectCandidates(candidates){
   }));
   return projects.map(p=>({path:p.path,checkout:p.checkout,relatedWorktrees:p.common?projects.filter(other=>other.common===p.common && other.checkout==='worktree').length:0,relatedCopies:p.repository?projects.filter(other=>other.repository===p.repository).length:0}));
 }
-module.exports={findProjectCandidates,describeProjectCandidates};
+async function findLocalProjects(query, home = os.homedir(), options) {
+  if (typeof query !== 'string' || !query.trim() || query.length > 500) throw Error('Enter a project name or local folder path.');
+  const input = query.trim();
+  const quoted = [...input.matchAll(/["']([^"']+)["']/g)].map(match => match[1]);
+  const explicit = [input, ...quoted].find(folder => process.platform === 'win32'
+    ? /^[a-z]:[\\/]/i.test(folder) : path.isAbsolute(folder));
+  const candidates = explicit ? [explicit] : await findProjectCandidates(home, [{role: 'user', text: input}], options);
+  return (await describeProjectCandidates(candidates)).filter(item => item.checkout !== 'unknown')
+    .map(item => ({...item, name: path.basename(item.path)}));
+}
+module.exports={findProjectCandidates,describeProjectCandidates,findLocalProjects};
