@@ -39,8 +39,9 @@ function progressPanel(openBuild, onProgress) {
     const current=previewNext?null:run;
     const history=current?.attempts || [];
     const last=history.at(-1);
+    const failure=current?.failure;
     const gate=previewNext?null:group;
-    const pick=selectedStage || (gate?.waiting?"humanReview":last?.role || "plan");
+    const pick=selectedStage || failure?.role || (gate?.waiting?"humanReview":last?.role || "plan");
     mode.hidden=!run;
     log.hidden=!run;
     mode.textContent=previewNext?"Show current run":"Preview next build";
@@ -54,22 +55,38 @@ function progressPanel(openBuild, onProgress) {
       const attempt=attempts.at(-1);
       const next=attempt?history[history.indexOf(attempt)+1]:null;
       const live=Boolean(current?.running && last===attempt && attempt);
+      const failed=failure?.role===key;
       const waiting=key==="plan" && current?.stage==="question" || key==="humanReview" && gate?.waiting;
       const skipped=config?.enabled===false || attempt?.stage==="final_skip";
       const isReturn=next?.reason && ["plan","repair"].includes(next.role);
       const completed=Boolean(attempt && (next || current?.stage==="completed")) || key==="humanReview" && gate?.approved || key==="push" && gate?.pushed;
-      const status=skipped?"Skipped":waiting?"Waiting for you":live?"Running":isReturn?"Returned":
+      const limited=failed && /\b429\b|rate_limit_error|quota exhausted/i.test(failure.message);
+      const status=failed?(limited?"Quota reached":"Stopped"):skipped?"Skipped":waiting?"Waiting for you":live?"Running":isReturn?"Returned":
         completed?"Complete":key==="repair"&&!attempt?"If requested":key==="push"?"On request":attempt?"Paused":"Upcoming";
       const card=button("",()=>{selectedStage=key;draw();},"stage-card run-map-card");
       card.dataset.stageKey=key;card.dataset.status=status;
+      if(failed)card.dataset.failed="";
       card.setAttribute("aria-pressed",String(key===pick));
       if(live)card.setAttribute("aria-current","step");
-      card.append(live?element("span","runtime-spinner"):stageIcon(role),element("span","",element("strong","stage-name",role.name),
+      const glyph = failed ? element("span","run-map-error-icon","!") :
+        live ? element("span","runtime-spinner") : stageIcon(role);
+      if(failed)glyph.setAttribute("aria-hidden","true");
+      card.append(glyph,element("span","",element("strong","stage-name",role.name),
         element("small","stage-meta",status)));
       grid.append(card);
       if(key!==pick)continue;
       detail.dataset.stageKey=key;
       detail.replaceChildren(element("h3","",role.name),element("p","stage-meta",config?.provider || (key==="humanReview"?"Human":"Workbench")));
+      if(failed) {
+        const reset = /resets at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(failure.message)?.[1];
+        const resetTime = reset && new Date(reset);
+        detail.append(element("div","run-map-error",
+          element("strong","",limited?"Provider quota reached":"Stage stopped"),
+          element("p","",failure.message.replace(/\s*\[request_id=[^\]]+\]/i,"")),
+          ...(resetTime && !Number.isNaN(resetTime.valueOf()) ? [element("p","","Quota resets " +
+            resetTime.toLocaleString(undefined,{dateStyle:"medium",timeStyle:"short"}) + " local time.")] : []),
+          ...(limited ? [element("p","","Resume after the quota resets. To switch models or providers, retire this run and start a new build with the updated workflow.")] : [])));
+      }
       let titles=steps;
       if(key==="baseline" || key==="checks"){
         const phase=key==="baseline"?"baseline":"after";
@@ -82,7 +99,7 @@ function progressPanel(openBuild, onProgress) {
       const cursor=verdict?titles.length-1:hasAgentEvent && titles.length>1?1:0;
       const list=element("ol","run-map-steps");
       for(const [i,title] of titles.entries()){
-        let state=completed?"Complete":live?(i<cursor?"Complete":i===cursor?"Running":"Upcoming"):"Upcoming";
+        let state=failed?"Stopped":completed?"Complete":live?(i<cursor?"Complete":i===cursor?"Running":"Upcoming"):"Upcoming";
         if(live && (key==="baseline" || key==="checks")){
           const e=events.filter(e=>["Started","Passed","Failed"].some(verb=>e.text===verb+" run "+title || e.text===verb+" "+title)).at(-1);
           state=e?(e.text.startsWith("Passed")?"Complete":e.text.startsWith("Failed")?"Failed":"Running"):"Upcoming";
@@ -120,6 +137,7 @@ function progressPanel(openBuild, onProgress) {
       if(!box.isConnected)return;
       const fingerprint=JSON.stringify([data.run,data.review]);
       if(fingerprint!==previousState && !detail.contains(activeElement())){
+        if(data.run?.failure && JSON.stringify(run?.failure)!==JSON.stringify(data.run.failure)) selectedStage=null;
         run=data.run;group=data.review;draw();previousState=fingerprint;
       }
       await onProgress?.(data);

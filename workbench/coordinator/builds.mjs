@@ -524,6 +524,8 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         reason: (typeof step.detail === 'string' ? step.detail : step.detail?.reason ?? '').slice(0, 1200)});
     }
     const tail = attempts.at(-1);
+    const failure = build.status === 'failed' && build.error && (tail?.role || roles[attempt.step])
+      ? {role: tail?.role || roles[attempt.step], message: build.error.slice(0, 4000)} : null;
     const activity = await files.bytes(loopPath(attempt.task) + '/activity.jsonl', 32_000_000, Buffer.alloc(0));
     const tailStart = Math.max(0, activity.length - 65536);
     const lines = activity.subarray(tailStart ? activity.indexOf(10, tailStart) + 1 : 0).toString('utf8').split('\n').slice(0, -1);
@@ -531,7 +533,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       .filter(row => tail && Date.parse(row.timestamp) / 1000 >= tail.time - 0.01 && row.stage === tail.stage)
       .map(row => ({time: row.timestamp, text: row.activity, actor: row.actor}));
     return {buildStamp, run: {id: attempt.task, title: task.action, stage: loop.stage ?? '', lifecycle: task.lifecycle.status,
-      running: pendingStates.includes(build.status), attempts, events: latest,
+      running: pendingStates.includes(build.status), attempts, events: latest, failure,
       stages: selectedProfile(task.task.profile)?.stages ?? {}, checks,
       question: ['question', 'question_retry'].includes(loop.stage) ? loop.question : ''},
       review: {waiting: build.status === 'review', approved: !!group.sha && group.reviews.at(-1)?.sha === group.sha,

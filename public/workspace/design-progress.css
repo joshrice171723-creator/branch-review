@@ -4,6 +4,11 @@
 .run-map-card{min-width:0;min-height:54px;text-align:left;gap:9px}
 .run-map-card .stage-name,.run-map-card .stage-meta{display:block}
 .run-map-card[aria-current=step]{border-color:#147d75}
+.run-map-card[data-failed]{border-color:var(--danger,#b32635)}
+.run-map-card[data-failed] .stage-meta{color:var(--danger,#a51e30)}
+.run-map-error-icon{display:grid;place-items:center;flex:none;width:26px;height:26px;border-radius:50%;background:#b32635;color:white;font-weight:750}
+.run-map-error{display:grid;gap:6px;margin-block:12px;padding:10px;border-inline-start:3px solid var(--danger,#b32635);background:var(--surface);overflow-wrap:anywhere}
+.run-map-error strong{color:var(--danger,#a51e30)}
 .run-map-detail{border-inline-start:1px solid #d1d9dc;padding-inline-start:18px;min-width:0;overflow-wrap:anywhere}
 .run-map-detail h3{margin:0}
 .run-map-detail details{margin:12px 0}
