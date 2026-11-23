@@ -295,8 +295,19 @@ export function createAudit({repository, files, git, store, agent}) {
       const selectedRubric = rubric(task, stage);
       const ownsReview = stage === 'final_review' || (stage === 'build_review' && !finalEnabled);
       const required = selectedRubric?.criteria ?? (ownsReview ? criteriaIds.map(id => ({id, required: true})) : null);
+      const receiptStatus = config.checks.filter(check => (check.phases ?? ['baseline', 'after']).includes('after'))
+        .map(check => {
+          const receipt = state.checks?.findLast(row => row.check === check.name);
+          const current = receipt?.source_before_sha256 === before.snapshot_sha256 &&
+            receipt?.source_after_sha256 === before.snapshot_sha256 && !receipt.source_changed;
+          return {name: check.name, required: check.required || check.benchmark, receiptId: receipt?.id,
+            status: !receipt ? 'missing' : !current ? 'stale' : receipt.exit_code === 0 && !receipt.spawn_error ? 'passed' : 'failed'};
+        });
       const prompt = 'Independently audit the original request and approved plan. Inspect relevant files and exact check receipts. ' +
         'Return the JSON verdict and cite evidence in reason. Return replan only for a requirements finding. ' +
+        'Workbench computed snapshot and receiptStatus from its source inventory. Use them for receipt freshness. ' +
+        'Do not substitute a recursive directory hash or include generated preview logs such as .local-dev/workspace/workbench-environment/preview-output.json. ' +
+        'A passed receipt is current. Request a new check only when it can collect a missing result, and assess acceptance coverage separately. ' +
         'After build, use run_check with the exact name of a configured after-build check when a fresh result would resolve the finding. ' +
         'Use null for check on other verdicts. Workbench runs registered checks. Objective verification is part of Build. ' +
         'When missing evidence is the only blocker, return needs_evidence. State the acceptance criterion, the exact missing check or observation, ' +
@@ -310,7 +321,7 @@ export function createAudit({repository, files, git, store, agent}) {
         (required ? 'Record a criterion for every required ID on a pass. Include verdict, reason and evidence strings. ' : '') +
         '\n' + JSON.stringify({...context, stage, implementationPlan: state.plan, answers: state.answers, checks: state.checks,
           acceptanceEvidence: (state.acceptanceEvidence ?? []).filter(row => row.snapshot === before.snapshot_sha256),
-          summary: state.build_summary, snapshot: before.snapshot_sha256, rubric: selectedRubric ?? required});
+          summary: state.build_summary, snapshot: before.snapshot_sha256, receiptStatus, rubric: selectedRubric ?? required});
       const reply = objectReply(await ask({stage, prompt, schema: auditSchema(stage, !!required)}));
       const valid = stage === 'plan_review' ? ['pass', 'replan', 'needs_evidence'] : ['pass', 'repair', 'replan', 'needs_evidence', 'run_check'];
       if (!valid.includes(reply.verdict)) throw Error('The auditor returned an invalid verdict.');
@@ -321,7 +332,14 @@ export function createAudit({repository, files, git, store, agent}) {
           (row.phases ?? ['baseline', 'after']).includes('after'));
         if (!check) throw Error('The audit requested an unavailable after-build check. ' + reason);
         const key = JSON.stringify([stage, before.snapshot_sha256, check.name]);
-        if ((state.auditCheckRequests ?? []).includes(key)) throw Error('The requested check already ran on this source. ' + reason);
+        if ((state.auditCheckRequests ?? []).includes(key)) {
+          const status = receiptStatus.find(row => row.name === check.name);
+          const detail = status?.status === 'passed'
+            ? 'The requested check already passed on Workbench’s current source. ' + reason
+            : 'The requested check already ran on this source. ' + reason;
+          await checkpoint('evidence_blocked', {stage, reason: detail});
+          throw Error(detail);
+        }
         await activity(run, stage, 'Workbench', 'Audit requested check ' + check.name);
         const receipt = await measure('check-' + check.name, () => store.runCheck(run, {name: check.name, phase: 'after', signal}));
         signal.throwIfAborted();

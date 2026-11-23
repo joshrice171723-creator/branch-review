@@ -159,6 +159,8 @@ test('asks for plan clarification and runs registered audit checks without user 
       reply = {verdict: 'needs_evidence', reason: 'Name a check for the desktop layout.'};
     } else if (stage === 'build_review' && calls.filter(item => item === 'build_review').length === 1) {
       assert.doesNotMatch(prompt, /Use the desktop layout check\./);
+      assert.match(prompt, /"receiptStatus":\[\{"name":"greeting","required":true,"receiptId":"[^"]+","status":"passed"\}/);
+      assert.match(prompt, /workbench-environment\/preview-output\.json/);
       reply = {verdict: 'run_check', check: 'greeting', reason: 'Collect a fresh greeting check result.'};
     } else {
       reply = {verdict: 'pass', reason: 'Reviewed the current evidence.', ...(stage === 'final_review' ? {criteria} : {})};
