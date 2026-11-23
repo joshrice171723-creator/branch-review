@@ -10,15 +10,44 @@ import {generateMockup, runProvider} from './coordinator/provider.mjs';
 const checklist = ['Inspect the commit diff', 'Check the included scope', 'Review the recorded project checks'];
 
 export async function createCoordinator({
-  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions,
+  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe,
   invoke = runProvider, image = generateMockup
 }) {
   const root = await realpath(repository);
   const files = ownedFiles(root);
+  const providerChecks = new Map();
   let pending = 0;
 
   async function options() {
     return typeof providerOptions === 'function' ? await providerOptions() : providerOptions;
+  }
+
+  async function checkProviders(profile, refresh = false) {
+    if (!providerProbe) return [];
+    const {stages} = selectedProfile(profile);
+    const configuration = await options();
+    const used = new Map();
+    for (const role of WorkbenchProfile.roles) {
+      const stage = stages[role.id];
+      if (stage?.enabled && role.kind !== 'Gate') {
+        const roles = used.get(stage.provider) || [];
+        used.set(stage.provider, [...roles, role.name]);
+      }
+    }
+    return Promise.all([...used].map(async ([name, roles]) => {
+      const provider = name === 'Claude Code' ? 'claude' : name.toLowerCase();
+      const override = configuration?.[provider]?.executable ??
+        (configuration?.provider === provider ? configuration.executable : undefined);
+      const key = JSON.stringify([provider, override]);
+      let entry = providerChecks.get(key);
+      if (refresh || !entry || entry.expires <= Date.now()) {
+        const result = providerProbe(provider, override);
+        entry = {result, expires: Date.now() + 15_000};
+        providerChecks.set(key, entry);
+      }
+      const {status, message} = await entry.result;
+      return {id: 'provider-' + provider, provider, name, roles, status, message};
+    }));
   }
 
   async function agent({profile, folder, stage, prompt, schema, write, signal, report, images}) {
@@ -49,7 +78,7 @@ export async function createCoordinator({
     },
     image: async payload => image({...payload, invoke, providerOptions: await options()})});
   const audit = createAudit({repository: root, files, git, store, agent});
-  const builds = createBuilds({files, git, store, design, audit, review, push});
+  const builds = createBuilds({files, git, store, design, audit, review, push, checkProviders});
   const readDesign = async () => ({...await design.read(), checklist, layout: await design.layout()});
 
   async function dispatch(route, payload = {}, {method = 'GET'} = {}) {
@@ -64,6 +93,7 @@ export async function createCoordinator({
         case 'GET design': return await readDesign();
         case 'GET design/layout': return await design.layout();
         case 'GET design/readiness': return await builds.readiness();
+        case 'GET design/providers': return await checkProviders(await store.getProfile(), data.refresh === '1');
         case 'GET design/history': return await builds.history();
         case 'GET design/conversations': return await design.conversations(data);
         case 'GET design/summary': return await builds.summary();

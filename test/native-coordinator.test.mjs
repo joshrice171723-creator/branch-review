@@ -134,7 +134,9 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   ];
   let prompt, requestedModel, requestedEffort, attachedImages;
   let mockupRequest;
-  const coordinator = await createCoordinator({repository, store, git, invoke: async request => {
+  const coordinator = await createCoordinator({repository, store, git,
+    providerProbe: async provider => ({status: provider === 'muse' ? 'missing' : 'ready',
+      message: provider === 'muse' ? 'Muse CLI is missing.' : 'Codex is ready.'}), invoke: async request => {
     prompt = request.prompt;
     requestedModel = request.model;
     requestedEffort = request.effort;
@@ -191,5 +193,13 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   const archive = await coordinator.dispatch('design/conversations', {id: entry.id});
   assert.deepEqual(archive.messages, previous);
   assert.equal(archive.draft.message, 'Unsaved thought');
+  const readiness = await coordinator.dispatch('design/readiness');
+  const missing = readiness.items.find(row => row.id === 'provider-muse');
+  assert.equal(missing.status, 'blocked');
+  assert.match(missing.message,/Plan audit.*Muse CLI is missing/);
+  state = await action('design/draft', {revision: state.revision, mode: 'task', title: 'Follow-up', plan: 'Update greeting.'});
+  state = await action('design/approve', {revision: state.revision, mode: 'task'});
+  await assert.rejects(action('design/build', {revision: state.revision, mode: 'task', decisions}), /Muse CLI is missing/);
+  assert.equal((await coordinator.dispatch('design')).builds.length,0);
 });
 

@@ -36,8 +36,10 @@ function groupMembers(state, payload) {
   return frequency === 'plan' ? [selected.flat()] : selected;
 }
 
-export function createBuilds({files, git, store, design, audit, review, push}) {
+export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => []}) {
   const jobs = new Map();
+  const providerReady = row => ['ready', 'unverified'].includes(row.status);
+  const providerMessage = row => row.roles.join(', ') + ' · ' + row.message;
 
   async function ensureProfile() {
     if (store.profileApplied && !await store.profileApplied()) throw Error('Apply a workflow profile before building.');
@@ -76,6 +78,8 @@ export function createBuilds({files, git, store, design, audit, review, push}) {
     const items = [
       check('plan', plan, plan ? 'The current draft is approved.' : 'Resolve planning and approve the current draft.'),
       await test('profile', ensureProfile, 'A workflow profile is applied.'),
+      ...(await checkProviders(await store.getProfile())).map(row =>
+        check(row.id, providerReady(row), providerMessage(row))),
       await test('checks', ensureChecks, 'Required project checks are configured.'),
       await test('branch', () => commitment(git, state.branch), 'The configured branch is checked out.'),
       check('review', !!review, review ? 'Branch Review is ready.' : 'Open the completed commit in Branch Review.'),
@@ -251,6 +255,8 @@ export function createBuilds({files, git, store, design, audit, review, push}) {
       if (previousTask && ['active', 'unverified'].includes(previousTask.lifecycle.status)) throw Error('Finish or pause the current task.');
       const profile = await ensureProfile();
       await ensureChecks();
+      const blockers = (await checkProviders(profile)).filter(row => !providerReady(row));
+      if (blockers.length) throw Error(blockers.map(providerMessage).join(' '));
       if (payload.stages && !isDeepStrictEqual(payload.stages, selectedProfile(profile).stages)) {
         throw Error('The applied workflow changed. Reload the build steps.');
       }

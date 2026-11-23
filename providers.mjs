@@ -1,5 +1,5 @@
 import {probeMuse,consumeMuseEvent,museArgs} from './muse-provider.mjs';
-import {access,readdir,stat} from 'node:fs/promises';
+import {access,readFile,readdir,stat} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
@@ -20,6 +20,14 @@ export async function executable(provider,override,env=process.env){
       if(await access(candidate).then(()=>true,()=>false))return candidate;
     }
   }
+  if(provider==='muse' && process.platform==='win32' && env.LOCALAPPDATA){
+    const installed=path.join(env.LOCALAPPDATA,'Programs','muse');
+    const version=await readFile(path.join(installed,'.muse-version'),'utf8').then(value=>value.trim(),()=> '');
+    if(/^[a-z0-9][a-z0-9.+-]{0,79}$/i.test(version)){
+      const file=path.join(installed,'muse-bin-'+version+'.exe');
+      if(await stat(file).then(info=>info.isFile(),()=>false))return file;
+    }
+  }
   if(provider==='codex' && env.LOCALAPPDATA){
     const bin=path.join(env.LOCALAPPDATA,'OpenAI','Codex','bin');
     const versions=await readdir(bin,{withFileTypes:true}).catch(()=>[]);
@@ -33,14 +41,14 @@ export function launchCommand(file,args){
   if(/\.(cmd|bat|ps1)$/i.test(file))throw Error('Choose the CLI executable or JavaScript entry file, not a shell wrapper.');
   return {file,args};
 }
-export async function probeProvider(provider,override){
+export async function probeProvider(provider,override,{liveMuse=true}={}){
   providerId(provider);
   let file;
   try{file=await executable(provider,override);}catch(error){return {provider,status:'missing',message:error.message};}
   const invoke=async args=>{const command=launchCommand(file,args);return exec(command.file,command.args,{windowsHide:true,timeout:15000,maxBuffer:16000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});};
   try{
     const version=(await invoke(['--version'])).stdout.trim();
-    if(provider==='muse')return {provider,version,path:file,...await probeMuse(file)};
+    if(provider==='muse')return {provider,version,path:file,...await probeMuse(file,{live:liveMuse})};
     if(provider==='claude'){
       const match=version.match(/(\d+)\.(\d+)\.(\d+)/);
       if(!match || Number(match[1])<2 || (Number(match[1])===2 && (Number(match[2])<1 || Number(match[2])===1 && Number(match[3])<259)))return {provider,status:'upgrade',version,message:'Update Claude Code to 2.1.259 or later for restricted, unattended jobs.'};

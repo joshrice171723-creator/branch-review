@@ -26,11 +26,11 @@ export function consumeMuseEvent(job,event){
     else {job.agentError=billing(payload.reason || '')?museBillingMessage:payload.reason || 'Muse did not complete the request.';if(billing(payload.reason || ''))job.providerStatus='no-allowance';}
   }
 }
-export async function probeMuse(file){
+export async function probeMuse(file,{live=true}={}){
   const options={windowsHide:true,timeout:15000,maxBuffer:1000000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}};
   const usage=await exec(file,['usage','--json'],options).catch(error=>({stdout:error.stdout || '',stderr:error.stderr || ''}));
   const state=museUsage(usage.stdout,usage.stderr);
-  if(state.status!=='unverified')return state;
+  if(state.status!=='unverified' || !live)return state;
   // Only an actual successful model turn can establish readiness.
   const cwd=await mkdtemp(path.join(os.tmpdir(),'branch-review-muse-probe-'));
   try{

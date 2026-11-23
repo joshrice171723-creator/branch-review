@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {museUsage,museArgs,consumeMuseEvent,museBillingMessage} from '../muse-provider.mjs';
 import {providerId,executable} from '../providers.mjs';
 const fixture=async name=>readFile(new URL('./fixtures/muse/'+name,import.meta.url),'utf8');
@@ -24,4 +26,15 @@ test('Muse uses native executable discovery and file prompts with restricted too
   assert.equal(providerId('muse'),'muse');await assert.rejects(executable('muse',undefined,{PATH:''}),/not found/);
   const args=museArgs({kind:'plan',cwd:'/repo',output:'/output',chatId:'session',images:['/image']});
   assert.deepEqual(args.slice(0,2),['exec','--json']);assert.ok(args.includes('--disable-write'));assert.ok(args.includes('--disable-shell'));assert.ok(args.includes('/output.prompt.txt'));assert.ok(args.includes('--session-id'));assert.ok(!args.includes('--disable-sandbox'));
+});
+
+test('finds the Windows Muse installer binary without a shell wrapper',{skip:process.platform!=='win32'},async t=>{
+  const local=await mkdtemp(path.join(os.tmpdir(),'branch-review-muse-'));
+  t.after(()=>rm(local,{recursive:true,force:true}));
+  const folder=path.join(local,'Programs','muse');
+  await mkdir(folder,{recursive:true});
+  const binary=path.join(folder,'muse-bin-1.4.25-R9361.1.exe');
+  await writeFile(path.join(folder,'.muse-version'),'1.4.25-R9361.1\n');
+  await writeFile(binary,'fixture');
+  assert.equal(await executable('muse',undefined,{PATH:'',LOCALAPPDATA:local}),binary);
 });

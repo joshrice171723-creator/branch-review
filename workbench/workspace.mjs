@@ -4,6 +4,7 @@ import {createCoordinator} from './coordinator.mjs';
 import {createQuality} from './quality.mjs';
 import {createEnvironment} from './environment.mjs';
 import {inspectRun} from './history.mjs';
+import {probeProvider} from '../providers.mjs';
 import {modelCatalog, WorkbenchProfile, presetDocuments} from './profile.mjs';
 import {toolDescriptions, workspaceMcp} from './mcp.mjs';
 
@@ -27,6 +28,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   const readEnvironment = (route,params=new URLSearchParams()) => environment.dispatch('GET',route,{},params);
   coordinator = await createCoordinator({
     repository,store:tasks,git,review,push,providerOptions,
+    providerProbe:(provider,override)=>probeProvider(provider,override,{liveMuse:false}),
     projectEvidence:()=>readEnvironment('project-capabilities'),
     qualityDraft:()=>quality.dispatch('GET','quality',{},new URLSearchParams()),
     validateQuality:definition=>quality.dispatch('POST','quality/validate',{definition},new URLSearchParams())

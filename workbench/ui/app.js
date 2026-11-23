@@ -89,10 +89,37 @@ async function loadProject() {
   hasSavedProfile = true;
   projectConversation = connectProjectConversation(design);
   render(design);
+  void checkWorkflowProviders();
   if (query.get("chat") === "1") projectConversation.open();
 }
 const active = () => data.profiles[data.active];
 const current = () => active().stages[selected];
+
+let providerStatusRequest = 0;
+async function checkWorkflowProviders(refresh = false) {
+  const request = ++providerStatusRequest;
+  const notice = byId("workflow-provider-status");
+  if (refresh) {
+    notice.hidden = false;
+    notice.textContent = "Checking workflow providers…";
+  }
+  try {
+    const rows = await api("design/providers" + (refresh ? "?refresh=1" : ""));
+    if (request !== providerStatusRequest) return;
+    const problems = rows.filter(row => row.status !== "ready");
+    notice.hidden = !problems.length;
+    notice.replaceChildren(...problems.map(row => element("p", "",
+      element("strong", "", row.roles.join(", ") + " · " + row.name), " · " + row.message)));
+    if (problems.length) notice.append(element("div", "actions",
+      button("Open Stage designer", () => openView("stages")),
+      button("Recheck providers", () => checkWorkflowProviders(true))));
+  } catch (error) {
+    if (request !== providerStatusRequest) return;
+    notice.hidden = false;
+    notice.replaceChildren(element("p", "", "Could not check workflow providers. " + error.message),
+      button("Recheck providers", () => checkWorkflowProviders(true)));
+  }
+}
 
 function apply(change, redraw = true) {
   try {
@@ -821,6 +848,7 @@ async function saveWorkflowProfile() {
     projectState.profile_applied = true;
     if (data !== selected) throw Error("The workflow profile changed while saving. Try again.");
     button.textContent = "Apply profile";
+    void checkWorkflowProviders();
   }
   finally { button.disabled = false; }
 }
