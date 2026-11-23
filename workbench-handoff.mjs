@@ -39,17 +39,18 @@ export async function completedRuns(repository) {
   return runs.filter(row=>row.lifecycle?.status==='completed').map(({id,action})=>({id,title:action}));
 }
 
-export async function exportHandoff(repository,runId,git) {
+export async function exportHandoff(repository,runId,git,{store} = {}) {
   if(typeof runId!=='string' || !runPattern.test(runId)) throw Error('Choose a completed Workbench run.');
   const root=await realpath(repository);
-  const runs=createStore(root);
+  const runs=store ?? createStore(root);
   const current=await runs.status(runId);
   const digest=current.lifecycle?.snapshot_sha256;
   if(current.lifecycle?.status!=='completed' || !/^[0-9a-f]{64}$/.test(digest) ||
       current.snapshot_sha256!==digest) throw Error('This checkout differs from the completed run.');
   const run=await runs.getRun(runId);
   if (run.task?.harness_version==='0.3.0-native' && (current.verdict!=='pass' || run.ledger.verdict!=='pass'))
-    throw Error('Verify the completed Workbench evidence before review.');
+    throw Error('The saved checks need verification before review can open. ' +
+      (current.issues?.join(' ') || run.ledger.issues?.join(' ') || 'The completed run has incomplete evidence.'));
   const evidence=path.join(root,'.harness','tasks',runId,'snapshots');
   let snapshot;
   for(const name of [digest.slice(0,20),digest]) {

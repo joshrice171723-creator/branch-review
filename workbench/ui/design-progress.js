@@ -108,10 +108,11 @@ function providerMetrics(calls) {
     const status = {complete:"Complete",failed:"Failed",cancelled:"Cancelled"}[call.outcome] ||
       (call.time.runningSince == null ? "Interrupted" : "Running");
     const details = element("div", "design-stack",
-      element("strong", "", call.provider + " · " + model),
+      element("strong", "", [call.provider, model, call.effort && call.effort + " effort"].filter(Boolean).join(" · ")),
       element("p", "step-runtime", element("span", "", status), elapsedLabel(call.time), element("span", "", tokenLabel([call]))));
     if (call.usage) {
-      const fields = [["Input", call.usage.input], ["Output", call.usage.output], ["Cached input", call.usage.cached],
+      const uncached = call.usage.cached == null ? null : Math.max(0, call.usage.input - call.usage.cached);
+      const fields = [["Input", call.usage.input], ["Output", call.usage.output], ["Cached input", call.usage.cached], ["Uncached input", uncached],
         ["Cache write", call.usage.cacheWrite], ["Reasoning output", call.usage.reasoning]];
       const counts = element("dl", "step-evidence-fields");
       for (const [label, count] of fields) {
@@ -168,12 +169,14 @@ function renderStepEvidence(section, route) {
       ...(criterion.evidence?.length ? [element("ul", "", ...criterion.evidence.map(value => element("li", "", value)))] : [])));
   }
   for (const check of section.checks ?? []) {
-    const status = check.exit_code === 0 && !check.source_changed && !check.spawn_error ? "Passed" : "Failed";
+    const status = check.reused ? "Reused" : check.exit_code === 0 && !check.source_changed && !check.inputs_changed && !check.spawn_error ? "Passed" : "Failed";
     const summary = element("summary", "", check.check + " · " + status);
     const command = element("div", "design-stack", element("strong", "", "Command arguments"),
       element("pre", "", JSON.stringify(check.argv)), element("p", "", "Working directory " + check.cwd),
       element("p", "", "Exit code " + (check.exit_code ?? "unavailable") + " · " + check.duration_seconds + " s"),
       element("p", "stage-meta", "Started " + new Date(check.started_at).toLocaleString()));
+    if (check.rerunReason) command.append(element("p", "", check.rerunReason));
+    if (check.reused) command.append(element("p", "", "This build used the earlier passing result."));
     if (check.source_changed) command.append(element("p", "", "Source changed during this check."));
     if (check.spawn_error) command.append(element("p", "step-evidence-text", check.spawn_error));
     if (check.measurement) command.append(element("details", "", element("summary", "", "Benchmark results"),
@@ -361,11 +364,16 @@ function progressPanel(openBuild, onProgress) {
       const cursor=timedStep!==undefined && !checkStage?Number(timedStep):
         verdict?titles.length-1:hasAgentEvent && titles.length>1?1:0;
       const list=element("ol","run-map-steps",runStepLabels());
+      const previewTiming=checkStage && attempt?.metrics?.steps?.["@preview"];
+      if(previewTiming)list.append(runStepRow({title:"Preview setup",
+        status:previewTiming.runningSince!=null?"Running":failed&&!titles.some(title=>attempt.metrics.steps[title])?"Stopped":"Complete",
+        time:previewTiming}));
       for(const [i,title] of titles.entries()){
         let state=failed?"Stopped":completed?"Complete":live?(i<cursor?"Complete":i===cursor?"Running":"Upcoming"):"Upcoming";
         if(live && checkStage){
-          const e=events.filter(e=>["Started","Passed","Failed"].some(verb=>e.text===verb+" run "+title || e.text===verb+" "+title)).at(-1);
-          state=e?(e.text.startsWith("Passed")?"Complete":e.text.startsWith("Failed")?"Failed":"Running"):"Upcoming";
+          const e=events.filter(e=>e.text.startsWith("Started "+title+".") || e.text==="Reused the passing result for "+title+"." ||
+            ["Started","Passed","Failed"].some(verb=>e.text===verb+" run "+title || e.text===verb+" "+title)).at(-1);
+          state=e?(e.text.startsWith("Reused")?"Reused":e.text.startsWith("Passed")?"Complete":e.text.startsWith("Failed")?"Failed":"Running"):"Upcoming";
         }
         if(skipped)state="Skipped";
         const stepKey=checkStage?title:String(i);

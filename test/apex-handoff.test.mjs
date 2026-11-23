@@ -4,7 +4,7 @@ import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import {completedRuns, taskChecklist, applyWorkbenchRubric,approvedWorkbenchEvidence,draftWorkbenchPullRequest,readHandoff,returnFindings,selectHandoffBranch,verifyCommittedSources,workbenchComparison,workbenchMockup,workbenchReview,workbenchRubric,pushWorkbenchReview} from '../workbench-handoff.mjs';
+import {exportHandoff, completedRuns, taskChecklist, applyWorkbenchRubric,approvedWorkbenchEvidence,draftWorkbenchPullRequest,readHandoff,returnFindings,selectHandoffBranch,verifyCommittedSources,workbenchComparison,workbenchMockup,workbenchReview,workbenchRubric,pushWorkbenchReview} from '../workbench-handoff.mjs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {digest} from '../reviews.mjs';
@@ -299,4 +299,23 @@ test('the approved plan has stable review criteria after a repair', () => {
     ['acceptance-2','Keep the original appointment time.']
   ]);
   assert.equal(taskChecklist({...task,plan:'Verify the result.'}).scenarios.length,1);
+});
+
+test('handoff uses workspace evidence context and preserves failed evidence checks', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'handoff-evidence-context-'));
+  t.after(() => rm(root, {recursive:true, force:true}));
+  const runId = '20261122T024853906396-aaaaaaaa';
+  const source = 'a'.repeat(64);
+  let verdict = 'revise';
+  const context = {
+    status: async id => {
+      assert.equal(id, runId);
+      return {snapshot_sha256:source, verdict, issues:['Preview inputs changed.'],
+        lifecycle:{status:'completed', snapshot_sha256:source}};
+    },
+    getRun: async () => ({task:{harness_version:'0.3.0-native'}, ledger:{verdict:'pass', issues:[]}})
+  };
+  await assert.rejects(exportHandoff(root, runId, async () => '', {store:context}), /Preview inputs changed/);
+  verdict = 'pass';
+  await assert.rejects(exportHandoff(root, runId, async () => '', {store:context}), /completed snapshot is missing/);
 });

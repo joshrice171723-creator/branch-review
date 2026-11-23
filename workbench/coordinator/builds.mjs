@@ -1,3 +1,4 @@
+import {workflowProfile} from './workflow.mjs';
 import {verifyBrowserPreview} from '../playwright-check.mjs';
 import {redact} from '../../jobs.mjs';
 import {isDeepStrictEqual} from 'node:util';
@@ -73,7 +74,7 @@ function groupMembers(state, payload) {
   return frequency === 'plan' ? [selected.flat()] : selected;
 }
 
-export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => [], supervise, prepareBrowserRecovery}) {
+export function createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders = async () => [], supervise, prepareBrowserRecovery}) {
   const jobs = new Map();
   const recovering = new Set();
   let recoveryTimer;
@@ -137,7 +138,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (attempt.step === 'stopped' && pinned.lifecycle.cause !== 'repair_limit') {
       return 'The audit stopped this run. Review the last audit before starting another build.';
     }
-    if (changedAgents(pinned.task.profile, await store.getProfile()).length) return workflowChangedMessage(build);
+    if (!build.executionProfile && changedAgents(pinned.task.profile, await store.getProfile()).length) return workflowChangedMessage(build);
     if (Date.parse((await providerLimitFor(attempt, pinned))?.resetAt) > Date.now()) {
       return 'The provider reported a reset time. This run will resume when the quota resets.';
     }
@@ -175,6 +176,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     throw Error('Restore the exact branch and commit for this task.');
   }
   async function profileMatches(build, profile) {
+    if (build.executionProfile) return isDeepStrictEqual(build.executionProfile, profile);
     if (build.profile === jsonHash(profile)) return true;
     const bytes = await files.bytes('.harness/profile.json', 4_000_000, null);
     return !!bytes && hash(bytes) === build.profile;
@@ -190,14 +192,17 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     };
     const plan = state.approved === state.revision && !state.question && !state.plannerRetry;
     const native = (!build || closedStates.includes(build.status)) && (!running || !['active', 'unverified'].includes(running.lifecycle.status));
-    const profile = await store.getProfile();
+    const savedProfile = await store.getProfile();
+    const prepared = automaticRouting === '1' && state.executionSetup?.plan === state.plan;
+    const profile = prepared
+      ? workflowProfile(savedProfile, state.executionSetup) : savedProfile;
     const config = automaticRouting === '1' ? await ensureChecks().catch(() => null) : null;
     const visual = config && state.mode === 'task' &&
       cosmeticCandidate({plan: state.plan, profile, quality: config.quality_revision, checks: config.checks});
     const items = [
       check('plan', plan, plan ? 'The current draft is approved.' : 'Resolve planning and approve the current draft.'),
       await test('profile', ensureProfile, 'A workflow profile is applied.'),
-      ...(await checkProviders(profile, false, visual ? 'Codex' : undefined)).map(row =>
+      ...(await checkProviders(profile, false, !prepared && (visual || automaticRouting === '1') ? 'Codex' : undefined)).map(row =>
         check(row.id, providerReady(row), providerMessage(row))),
       await test('checks', ensureRunnableChecks, 'Required project check commands passed preflight.'),
       await test('branch', () => commitment(git, state.branch), 'The configured branch is checked out.'),
@@ -238,7 +243,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       if (prior.lifecycle.status === 'paused') await store.resume(task.id);
     } else if (!task) {
       await audit.ensureCleanTarget(build, build.base);
-      const profile = await ensureProfile();
+      const profile = build.executionProfile ?? await ensureProfile();
       if (!await profileMatches(build, profile)) throw Error('Restore the applied profile before continuing.');
       const config = await ensureChecks();
       if (Object.hasOwn(build, 'policyRevision') && (config.quality_revision ?? null) !== build.policyRevision) throw Error('Restore the pinned Quality policy before continuing.');
@@ -250,7 +255,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         automaticPlan: build.automaticRouting && build.mode === 'task' && !repair.length ? build.plan : undefined,
         scope: (repair.length ? 'Address the selected findings within the approved plan.' : scope) +
           '\n' + JSON.stringify({build: build.id, revision: build.revision, planSha: hash(build.plan),
-            ...(repair.length ? {priorRuns: repair.map(finding => finding.runId)} : {})})});
+            ...(repair.length ? {priorRuns: repair.map(finding => finding.runId)} : {})})}, {workflowProfile: build.executionProfile});
       task = result.task;
       if (!isDeepStrictEqual(task.profile, profile)) {
         await store.pause(task.id, 'Workflow profile changed before launch.');
@@ -501,13 +506,18 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const ownsTask = restart && previousTask?.id === previous.attempts.at(-1)?.task;
       if (previousTask && ['active', 'unverified'].includes(previousTask.lifecycle.status) &&
           !(ownsTask && previousTask.lifecycle.status === 'active')) throw Error('Finish or pause the current task.');
-      const profile = await ensureProfile();
+      let profile = await ensureProfile();
+      let executionSetup;
+      if (payload.automaticRouting === true && prepareWorkflow) {
+        executionSetup = state.executionSetup?.plan === state.plan ? state.executionSetup : await prepareWorkflow(state.plan);
+        profile = workflowProfile(profile, executionSetup);
+      }
       const config = await ensureRunnableChecks();
       const visual = payload.automaticRouting === true && state.mode === 'task' &&
         cosmeticCandidate({plan: state.plan, profile, quality: config.quality_revision, checks: config.checks});
-      const blockers = (await checkProviders(profile, false, visual ? 'Codex' : undefined)).filter(row => !providerReady(row));
+      const blockers = (await checkProviders(profile, false, visual && !executionSetup ? 'Codex' : undefined)).filter(row => !providerReady(row));
       if (blockers.length) throw Error(blockers.map(providerMessage).join(' '));
-      if (payload.stages && !isDeepStrictEqual(payload.stages, selectedProfile(profile).stages)) {
+      if (!executionSetup && payload.stages && !isDeepStrictEqual(payload.stages, selectedProfile(profile).stages)) {
         throw Error('The applied workflow changed. Reload the build steps.');
       }
       const base = await commitment(git, state.branch);
@@ -520,7 +530,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const groups = groupMembers(state, payload).map(slices => ({slices, pending: [...slices], findings: [], reviews: [], sha: null}));
       const build = {id: id(), revision: state.revision, index: 0, branch: state.branch, plan: state.plan, roadmap: state.roadmap,
         attachments: {...state.attachments}, base, decisions: restart ? previous.decisions : payload.decisions ?? {}, status: 'ready', attempts: [],
-        profile: jsonHash(profile), groups, ...baseline, ...(state.mode === 'task' ? {mode: 'task', title: state.title} : {})};
+        profile: jsonHash(profile), ...(executionSetup && {executionSetup, executionProfile: profile}), groups, ...baseline, ...(state.mode === 'task' ? {mode: 'task', title: state.title} : {})};
       if (payload.automaticRouting === true && state.mode === 'task') build.automaticRouting = true;
       if (restart) {
         if (ownsTask && previousTask.lifecycle.status === 'active') await store.pause(previousTask.id, 'Build restarted.');
@@ -637,12 +647,14 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const canReturn = Boolean(canVerify && auditRoute !== 'stop' && auditRoute &&
       run?.lifecycle.status === 'active' && loop.checked_source === source?.snapshot_sha256 &&
       routeFinding);
+    const evidenceTests = canReturn && auditRoute === 'build' && ['missing_observation', 'missing_check'].includes(detail?.kind)
+      ? await store.evidenceTests?.(attempt.task).catch(() => []) ?? [] : [];
     const exhausted = Number.isInteger(limit) && previous.length >= limit;
     await audit.activity(attempt.task, stage ?? 'plan', 'Coordinator', 'Reviewing the stopped stage for automatic recovery.').catch(() => {});
     let diagnosis;
     try {
       diagnosis = await supervise({build, attempt, failure: redact(build.error ?? attempt.error ?? ''), evidence: {
-        detail, canVerify, canReturn, auditRoute, ownership, managedBrowser, exhausted, readFailure,
+        detail, canVerify, canReturn, auditRoute, ownership, managedBrowser, exhausted, readFailure, evidenceTests,
         previous: previous.map(row => ({action: row.automaticRecovery.action, reason: row.automaticRecovery.reason, error: redact(row.error ?? '')})),
         checks: (run?.checks ?? []).slice(-8).map(row => ({name: row.check, code: row.exit_code, sourceChanged: row.source_changed,
           inputsChanged: row.inputs_changed, output: redact([row.spawn_error, row.stderr_preview, row.stdout_preview]
@@ -661,6 +673,13 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const alreadyTried = action => previous.some(row => row.automaticRecovery.action === action &&
       row.error === attempt.error && row.automaticRecovery.source?.snapshot_sha256 === savedSource.snapshot_sha256);
     const summary = typeof diagnosis?.summary === 'string' ? redact(diagnosis.summary).replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+    const evidenceTest = diagnosis?.action === 'test-only' && evidenceTests.find(row => row.id === diagnosis.checkId);
+    if (evidenceTest && !previous.some(row => row.automaticRecovery.evidenceCheck === evidenceTest.id &&
+        row.automaticRecovery.source?.snapshot_sha256 === savedSource.snapshot_sha256)) {
+      return {kind: 'supervisor', supervised: true, action: 'return-to-loop', verificationOnly: false,
+        evidenceCheck: evidenceTest.id, reason: reason || 'Coordinator selected the missing test result.',
+        summary: summary || 'The repair loop is running the missing test.', source: savedSource, returnedStage};
+    }
     if (canReturn && !alreadyTried('return-to-loop')) {
       return {kind: 'supervisor', supervised: true, action: 'return-to-loop', verificationOnly: false,
         reason: reason || 'Coordinator is sending the audit finding through the configured workflow.',
@@ -1094,7 +1113,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (build.status === 'failed' && build.error && failedRole) {
       const saved = await store.getProfile();
       const stage = failedRole === 'repair' ? 'build' : failedRole;
-      const changed = changedAgents(task.task.profile, saved);
+      const changed = build.executionProfile ? [] : changedAgents(task.task.profile, saved);
       failure = {role: failedRole, message: build.error.slice(0, 4000), repairLimit: task.lifecycle.cause === 'repair_limit',
         resumeBlocker: await resumeBlocker(build, task),
         providerLimit: await providerLimitFor(attempt, task), errorCode: attempt.errorCode ?? null,

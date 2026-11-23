@@ -99,7 +99,7 @@ function contextOf(state) {
 }
 
 export function createDesign({files, store, git, agent, image, projectName, projectEvidence, qualityDraft, validateQuality,
-  buildContext, retryBuildVerification, recoverBuild, prepareBuild, repairApp, appIncident, saveQualityDraft}) {
+  prepareWorkflow, buildContext, retryBuildVerification, recoverBuild, prepareBuild, repairApp, appIncident, saveQualityDraft}) {
   async function read() {
     const saved = await files.read(workspaceFile);
     if (saved) {
@@ -340,7 +340,8 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     const check = result.smoke ? 'The build will add and run a focused smoke test.' : checks.join('\n');
     const preview = result.preview.revision ? result.previewMessage + ' Launch revision ' +
       result.preview.revision.slice(0, 12) + '.' : result.previewMessage;
-    return {message: [check, preview].filter(Boolean).join('\n\n'), checks: result.checks, preview: result.preview};
+    const executionSetup = proposal.plan && prepareWorkflow ? await prepareWorkflow(proposal.plan) : undefined;
+    return {message: [check, preview].filter(Boolean).join('\n\n'), checks: result.checks, preview: result.preview, executionSetup};
   }
 
   async function guide(payload) {
@@ -357,6 +358,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         return edit(async current => {
           revision(current, payload);
           const setup = await prepareProposal(proposal, item.setup);
+          if (setup?.executionSetup) current.executionSetup = setup.executionSetup;
           current.messages.push({id: id(), author: 'agent', text: setup?.message || 'Plan ready for review.', projectSetup: setup || undefined,
             proposal, ...(item.setup && {setup: item.setup}), projectPrepared: Boolean(setup), time: now()});
         });
@@ -565,6 +567,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
           proposal = undefined;
         } else if (payload.preparePlan === true && proposal?.kind === 'plan') {
           projectSetup = await prepareProposal(proposal, setup);
+          if (projectSetup?.executionSetup) current.executionSetup = projectSetup.executionSetup;
           if (projectSetup) description += '\n\n' + projectSetup.message;
           projectPrepared = Boolean(projectSetup);
         }

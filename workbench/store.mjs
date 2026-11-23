@@ -13,6 +13,7 @@ import {checkFile, checkPathInside, resolveCheckCommand} from './check-command.m
 import {cosmeticCandidate, cosmeticDiff} from './automatic-route.mjs';
 import {playwrightCheck, verifyBrowserPreview} from './playwright-check.mjs';
 import {replaceFile} from './coordinator/files.mjs';
+import {discoverCapabilities} from './environment/discovery.mjs';
 
 const exec = promisify(execFile);
 const runPattern = /^\d{8}T\d{12}-[a-f0-9]{8}$/;
@@ -741,7 +742,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return {question, option, source, recorded_at:now()};
   }
 
-  async function startTask({mode = 'build', action, scope, decisions = {}, channel = 'form', automaticPlan} = {}) {
+  async function startTask({mode = 'build', action, scope, decisions = {}, channel = 'form', automaticPlan} = {}, {workflowProfile} = {}) {
     assert(modes.includes(mode), 'Choose audit, refactor, feature, or build.');
     assert(filled(action) && action.length <= 4_000 && filled(scope) && scope.length <= 16_000, 'Enter the task action and scope.');
     assert(object(decisions), 'Task answers must be an object.');
@@ -755,7 +756,21 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       const settings = await install(home);
       const saved = await read(home, 'profile.json').catch(missing);
       const manual = await read(home, 'profile.disabled').catch(missing);
-      const profile = manual || !saved && settings.execution?.workflow === 'manual' ? null : await profileFor(settings);
+      let profile = manual || !saved && settings.execution?.workflow === 'manual' ? null : await profileFor(settings);
+      if (workflowProfile) {
+        WorkbenchProfile.validate(workflowProfile);
+        assert(profile, 'Apply a workflow profile before selecting execution settings.');
+        const expected = structuredClone(profile);
+        for (const [key, stage] of Object.entries(expected.profiles[expected.active].stages)) {
+          if (stage.provider === 'Workbench') continue;
+          const selected = workflowProfile.profiles[workflowProfile.active]?.stages[key];
+          for (const name of ['provider', 'model', 'effort', 'shellTools', 'toolHints']) {
+            if (selected && Object.hasOwn(selected, name)) stage[name] = selected[name];
+          }
+        }
+        assert(fingerprint(expected) === fingerprint(workflowProfile), 'Execution settings changed the workflow rules.');
+        profile = workflowProfile;
+      }
       const quality = await publishedQuality();
       const configuration = projectedConfig(settings, profile, quality);
       const engine = await engineIssues(configuration.engine);
@@ -1000,7 +1015,10 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       } else if (passing(receipt)) {
         const inputs = await checkInputs(run, check).catch(() => null);
         if (!receipt.check_inputs_sha256 || receipt.check_inputs_sha256 !== inputs?.sha256) {
-          issues.push('After evidence is stale after check inputs changed: ' + check.name);
+          const currentUrl = inputs?.prepared.browser?.url;
+          issues.push(receipt.browser?.base_url && currentUrl && receipt.browser.base_url !== currentUrl
+            ? 'The preview address changed since ' + check.name + ' last passed.'
+            : 'After evidence is stale after check inputs changed: ' + check.name);
         }
       }
     }
@@ -1117,8 +1135,35 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return {...receipt, id, evidence_path:relative};
   }
 
+  async function evidenceTests(id) {
+    const run = await selected(id);
+    if (run.task.quality) return [];
+    const inventory = await discoverCapabilities(await resolvedRoot);
+    return inventory.checks.filter(check => check.kind === 'test');
+  }
+
+  async function runEvidenceTest(id, checkId, source, {signal} = {}) {
+    return mutate(async home => {
+      const run = await selected(id, home);
+      await requireAgreement(run);
+      assert(!run.task.quality, 'The published Quality policy owns this task’s evidence commands.');
+      assert((await lifecycle(run)).status === 'active', 'Resume the task before collecting evidence.');
+      assert((await sourceSnapshot(await resolvedRoot, run.task)).snapshot_sha256 === source,
+        'Project source changed before evidence collection.');
+      const inventory = await discoverCapabilities(await resolvedRoot);
+      const candidate = inventory.checks.find(check => check.id === checkId && check.kind === 'test');
+      assert(candidate, 'Choose a declared project test.');
+      const check = {name: 'evidence_' + candidate.id.replaceAll('-', '_'), argv: candidate.argv,
+        cwd: candidate.cwd, required: false, benchmark: false, phases: ['after']};
+      await validateChecks({checks: [check]});
+      assert((await sourceSnapshot(await resolvedRoot, run.task)).snapshot_sha256 === source,
+        'Project source changed while selecting the evidence test.');
+      return runPinnedCheck(run, check, 'after', null, signal);
+    });
+  }
+
   async function runConfigured(id, {name, phase, signal, benchmarks = false, reusePassing = false,
-    measure = (_name, run) => run()} = {}) {
+    measure = (_name, run) => run(), report = () => {}} = {}) {
     assert(phases.includes(phase), 'Choose baseline or after.');
     return mutate(async home => {
       const run = await selected(id, home);
@@ -1150,10 +1195,15 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       for (const check of checks) {
         signal?.throwIfAborted();
         const receipt = reuse && (await checkResults(run, check.name, phase)).at(-1);
-        if (passing(receipt) && !(await receiptIssues(run, receipt, check, current, contractHash)).length) {
+        const issues = passing(receipt) ? await receiptIssues(run, receipt, check, current, contractHash) : [];
+        if (passing(receipt) && !issues.length) {
           results.push({...receipt, reused:true});
+          await report('Reused the passing result for ' + check.name + '.');
         } else {
-          results.push(await measure(check.name, () => runPinnedCheck(run, check, phase, contract, signal)));
+          const rerunReason = issues.join(' ') || (receipt ? 'The previous result did not pass.' : '');
+          await report('Started ' + check.name + (rerunReason ? '. ' + rerunReason : '.'));
+          const result = await measure(check.name, () => runPinnedCheck(run, check, phase, contract, signal));
+          results.push(rerunReason ? {...result, rerunReason} : result);
         }
       }
       const gating = results.filter(row => configured.some(check => check.name === row.check && (check.required || check.benchmark)));
@@ -1578,7 +1628,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
           const recordedPreviewLog = Object.hasOwn(files, localPreviewLog);
           delete files[localPreviewLog];
           assert(recordedPreviewLog && fingerprint(prior.files) === expected && fingerprint(files) === snapshot.snapshot_sha256,
-            'Restore the stopped build’s source before retrying verification.');
+            'Restore the stopped buildâ€™s source before retrying verification.');
         }
         const pinned = await pinnedConfiguration(run);
         const current = await effectiveConfig();
@@ -1641,7 +1691,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
 
   return {initialize:() => mutate(install), config, setConfig, effectiveConfig, getProfile, setProfile, profileApplied, discover, startTask, questions, answer,
     freeze, prompt, executionConfig, snapshot, cosmeticSource, runCheck, runChecks:runConfigured, configuredCheckReadiness, needsBrowserPreview, browserCheckUrl: async () => (await browserPreview?.())?.url, restoreBrowserBaseline,
-    preflightChecks, checkReceiptStatus,
+    preflightChecks, checkReceiptStatus, evidenceTests, runEvidenceTest,
     benchmark:(id, options) => runConfigured(id, {...options, benchmarks:true}), record, readRunRecord, getRun, listRuns,
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),
     pause:(id, reason) => changeLifecycle(id, 'pause', reason), stop:(id, reason) => changeLifecycle(id, 'stop', reason),

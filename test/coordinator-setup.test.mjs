@@ -43,7 +43,7 @@ async function fixture(t, files, options = {}) {
 const plan = {kind: 'plan', title: 'Update greeting', plan: 'Update the greeting.\n\n## Acceptance criteria\n- Show the new greeting.'};
 
 test('sending a saved proposal prepares its check and starts the detected preview', async t => {
-  let calls = 0;
+  let calls = 0, selections = 0;
   const {send, store, coordinator, git, environment, repository} = await fixture(t, {
     'package.json': JSON.stringify({name: 'fixture', scripts: {test: 'node --test'}}),
     'server.cjs': [
@@ -55,7 +55,11 @@ test('sending a saved proposal prepares its check and starts the detected previe
     ].join('\n'),
     'workbench-capabilities.json': JSON.stringify({schema_version: 1,
       previews: [{label: 'Fixture', argv: ['node', 'server.cjs'], cwd: '.', url: 'http://127.0.0.1:{port}', mode: 'web'}]})
-  }, {invoke: async () => {
+  }, {invoke: async ({prompt}) => {
+    if (prompt.startsWith('Choose execution settings')) {
+      selections++;
+      return {text: JSON.stringify({stages: {}})};
+    }
     calls++;
     return {text: JSON.stringify({message: 'Drafted the plan.', proposal: plan})};
   }});
@@ -63,6 +67,8 @@ test('sending a saved proposal prepares its check and starts the detected previe
   assert.deepEqual((await store.effectiveConfig()).checks, []);
   const prepared = (await send({preparePlan: true, proposalId: draft.id})).messages.at(-1);
   assert.equal(calls, 1);
+  assert.equal(selections, 1);
+  assert.equal(prepared.projectSetup.executionSetup.stages.build.model, 'gpt-6.2-sol');
   assert.equal(prepared.projectPrepared, true);
   assert.match(prepared.text, /The managed preview responded after restart/);
   assert.deepEqual((await store.effectiveConfig()).checks[0].argv, ['npm', 'test']);
@@ -93,6 +99,7 @@ test('a project without checks receives a required after-build smoke test in the
       if (prompt.startsWith('You are the Branch Review Coordinator')) {
         return {text: JSON.stringify({message: 'Drafted the plan.', proposal: plan})};
       }
+      if (prompt.startsWith('Choose execution settings')) return {text: JSON.stringify({stages: {}})};
       if (stage === 'plan' && !interrupted) {
         interrupted = true;
         throw Error('Temporary connection interruption');
@@ -121,7 +128,7 @@ test('a project without checks receives a required after-build smoke test in the
   const post = (route, data) => coordinator.dispatch('design/' + route, data, {method: 'POST'});
   const {revision} = await post('draft', {...prepared.proposal, mode: 'task'});
   await post('approve', {revision, mode: 'task'});
-  await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed', code_changes: 'allow_scoped',
+  await post('build', {revision, mode: 'task', automaticRouting: true, decisions: {scope_confirmed: 'confirmed', code_changes: 'allow_scoped',
     migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
   let build;
   for (let attempt = 0; attempt < 400; attempt++) {
@@ -134,6 +141,11 @@ test('a project without checks receives a required after-build smoke test in the
   assert.equal(build.attempts.at(-1).automaticRecovery?.kind, 'supervisor');
   assert.equal(build.attempts[0].task, build.attempts.at(-1).task);
   const run = build.attempts.at(-1).task;
+  const pinned = (await store.getRun(run)).task.profile;
+  assert.equal(pinned.profiles[pinned.active].stages.build.model, 'gpt-6.2-sol');
+  assert.equal(pinned.profiles[pinned.active].stages.build.effort, 'medium');
+  assert.equal(build.executionSetup.stages.build.model, 'gpt-6.2-sol');
+  assert.equal((await store.getProfile()).profiles[pinned.active].stages.build.model, 'gpt-6.2-astra');
   const receipt = (await store.getRun(run)).checks.find(row => row.check === check.name && row.phase === 'after');
   assert.equal(receipt?.exit_code, 0);
   assert.equal(receipt.spawn_error, null);
@@ -326,6 +338,57 @@ test('Coordinator returns a missing audit result through the configured repair l
   assert.equal(build.status, 'review', build.error);
   assert.equal(build.id, started.builds[0].id);
   assert.equal(builderCalls, 2);
+  assert.equal(diagnoses, 1);
+  assert.equal(build.attempts[1].task, build.attempts[0].task);
+  assert.equal(build.attempts[1].automaticRecovery.action, 'return-to-loop');
+  assert.deepEqual((await store.effectiveConfig()).checks, checks);
+});
+
+test('Coordinator collects a missing declared test result inside the repair loop', async t => {
+  const finding = 'A delivery test result is missing for the saved preference.';
+  let builderCalls = 0, diagnoses = 0;
+  const {store, coordinator} = await fixture(t, {'greeting.txt': 'Before', 'package.json': JSON.stringify({scripts: {test: 'node -e "process.exit(0)"'}})}, {
+    superviseFailures: true,
+    invoke: async ({stage, prompt, cwd}) => {
+      if (prompt.startsWith('Supervise this stopped Branch Review build')) {
+        diagnoses++;
+        assert.match(prompt, /"canReturn":true/);
+        const context = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1).split('\n\n#')[0]);
+        return {text: JSON.stringify({action: 'test-only', checkId: context.evidence.evidenceTests[0].id, reason: finding,
+          summary: 'The audit needs one more test result.'})};
+      }
+      if (stage === 'plan') return {text: JSON.stringify({plan: ['Update greeting.']})};
+      if (stage === 'plan_review') return {text: JSON.stringify({verdict: 'pass', reason: 'Plan is ready.'})};
+      if (stage === 'build') {
+        builderCalls++;
+        if (builderCalls === 2) assert.ok(prompt.includes(finding));
+        await writeFile(path.join(cwd, 'greeting.txt'), builderCalls === 1 ? 'After' : 'Verified greeting');
+        return {text: builderCalls === 1 ? 'Updated greeting.' : 'Added the focused check result.'};
+      }
+      if (!prompt.includes('"receipt":')) return {text: JSON.stringify({verdict: 'needs_evidence', reason: finding})};
+      assert.match(prompt, /"receipt"/);
+      return {text: JSON.stringify({verdict: 'pass', reason: 'The check passed.',
+        criteria: ['correctness', 'human_readability', 'maintainability', 'performance', 'failure_handling', 'scope_and_constraints']
+          .map(id => ({id, verdict: 'pass', evidence: ['The check and source confirm the change.'], reason: ''}))})};
+    }
+  });
+  await store.setProfile({...await store.getProfile(), checks: [{name: 'fixture', argv: ['node', '-e', 'process.exit(0)'],
+    required: true, benchmark: false, cwd: '.'}]});
+  const checks = (await store.effectiveConfig()).checks;
+  const post = (route, data) => coordinator.dispatch('design/' + route, data, {method: 'POST'});
+  const {revision} = await post('draft', {...plan, revision: 0, mode: 'task'});
+  await post('approve', {revision, mode: 'task'});
+  const started = await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
+    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+  let build;
+  for (let index = 0; index < 400; index++) {
+    build = (await coordinator.dispatch('design')).builds.at(-1);
+    if (build.status === 'review' || build.attention) break;
+    await delay(150);
+  }
+  assert.equal(build.status, 'review', build.error);
+  assert.equal(build.id, started.builds[0].id);
+  assert.equal(builderCalls, 1);
   assert.equal(diagnoses, 1);
   assert.equal(build.attempts[1].task, build.attempts[0].task);
   assert.equal(build.attempts[1].automaticRecovery.action, 'return-to-loop');

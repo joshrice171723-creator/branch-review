@@ -3,7 +3,7 @@ import {branchVersions,restoreVersion} from './branch-versions.mjs';
 import {databaseCleanup} from './database-cleanup.mjs';
 import {qaReviews} from './public/qa-model.js';
 import {setupChecks} from './setup-checks.mjs';
-import {applyWorkbenchRubric, approvedWorkbenchEvidence, completedRuns, createRepair, designChecklist, taskChecklist, draftWorkbenchPullRequest, exportHandoff, pushWorkbenchReview, readHandoff, returnFindings, rubricComplete, validateWorkbenchPreview, workbenchComparison, workbenchMockup, workbenchReview, workbenchRubric} from './workbench-handoff.mjs';
+import {applyWorkbenchRubric, approvedWorkbenchEvidence, completedRuns, createRepair, designChecklist, taskChecklist, draftWorkbenchPullRequest, pushWorkbenchReview, readHandoff, returnFindings, rubricComplete, validateWorkbenchPreview, workbenchComparison, workbenchMockup, workbenchReview, workbenchRubric} from './workbench-handoff.mjs';
 import {githubApi, publishWorkbenchCheck} from './workbench-github.mjs';
 import localOrigin from './desktop/local-origin.cjs';
 import {createWorkspace} from './workbench/workspace.mjs';
@@ -212,7 +212,7 @@ function json(res,status,data) { res.writeHead(status,{'Content-Type':'applicati
 async function body(req) { let buffer=''; for await(const chunk of req) { buffer += chunk; if(Buffer.byteLength(buffer)>16_000_000) throw new Error('Request too large'); } return JSON.parse(buffer || '{}'); }
 const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>reviewRecipe(local,repo),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
 async function mutate(endpoint, data) {
-  if (endpoint === '/api/workbench-export') return exportHandoff(repo,data.runId,git);
+  if (endpoint === '/api/workbench-export') return workspace.exportHandoff(data.runId);
   if (endpoint === '/api/workbench-repair') return createRepair(repo,data,git);
   if (endpoint === '/api/workbench-push') {
     const receipt=await pushWorkbenchReview(repo,data.runId,data.commit,store.records,git,data.expectedTarget);

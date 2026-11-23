@@ -358,6 +358,7 @@ function designPanel(initialState) {
     }
     updatePlanView();
     const summary = element("p", "design-draft-state");
+    const workflow = element("details", "plan-workflow");
     const save = button("Save draft", () => change("draft", {...editing, revision: baseRevision}, {reset: true}));
     save.dataset.designFocus = "plan-save";
     const discard = button("Discard local draft", () => { clearPlanDraft(); draw(); });
@@ -431,6 +432,21 @@ function designPanel(initialState) {
       summary.textContent = stale ? "Saved plan changed. Compare it before applying this draft."
         : running ? "A build is active for this change."
         : localDraft.plan ? "Unsaved draft" : state.approved === state.revision ? "Approved plan" : "Draft plan";
+      const setup = state.executionSetup;
+      workflow.hidden = !launchForm.automaticRouting || setup?.plan !== editing.plan;
+      if (!workflow.hidden) {
+        const stages = WorkbenchProfile.roles.filter(role => setup.stages[role.id] || role.kind === "Gate");
+        workflow.replaceChildren(element("summary", "", "Coordinator’s stage settings"),
+          element("ul", "design-readiness-list", ...stages.map(role => {
+            const choice = setup.stages[role.id];
+            if (active().stages[role.id]?.enabled === false) return element("li", "", element("strong", "", role.name), " · Skipped");
+            if (!choice) return element("li", "", element("strong", "", role.name), " · Workbench");
+            const details = [choice.provider, choice.model || "Provider default", choice.effort + " effort",
+              choice.shellTools ? "Shell access" : "", ...choice.toolHints].filter(Boolean).join(" · ");
+            return element("li", "", element("strong", "", role.name), " · " + details,
+              ...(choice.reason ? [element("p", "stage-meta", choice.reason)] : []));
+          })));
+      }
     }
     function edited() {
       localDraft.plan = draftDiffers(editing) ? editing : null;
@@ -442,10 +458,11 @@ function designPanel(initialState) {
     const result = box("Plan", field("Title", title),
       element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
       rendered, draft, summary,
-      agreement, checkbox("Choose workflow, model and thinking level automatically", launchForm.automaticRouting, value => {
+      agreement, checkbox("Let Coordinator choose models, thinking level, and tools", launchForm.automaticRouting, value => {
         launchForm.automaticRouting = value;
+        updateActions();
         return true;
-      }), element("small", "stage-meta", "Eligible visual changes use one audit. Other work uses the selected workflow."),
+      }), workflow,
       element("p", "", "Start build approves this plan and agreement."),
       planBranch(), element("div", "actions", save, discard, start), startFeedback);
     if (baseRevision !== state.revision) result.append(

@@ -310,8 +310,12 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
     const scope = await store.prompt(run);
     const visualRoute = () => Boolean(task.cosmetic_route && !state.fullAudit);
     const finalEnabled = () => !visualRoute() && action('final_review', profile).enabled !== false;
-    const automaticAgent = stage => visualRoute() && ['plan', 'build', 'build_review'].includes(stage) ?
-      {provider: 'Codex', model: 'gpt-6.2-sol', effort: stage === 'plan' ? 'low' : 'medium'} : undefined;
+    function automaticAgent(stage) {
+      if (stage === 'build' && state.repairAgent) return state.repairAgent;
+      if (!build.executionSetup && visualRoute() && ['plan', 'build', 'build_review'].includes(stage)) {
+        return {provider: 'Codex', model: 'gpt-6.2-sol', effort: stage === 'plan' ? 'low' : 'medium'};
+      }
+    }
 
     async function measure(key, work) {
       const span = {id: id(), key, visit: state.history.length - 1, startedAt: Date.now()};
@@ -362,7 +366,7 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
       await measure('2', () => checkpoint('question', decision));
     }
 
-    async function returnTo(stage, verdict, reason) {
+    async function returnTo(stage, verdict, reason, confirmedDefect = false) {
       state.finding = reason;
       if (state.verificationOnly) {
         return block(stage, 'Verification found a defect that needs a build retry. ' + reason, 'verification_defect');
@@ -392,6 +396,12 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
           return;
         }
         await store.repair(run, reason);
+        if (confirmedDefect && build.executionSetup && state.repairBuilderRan && !state.repairAgent &&
+            state.lastRepairSource && state.lastRepairSource !== source && action('build', profile).provider === 'Codex' &&
+            action('build', profile).model !== 'gpt-6.2-astra') {
+          state.repairAgent = {provider: 'Codex', model: 'gpt-6.2-astra', effort: 'high'};
+          await activity(run, stage, 'Coordinator', 'A code repair ran, but the audit still found a defect. Using Astra for the next repair.');
+        }
         state.lastRepairSource = source;
         state.lastRepairChecks = checkResults;
         state.returns.repair = (state.returns.repair ?? 0) + 1;
@@ -402,7 +412,7 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
       }
       state.returns[bucket] = count + 1;
       await activity(run, stage, provider ?? 'Workbench', 'Finding returned to ' + next);
-      await checkpoint(next, reason);
+      await checkpoint(next === 'build' && state.pendingEvidenceTest ? 'checks' : next, reason);
     }
 
     async function block(stage, reason, kind = 'missing_observation', check) {
@@ -415,7 +425,7 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
       const stage = phase === 'after' ? 'checks' : 'baseline';
       await activity(run, stage, 'Workbench', 'Started configured ' + phase + ' checks');
       if (prepareBrowserRecovery && await store.needsBrowserPreview(run)) {
-        const preview = await prepareBrowserRecovery({taskId: run, signal, waitForReady: true});
+        const preview = await measure('@preview', () => prepareBrowserRecovery({taskId: run, signal, waitForReady: true}));
         signal.throwIfAborted();
         if (preview.state !== 'ready') {
           if (phase === 'after') state.checked_source = (await readSource()).snapshot_sha256;
@@ -425,7 +435,8 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
           (preview.revision ? ' Started from ' + preview.revision.slice(0, 12) + '.' : ''));
       }
       const {result, current, blocked} = await runProtectedChecks({read: readSource,
-        run: () => store.runChecks(run, {phase, signal, measure, reusePassing: phase === 'after'}),
+        run: () => store.runChecks(run, {phase, signal, measure, reusePassing: phase === 'after',
+          report: message => activity(run, stage, 'Workbench', message)}),
         report: message => activity(run, stage, 'Workbench', message), signal});
       if (blocked) return block(stage, 'Project source changed during checks. ' + blocked, 'source_changed');
       for (const row of result.checks) {
@@ -635,7 +646,7 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
         await activity(run, stage, 'Workbench', 'Recovering the plan’s verification method.');
         await checkpoint('plan', reason);
       } else if (verdict !== 'pass') {
-        await returnTo(stage, verdict, reason);
+        await returnTo(stage, verdict, reason, reply.verdict === 'repair');
       } else if (stage === 'plan_review') {
         const next = state.escalatedReviewPending ? 'build_review' : state.baseline ? 'build' : 'baseline';
         delete state.escalatedReviewPending;
@@ -665,6 +676,10 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
       }
       state.verificationOnly = false;
       delete state.auditCorrection;
+      if (attempt.automaticRecovery.evidenceCheck && action(stage, profile).route === 'build') {
+        state.pendingEvidenceTest = {id: attempt.automaticRecovery.evidenceCheck, stage, reason,
+          source: state.checked_source};
+      }
       await returnTo(stage, 'repair', reason);
     } else if (verificationOnly || retryRepair) {
       state.verificationOnly = Boolean(verificationOnly);
@@ -778,6 +793,7 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
           if (!signal.aborted) await checkpoint('build', error.message);
           throw error;
         }
+        if (state.returns.repair && write) state.repairBuilderRan = true;
         if (!build.standalone) {
           try {
             await assertPreserved(build, await store.snapshot(task.id), task, await changes());
@@ -787,6 +803,26 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
         }
         await measure('2', () => checkpoint('checks', state.build_summary));
       } else if (stage === 'checks') {
+        if (state.pendingEvidenceTest) {
+          const request = state.pendingEvidenceTest;
+          await activity(run, 'checks', 'Workbench', 'Running the project test needed by the audit.');
+          const receipt = await measure('evidence-' + request.id,
+            () => store.runEvidenceTest(run, request.id, request.source, {signal}));
+          delete state.pendingEvidenceTest;
+          if (receipt.source_changed || receipt.inputs_changed) {
+            return block(request.stage, 'The evidence test changed project files or inputs.', 'source_changed');
+          }
+          if (receipt.spawn_error) return block(request.stage, receipt.spawn_error, 'check_launch', receipt.check);
+          (state.acceptanceEvidence ??= []).push({stage: request.stage, request: request.reason,
+            snapshot: request.source, receipt: receipt.id, note: JSON.stringify((await checkPacket([receipt]))[0]), time: now()});
+          await activity(run, 'checks', 'Workbench', receipt.exit_code === 0 ? 'The missing test passed.' : 'The missing test found a failure.');
+          if (receipt.exit_code !== 0) {
+            state.finding = request.reason + '\nThe evidence test failed. ' + JSON.stringify((await checkPacket([receipt]))[0]);
+            state.checked_pass = false;
+            await checkpoint('build', state.finding);
+          } else await checkpoint(request.stage, 'Recorded the missing test result on the checked source.');
+          continue;
+        }
         const blockers = await store.preflightChecks(run, {phase: 'after'});
         if (blockers.length) {
           state.checked_source = (await readSource()).snapshot_sha256;

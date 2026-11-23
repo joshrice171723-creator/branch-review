@@ -87,13 +87,13 @@ export function visitMetrics(visit, attempts, metrics, receipts) {
     const step = steps[key] ??= {milliseconds: 0, runningSince: null};
     step.milliseconds += duration.milliseconds;
     if (duration.runningSince !== null) step.runningSince = duration.runningSince;
-    if (metric.provider) providers.push({provider: metric.provider, model: metric.model, outcome: metric.outcome,
+    if (metric.provider) providers.push({provider: metric.provider, model: metric.model, effort: metric.effort, outcome: metric.outcome,
       time: duration, usage: metric.usage ?? null, sourceAccess: metric.sourceAccess, shellTools: metric.shellTools,
       timeoutMs: metric.timeoutMs});
   }
   const recordedChecks = new Map();
   for (const receipt of receipts) if (Number.isFinite(receipt.duration_seconds)) {
-    recordedChecks.set(receipt.check, (recordedChecks.get(receipt.check) ?? 0) + receipt.duration_seconds * 1000);
+    recordedChecks.set(receipt.check, (recordedChecks.get(receipt.check) ?? 0) + (receipt.reused ? 0 : receipt.duration_seconds * 1000));
   }
   for (const [key, milliseconds] of recordedChecks) steps[key] ??= {milliseconds, runningSince: null};
   return {time, steps, providers};

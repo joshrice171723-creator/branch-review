@@ -38,9 +38,13 @@ export function checkRows(run, visit) {
   if (!visit) return [];
   const phase = visit.role === 'baseline' ? 'baseline' : 'after';
   const checkpoint = phase === 'baseline' ? 'build' : 'build_review';
-  const ids = visit.next?.stage === checkpoint && Array.isArray(visit.next.detail)
-    ? new Set(visit.next.detail.map(row => row.id)) : null;
-  return run.checks.filter(row => row.phase === phase && (ids ? ids.has(row.id) : inVisit(visit, row.started_at)));
+  const byId = visit.next?.stage === checkpoint && Array.isArray(visit.next.detail)
+    ? new Map(visit.next.detail.map(row => [row.id, row])) : null;
+  return run.checks.filter(row => row.phase === phase && (byId ? byId.has(row.id) : inVisit(visit, row.started_at)))
+    .map(row => {
+      const visitResult = byId?.get(row.id);
+      return {...row, ...(visitResult?.reused && {reused: true}), ...(visitResult?.rerunReason && {rerunReason: visitResult.rerunReason})};
+    });
 }
 
 export function stageEvidence(run, build, visit, visits) {
@@ -72,7 +76,7 @@ export function stageEvidence(run, build, visit, visits) {
     return Object.fromEntries([...names].map(name => {
       const found = rows.filter(row => row.check === name);
       const last = found.at(-1);
-      return [name, {status: last.exit_code === 0 && !last.source_changed && !last.spawn_error ? 'Passed' : 'Failed',
+      return [name, {status: last.reused ? 'Reused' : last.exit_code === 0 && !last.source_changed && !last.inputs_changed && !last.spawn_error ? 'Passed' : 'Failed',
         sections: [checks(found)]}];
     }));
   }

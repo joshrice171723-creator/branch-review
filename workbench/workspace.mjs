@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import {createStore} from './store.mjs';
+import {exportHandoff} from '../workbench-handoff.mjs';
 import {createCoordinator} from './coordinator.mjs';
 import {createQuality} from './quality.mjs';
 import {createEnvironment} from './environment.mjs';
@@ -125,6 +126,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   }
 
   return {status,prepare,dispatch,
+    exportHandoff:runId=>exportHandoff(repository,runId,git,{store:tasks}),
     open:async()=>({src:'/workspace/',project:repository,managed:true}),
     cleanupPreview:()=>environment.dispatch('POST','cleanup/preview',{},new URLSearchParams()),
     mcp:(message,verified)=>workspaceMcp(message,{call,getProfile:()=>tasks.getProfile(),verified}),
