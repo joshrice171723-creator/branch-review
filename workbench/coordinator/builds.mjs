@@ -12,6 +12,15 @@ const pendingStates = ['working', 'cancelling'];
 const closedStates = ['closed', 'retired'];
 const decisionStages = ['question', 'question_retry', 'evidence'];
 const budgetErrors = ['PROVIDER_CALL_TIMEOUT', 'PROVIDER_TASK_TIME_BUDGET', 'PROVIDER_USAGE_BUDGET'];
+function applyBuildBudget(build, payload) {
+  const value = payload.providerTokenLimit;
+  if (value === undefined) return;
+  const [min, max] = WorkbenchProfile.providerBounds.providerTokenLimit;
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw Error('Set the build token limit between ' + min + ' and ' + max + '.');
+  }
+  build.providerTokenLimit = value;
+}
 const repairLimitMessage = 'This run reached its repair limit. Review the last audit before starting another build.';
 const workflowChangedMessage = build => 'Agent settings changed after this run started. ' + (build.mode === 'task'
   ? 'Restart the build to use the saved settings.'
@@ -267,7 +276,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (!saved) await files.write(markerPath(task.id), marker);
     else if (!isDeepStrictEqual(saved, marker)) throw Error('The recorded build scope changed.');
     if (verificationOnly) await store.retryVerification(task.id, verificationSource);
-    const limits = await runtimeProfile(previous, task.id);
+    const savedLimits = await runtimeProfile(previous, task.id);
+    const limits = build.providerTokenLimit === undefined ? savedLimits :
+      {...savedLimits, providerTokenLimit: build.providerTokenLimit};
     const attempt = {id: id(), job: id(), slice: member, task: task.id, started: now(), outcome: 'running',
       ...(limits && {runtimeProfile: limits}),
       ...(automaticRecovery && {automaticRecovery}),
@@ -421,6 +432,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const build = {id: id(), revision: state.revision, index: 0, branch: state.branch, plan: state.plan, roadmap: state.roadmap,
         attachments: {...state.attachments}, base, decisions: restart ? previous.decisions : payload.decisions ?? {}, status: 'ready', attempts: [],
         profile: jsonHash(profile), groups, ...baseline, ...(state.mode === 'task' ? {mode: 'task', title: state.title} : {})};
+      applyBuildBudget(build, payload);
       if (restart) {
         if (ownsTask && previousTask.lifecycle.status === 'active') await store.pause(previousTask.id, 'Build restarted.');
         Object.assign(previous, {status: 'retired', retired: true});
@@ -435,6 +447,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return (await drive(state => {
       const build = current(state, payload.build);
       if (!['ready', 'failed', 'cancelled'].includes(build.status)) throw Error('This build is waiting for another action.');
+      applyBuildBudget(build, payload);
       return build;
     })).state;
   }
@@ -443,6 +456,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return (await drive(state => {
       const build = current(state, payload.build);
       if (build.status !== 'failed') throw Error('Select the stopped build.');
+      applyBuildBudget(build, payload);
       return build;
     }, undefined, true)).state;
   }

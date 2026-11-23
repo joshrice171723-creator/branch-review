@@ -61,7 +61,8 @@ export async function createCoordinator({
     if (!configuration?.provider) throw Error('Apply a profile with a provider for this step.');
     const {provider, model, effort} = configuration;
     const stageLabel = WorkbenchProfile.roles.find(role => role.id === key)?.name ?? stage;
-    const limitProfile = selectedProfile(runtimeProfile) ?? runtimeProfile ?? current;
+    const override = selectedProfile(runtimeProfile) ?? runtimeProfile;
+    const limitProfile = override ? {...current, ...override, stages: {...current.stages, ...override.stages}} : current;
     const limits = WorkbenchProfile.providerLimits(limitProfile, runtimeProfile?.active ?? profile.active, key);
     const spend = visit === undefined ? null : providerSpend(await readMetrics(files, folder, true));
     const remaining = spend ? limits.providerTimeSeconds * 1000 - spend.milliseconds : Infinity;

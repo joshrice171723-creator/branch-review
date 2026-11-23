@@ -219,6 +219,55 @@ function designPanel(initialState) {
   const defaultDecisions = {scope_confirmed: "confirmed", engine_integration: "confirmed",
     code_changes: "allow_scoped", migrations: "deny", dependencies: "deny"};
   const launchForm = {scope: "plan", frequency: "slice", decisions: {}, agreementOpen: true};
+  let budgetDraft;
+  function planBudgetKey(build) {
+    return build && !["closed", "retired"].includes(build.status) ? build.id : "plan-" + state.revision;
+  }
+  function budgetPayload(build = state.builds.at(-1)) {
+    return budgetDraft?.key === planBudgetKey(build) ? {providerTokenLimit: budgetDraft.value} : {};
+  }
+  function planBudget() {
+    const current = state.builds.at(-1);
+    const build = current && !["closed", "retired"].includes(current.status) ? current : null;
+    const key = planBudgetKey(build);
+    const defaults = WorkbenchProfile.providerLimits(active(), data.active);
+    const attempt = build?.attempts.at(-1);
+    const value = budgetDraft?.key === key ? budgetDraft.value :
+      build?.providerTokenLimit ?? attempt?.runtimeProfile?.providerTokenLimit ?? defaults.providerTokenLimit;
+    const [min, max] = WorkbenchProfile.providerBounds.providerTokenLimit;
+    const slider = element("input");
+    const exact = element("input");
+    for (const [input, type] of [[slider, "range"], [exact, "number"]]) {
+      input.type = type;
+      input.min = min;
+      input.max = max;
+      input.step = type === "range" ? 1000 : 1;
+      input.value = value;
+      input.disabled = Boolean(build && !["failed", "cancelled"].includes(build.status));
+    }
+    slider.setAttribute("aria-label", "Build token limit slider");
+    exact.setAttribute("aria-label", "Exact build token limit");
+    const setBudget = amount => {
+      budgetDraft = {key, value: amount};
+      slider.value = exact.value = amount;
+    };
+    slider.oninput = () => setBudget(slider.valueAsNumber);
+    exact.onchange = () => {
+      if (Number.isSafeInteger(exact.valueAsNumber) && exact.checkValidity()) setBudget(exact.valueAsNumber);
+      else exact.value = budgetDraft?.key === key ? budgetDraft.value : value;
+    };
+    const section = element("section", "plan-budget", element("strong", "", "Build token limit"),
+      element("div", "plan-budget-inputs", slider, exact),
+      element("small", "stage-meta", "Applies to this build. Cached input does not count toward the limit."));
+    if (attempt?.errorCode === "PROVIDER_USAGE_BUDGET" && build.error) {
+      section.append(element("p", "evidence-warning", build.error));
+      if (!state.restartRequired && !state.resumeBlocker) {
+        section.append(button("Resume run", () =>
+          change("continue", {build: build.id, ...budgetPayload(build)}, {wait: "Resuming the run…"}), "button primary"));
+      }
+    }
+    return section;
+  }
   for (const question of projectState.questions.filter(q => q.required)) {
     const option = defaultDecisions[question.id];
     if (question.options.includes(option)) launchForm.decisions[question.id] = option;
@@ -372,6 +421,7 @@ function designPanel(initialState) {
     }
     const start = button("Start build", async () => {
       if (startingFromPlan || busy) return;
+      const budget = budgetPayload();
       if (settings.branch && settings.branch !== state.branch) {
         showPlanStartStatus("Save the selected build branch first.");
         return;
@@ -399,7 +449,7 @@ function designPanel(initialState) {
           return;
         }
         showPlanStartStatus("Starting build…");
-        if (await change("build", {stages: active().stages, decisions: launchForm.decisions},
+        if (await change("build", {stages: active().stages, decisions: launchForm.decisions, ...budget},
           {wait: "Starting build…", done: "Build started.", onError})) {
           showPlanStartStatus("");
           goBuild();
@@ -441,7 +491,7 @@ function designPanel(initialState) {
       element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
       rendered, draft, summary,
       agreement, element("p", "", "Start build uses the " + active().name + " workflow and approves this plan and agreement."),
-      planBranch(), element("div", "actions", save, discard, start), startFeedback);
+      planBranch(), planBudget(), element("div", "actions", save, discard, start), startFeedback);
     if (baseRevision !== state.revision) result.append(
       element("details", "", element("summary", "", "Compare saved plan"), element("pre", "", state.plan)),
       button("Use local draft", () => { localDraft.baseRevision = state.revision; rememberDraft(); draw(); }));
@@ -1145,12 +1195,12 @@ function designPanel(initialState) {
         change("continue", {build: build.id}, {wait: embedded ? "Starting repair…" : "Starting the next slice…"}), "button primary") : null;
       if (continueBuild && !showContinueByReview) controls.append(continueBuild);
       if (["failed", "cancelled"].includes(build.status) && !state.restartRequired && !state.resumeBlocker) controls.append(button("Resume run", () =>
-        change("continue", {build: build.id}, {wait: "Resuming the run…"}), "button primary"));
+        change("continue", {build: build.id, ...budgetPayload(build)}, {wait: "Resuming the run…"}), "button primary"));
       const canRestart = embedded && state.mode === "task" && state.approved === state.revision &&
         build.revision === state.revision && ["failed", "cancelled"].includes(build.status);
       if (state.verificationAvailable &&
           state.approved === build.revision && state.revision === build.revision) {
-        controls.append(button("Retry verification", () => change("retry-verification", {build: build.id},
+        controls.append(button("Retry verification", () => change("retry-verification", {build: build.id, ...budgetPayload(build)},
           {wait: "Running checks on the existing changes…", done: "Verification restarted."}), "button primary"));
       }
       if (canRestart) {
@@ -1303,7 +1353,7 @@ function designPanel(initialState) {
         launch.disabled = true;
         try {
           if (!stateProfileApplied() || byId("apply-profile").textContent === "Apply changes") await saveWorkflowProfile();
-          await change("build", {...target, stages: active().stages, decisions: launchForm.decisions},
+          await change("build", {...target, stages: active().stages, decisions: launchForm.decisions, ...budgetPayload()},
             {wait: "Starting build…", done: "Build started.", onError: error => { readinessStatus.textContent = error.message; }});
         } catch (error) { readinessStatus.textContent = error.message; }
         finally { updateLaunch(); }

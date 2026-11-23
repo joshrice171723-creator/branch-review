@@ -50,10 +50,10 @@ async function waitForBuild(coordinator, wanted = 'review') {
   assert.fail('Build did not reach ' + wanted);
 }
 
-test('blocks provider dispatch at the task token limit and resumes the same stage with a saved increase', async t => {
+test('a build token limit blocks dispatch and can be increased for the same task', async t => {
   const {git, store, repository} = await fixture(t);
   const profile = await store.getProfile();
-  profile.profiles[profile.active].providerTokenLimit = 1000;
+  profile.profiles[profile.active].providerTokenLimit = 5000;
   await store.setProfile(profile);
   const calls = [];
   const coordinator = await createCoordinator({repository, store, git, invoke: async request => {
@@ -74,17 +74,18 @@ test('blocks provider dispatch at the task token limit and resumes the same stag
   const draft = await action('design/draft', {revision: 0, mode: 'task', title: 'Update greeting',
     plan: 'Edit the greeting.\n\n## Acceptance criteria\n- The greeting is updated.'});
   await action('design/approve', {revision: draft.revision, mode: 'task'});
-  await action('design/build', {revision: draft.revision, mode: 'task', decisions});
+  await action('design/build', {revision: draft.revision, mode: 'task', decisions, providerTokenLimit: 1000});
   const blocked = await waitForBuild(coordinator, 'failed');
   assert.match(blocked.error, /1000-token limit/);
   assert.deepEqual(calls, ['plan', 'plan_review']);
   assert.match(blocked.error, /1500 cached input tokens/);
-  profile.profiles[profile.active].providerTokenLimit = 2000;
-  await store.setProfile(profile);
-  await action('design/continue', {build: blocked.id});
+  await assert.rejects(action('design/continue', {build: blocked.id, providerTokenLimit: 1}), /Set the build token limit/);
+  await action('design/continue', {build: blocked.id, providerTokenLimit: 2000});
   const resumed = await waitForBuild(coordinator, 'failed');
   assert.equal(resumed.error, 'Stopped after confirming dispatch.');
   assert.equal(resumed.attempts.at(-1).task, blocked.attempts.at(-1).task);
+  assert.equal(resumed.providerTokenLimit, 2000);
+  assert.equal((await store.getProfile()).profiles[profile.active].providerTokenLimit, 5000);
   assert.deepEqual(calls, ['plan', 'plan_review', 'build']);
 });
 
