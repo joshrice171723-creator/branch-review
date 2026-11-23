@@ -144,7 +144,7 @@ export function createAudit({repository, files, git, store, agent}) {
     await assertPreserved(build, snapshot, task, dirty);
     if (snapshot.snapshot_sha256 !== state.final_snapshot) throw Error('The checked source changed before the local commit.');
     const paths = Object.keys(dirty).filter(name => !Object.hasOwn(build.preserved, name));
-    if (!paths.length) throw Error('The task must produce a checked commit before Branch Review.');
+    if (!paths.length) throw Error('No task-owned changes are available for a review commit.');
     if (paths.some(name => snapshot.files[name] === task.initial_snapshot.files[name])) {
       throw Error('The Git changes include files outside the checked source.');
     }
@@ -192,6 +192,26 @@ export function createAudit({repository, files, git, store, agent}) {
         !item.evidence.some(evidence => typeof evidence === 'string' && evidence.trim()) ||
         (item.verdict !== 'pass' && !(item.verdict === 'not_applicable' && item.reason?.trim()));
     }).map(({id}) => 'Required criterion needs passing evidence: ' + id);
+  }
+
+  function validateFindingScope(reply, stage, approvedPlan, required) {
+    if (!['repair', 'replan'].includes(reply.verdict)) return;
+    const {basis, requirement, before, observed} = reply.scope ?? {};
+    const clause = typeof requirement === 'string' && requirement.trim();
+    if (!clause || typeof observed !== 'string' || !observed.trim()) {
+      throw Error('Identify the approved requirement or Quality criterion and state the observed failure.');
+    }
+    if (basis === 'quality' && reply.verdict === 'repair' && stage !== 'plan_review' &&
+        (required?.map(item => item.id) ?? criteriaIds).includes(clause)) return;
+    if (!['approved', 'preserved'].includes(basis) || !approvedPlan.includes(clause) || clause.length < 12) {
+      throw Error('Quote the original approved requirement. An implementation step cannot add a requirement.');
+    }
+    if (/\b(?:retain|preserve|keep)\w*\b[^.\n]{0,80}\b(?:existing|current|unchanged)\b/i.test(clause) && basis !== 'preserved') {
+      throw Error('This approved requirement preserves existing behavior. Supply baseline and current observations.');
+    }
+    if (basis === 'preserved' && (typeof before !== 'string' || !before.trim() || before.trim() === observed.trim())) {
+      throw Error('A preservation finding needs a baseline observation and a different current observation.');
+    }
   }
 
   async function activity(run, stage, actor, message) {
@@ -395,6 +415,12 @@ export function createAudit({repository, files, git, store, agent}) {
         'Independently assess the scoped diff and supplied observations. Focus on unsupported claims. ' :
         'Independently audit the approved plan. Inspect only the changed files and evidence needed to resolve a specific criterion. ') +
         'Return the JSON verdict and cite evidence in reason. Return replan only for a requirements finding. ' +
+        'The approved plan alone defines the requested behavior. The implementation method describes approach and cannot expand scope. ' +
+        'For repair or replan, fill scope: use approved with a verbatim clause from approvedPlan, preserved with a verbatim clause and ' +
+        'observations of the actual baseline and current behavior, or quality with a Quality criterion ID and a concrete defect. ' +
+        'When a requirement preserves existing behavior, compare the baseline first. Treat behavior missing from both versions as a separate request. ' +
+        'For example, sending an attachment and persisting it in conversation history are distinct behaviors. ' +
+        'Record out-of-scope improvements in the reason without returning them for repair. Use null scope for other verdicts. ' +
         'Workbench computed snapshot and receiptStatus from its source inventory. Use them for receipt freshness. ' +
         'Do not substitute a recursive directory hash or include generated preview logs such as .local-dev/workspace/workbench-environment/preview-output.json. ' +
         'A passed receipt is current. Request a new check only when it can collect a missing result, and assess acceptance coverage separately. ' +
@@ -410,7 +436,8 @@ export function createAudit({repository, files, git, store, agent}) {
           'Audit the current checked implementation. Identify unsupported acceptance criteria. ') +
         (required ? 'Record a criterion for every required ID on a pass. Include verdict, reason and evidence strings. ' : '') +
         (correction ? 'Correct the previous response: ' + correction + '\n' : '\n') +
-        JSON.stringify({approvedPlan: build.plan, title: context.title, stage, implementationPlan: state.plan,
+          JSON.stringify({approvedPlan: build.plan, title: context.title, stage, implementationPlan: state.plan,
+          baselineCommit: build.base, baselineSnapshot: task.initial_snapshot.snapshot_sha256,
           scopeDecisions: build.decisions, answers: state.answers, checks, buildAudit, scopedDiff,
           acceptanceEvidence: (state.acceptanceEvidence ?? []).filter(row => row.snapshot === before.snapshot_sha256),
           summary: state.build_summary?.slice(0, 2200), snapshot: before.snapshot_sha256, receiptStatus,
@@ -423,6 +450,7 @@ export function createAudit({repository, files, git, store, agent}) {
         reply = objectReply(raw);
         if (!valid.includes(reply.verdict)) throw Error('The auditor returned an invalid verdict.');
         reason = sentence(reply.reason, 'an audit reason');
+        validateFindingScope(reply, stage, build.plan, required);
         const issues = reply.verdict === 'pass' && required ? criterionErrors(reply, required) : [];
         if (issues.length) throw Error(issues.join('\n'));
       } catch (error) {
@@ -490,6 +518,7 @@ export function createAudit({repository, files, git, store, agent}) {
         snapshot_sha256: before.snapshot_sha256, plan_sha256: hash(state.plan), approved_plan_sha256: hash(build.plan),
         profile_sha256: task.profile_sha256, quality_revision: task.quality?.revision,
         ...(selectedRubric ? {rubric_id: selectedRubric.id} : {}),
+        ...(reply.scope && {finding_scope: reply.scope}),
         ...(Array.isArray(reply.criteria) ? {criteria: reply.criteria} : {})};
       await measure('2', () => store.record(run, 'audits', row));
       await activity(run, stage, row.actor, 'Audit verdict · ' + verdict);
@@ -628,11 +657,18 @@ export function createAudit({repository, files, git, store, agent}) {
         await checkpoint('building');
         try {
           state.build_summary = await ask({stage, prompt, write, images});
-          await measure('2', () => checkpoint('checks', state.build_summary));
         } catch (error) {
           if (!signal.aborted) await checkpoint('build', error.message);
           throw error;
         }
+        if (!build.standalone) {
+          try {
+            await assertPreserved(build, await store.snapshot(task.id), task, await changes());
+          } catch (error) {
+            return block('build', error.message, 'checkout_ownership');
+          }
+        }
+        await measure('2', () => checkpoint('checks', state.build_summary));
       } else if (stage === 'checks') {
         const blockers = await store.preflightChecks(run, {phase: 'after'});
         if (blockers.length) {
@@ -687,6 +723,11 @@ export function createAudit({repository, files, git, store, agent}) {
         if (result.verdict !== 'pass') {
           const messages = (result.issues ?? []).map(issue => typeof issue === 'string' ? issue : issue.message);
           return block('finish', messages.filter(Boolean).join('\n') || 'Verification did not pass.', 'completion_gate');
+        }
+        if (!build.standalone && !state.design_sha &&
+            !Object.keys(await changes()).some(name => !Object.hasOwn(build.preserved, name))) {
+          return block('finish', 'Verification passed. The checkout has no task-owned changes for a Branch Review commit. ' +
+            'Review the existing changes before including them in a commit.', 'no_task_changes');
         }
         signal.throwIfAborted();
         if (!state.design_sha) await validateTarget?.();

@@ -266,10 +266,7 @@ function designPanel(initialState) {
       element("small", "stage-meta", "These limits apply to this build. Cached input does not count toward the token limit."));
     if (["PROVIDER_USAGE_BUDGET", "PROVIDER_TASK_TIME_BUDGET"].includes(attempt?.errorCode) && build.error) {
       section.append(element("p", "evidence-warning", build.error));
-      if (!state.restartRequired && !state.resumeBlocker) {
-        section.append(button("Resume run", () =>
-          change("continue", {build: build.id, ...budgetPayload(build)}, {wait: "Resuming the run…"}), "button primary"));
-      }
+      section.append(element("small", "stage-meta", "Use Retry in Current build to apply these limits."));
     }
     return section;
   }
@@ -1200,18 +1197,14 @@ function designPanel(initialState) {
         change("continue", {build: build.id}, {wait: embedded ? "Starting repair…" : "Starting the next slice…"}), "button primary") : null;
       if (continueBuild && !showContinueByReview) controls.append(continueBuild);
       if (["failed", "cancelled"].includes(build.status) && !state.restartRequired && !state.resumeBlocker) controls.append(
-        button(state.verificationAvailable ? "Retry build" : "Resume run", () =>
-          change("continue", {build: build.id, ...budgetPayload(build)}, {wait: "Resuming the run…"}), "button primary"));
+        button("Retry", () =>
+          change("continue", {build: build.id, ...budgetPayload(build)}, {wait: "Retrying the stopped stage…"}), "button primary"));
       const canRestart = embedded && state.mode === "task" && state.approved === state.revision &&
-        build.revision === state.revision && ["failed", "cancelled"].includes(build.status);
-      if (state.verificationAvailable &&
-          state.approved === build.revision && state.revision === build.revision) {
-        controls.append(button("Retry verification", () => change("retry-verification", {build: build.id, ...budgetPayload(build)},
-          {wait: "Running checks on the existing changes…", done: "Verification restarted."}), "button primary"));
-      }
+        build.revision === state.revision && ["failed", "cancelled"].includes(build.status) &&
+        (state.restartRequired || state.resumeBlocker?.startsWith("Agent settings changed"));
       if (state.verificationAvailable) {
         controls.append(element("small", "stage-meta",
-          "Retry starts fresh time, token, and repair allowances. Verification uses the existing changes."));
+          "Retry keeps your changes and starts fresh allowances. The coordinator verifies the result and repairs confirmed issues in the approved scope."));
       }
       if (canRestart) {
         const restart = button("Restart build", async () => {

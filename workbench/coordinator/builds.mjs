@@ -136,12 +136,6 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (attempt.step === 'stopped' && pinned.lifecycle.cause !== 'repair_limit') {
       return 'The audit stopped this run. Review the last audit before starting another build.';
     }
-    if (attempt.step === 'evidence_blocked' && await verificationAvailable(build)) {
-      const loop = await files.read(statePath(attempt.task));
-      if (loop?.history.at(-1)?.detail?.kind !== 'verification_defect') {
-        return 'The previous verification attempt stopped. Use Retry verification to run the current checks.';
-      }
-    }
     if (changedAgents(pinned.task.profile, await store.getProfile()).length) return workflowChangedMessage(build);
     if (Date.parse((await providerLimitFor(attempt, pinned))?.resetAt) > Date.now()) {
       return 'The provider reported a reset time. This run will resume when the quota resets.';
@@ -231,8 +225,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       ? await store.getRun(previous.task) : null;
     const loop = prior && await files.read(statePath(prior.id));
     const manualRetry = Boolean(prior && !automaticRecovery && !answer && ['failed', 'cancelled'].includes(build.status));
-    const retryRepair = manualRetry && !verificationOnly && (prior.lifecycle.cause === 'repair_limit' ||
-      loop?.stage === 'evidence_blocked' && loop.history.at(-1)?.detail?.kind === 'verification_defect');
+    const retryRepair = manualRetry && !verificationOnly && Boolean(verificationCheckpoint(prior, loop));
     let verificationSource;
     if (verificationOnly || retryRepair) {
       verificationSource = verificationCheckpoint(prior, loop);

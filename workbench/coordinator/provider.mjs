@@ -185,7 +185,13 @@ export function auditSchema(stage, withCriteria) {
   const fields = {
     verdict: {type: 'string', enum: ['pass', 'replan', 'needs_evidence', ...(stage === 'plan_review' ? [] : ['repair', 'run_check'])]},
     check: {type: ['string', 'null'], description: 'Pinned after-build check name for run_check, or null.'},
-    reason: {type: 'string'}
+    reason: {type: 'string'},
+    scope: {anyOf: [{type: 'null'}, {type: 'object', properties: {
+      basis: {type: 'string', enum: ['approved', 'preserved', 'quality']},
+      requirement: {type: 'string'},
+      before: {type: ['string', 'null']},
+      observed: {type: 'string'}
+    }, required: ['basis', 'requirement', 'before', 'observed'], additionalProperties: false}]}
   };
   if (withCriteria) {
     fields.criteria = {type: 'array', items: {type: 'object', properties: {

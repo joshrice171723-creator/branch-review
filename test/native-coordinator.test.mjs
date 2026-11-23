@@ -175,14 +175,14 @@ test('retries verification on the blocked source without rebuilding it', async t
     cwd: '.', phases: ['after'], required: true, benchmark: false});
   await store.setProfile(profile);
   await writeFile(path.join(repository, 'greeting.txt'), 'Changed outside the run');
-  await assert.rejects(post('design/retry-verification', {build: stopped.id}), /Restore the stopped build’s source/);
+  await assert.rejects(post('design/continue', {build: stopped.id}), /Restore the stopped build’s source/);
   await writeFile(path.join(repository, 'greeting.txt'), 'After');
   const status = {revision: draft.revision, mode: 'task', context: {view: 'workflow', tab: 'Plan'}};
   const conversation = await post('design/guide', {...status, message: 'Build status'});
   assert.equal(conversation.messages.at(-1).coordinator, true);
   assert.match(conversation.messages.at(-1).text, /Stopped at Build audit/);
-  const restarted = await post('design/guide', {...status, message: '/retry-verification'});
-  assert.match(restarted.messages.at(-1).text, /Verification restarted/);
+  const restarted = await post('design/continue', {build: stopped.id});
+  assert.equal(restarted.builds.at(-1).id, stopped.id);
   const finished = await waitForBuild(coordinator);
   assert.equal(finished.attempts.at(-1).task, task);
   assert.equal(builderCalls, count);
@@ -213,7 +213,12 @@ test('recovers planning evidence and reuses a current audit receipt without user
       assert.match(prompt, /"receiptStatus":\[\{"name":"greeting","required":true,"receiptId":"[^"]+","status":"passed"\}/);
       reply = {verdict: 'run_check', check: 'greeting', reason: 'Collect a fresh greeting check result.'};
     } else if (stage === 'final_review' && calls.filter(item => item === 'final_review').length === 1) {
-      reply = {verdict: 'pass', reason: 'This response forgot the criteria.'};
+      reply = {verdict: 'repair', reason: 'Add persistent screenshots because the implementation method calls for them.',
+        scope: {basis: 'approved', requirement: 'Persist the screenshot in chat history.', before: null,
+          observed: 'The attachment reaches the planner.'}};
+    } else if (stage === 'final_review') {
+      assert.match(prompt, /implementation step cannot add a requirement/i);
+      reply = {verdict: 'pass', reason: 'Reviewed current evidence and the original scope.', criteria};
     } else {
       reply = {verdict: 'pass', reason: 'Reviewed the current evidence.', ...(stage === 'final_review' ? {criteria} : {})};
     }
