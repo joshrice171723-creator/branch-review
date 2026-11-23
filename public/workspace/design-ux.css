@@ -213,6 +213,7 @@
   }
 }
 .plan-budget { display: grid; gap: .35rem; margin-block: .8rem; }
+.plan-budget-limit { display: grid; gap: .25rem; }
 .plan-budget-inputs { display: grid; grid-template-columns: minmax(0, 1fr) 7.5rem; align-items: center; gap: .7rem; }
 .plan-budget-inputs input { width: 100%; min-width: 0; }
 .plan-budget > button { justify-self: start; }

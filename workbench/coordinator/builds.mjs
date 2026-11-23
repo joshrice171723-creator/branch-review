@@ -13,13 +13,15 @@ const closedStates = ['closed', 'retired'];
 const decisionStages = ['question', 'question_retry', 'evidence'];
 const budgetErrors = ['PROVIDER_CALL_TIMEOUT', 'PROVIDER_TASK_TIME_BUDGET', 'PROVIDER_USAGE_BUDGET'];
 function applyBuildBudget(build, payload) {
-  const value = payload.providerTokenLimit;
-  if (value === undefined) return;
-  const [min, max] = WorkbenchProfile.providerBounds.providerTokenLimit;
-  if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw Error('Set the build token limit between ' + min + ' and ' + max + '.');
+  for (const [key, label] of [['providerTokenLimit', 'token limit'], ['providerTimeSeconds', 'provider time in seconds']]) {
+    const value = payload[key];
+    if (value === undefined) continue;
+    const [min, max] = WorkbenchProfile.providerBounds[key];
+    if (!Number.isSafeInteger(value) || value < min || value > max) {
+      throw Error('Set the build ' + label + ' between ' + min + ' and ' + max + '.');
+    }
+    build[key] = value;
   }
-  build.providerTokenLimit = value;
 }
 const repairLimitMessage = 'This run reached its repair limit. Review the last audit before starting another build.';
 const workflowChangedMessage = build => 'Agent settings changed after this run started. ' + (build.mode === 'task'
@@ -277,8 +279,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     else if (!isDeepStrictEqual(saved, marker)) throw Error('The recorded build scope changed.');
     if (verificationOnly) await store.retryVerification(task.id, verificationSource);
     const savedLimits = await runtimeProfile(previous, task.id);
-    const limits = build.providerTokenLimit === undefined ? savedLimits :
-      {...savedLimits, providerTokenLimit: build.providerTokenLimit};
+    const overrides = Object.fromEntries(['providerTokenLimit', 'providerTimeSeconds']
+      .filter(key => build[key] !== undefined).map(key => [key, build[key]]));
+    const limits = Object.keys(overrides).length ? {...savedLimits, ...overrides} : savedLimits;
     const attempt = {id: id(), job: id(), slice: member, task: task.id, started: now(), outcome: 'running',
       ...(limits && {runtimeProfile: limits}),
       ...(automaticRecovery && {automaticRecovery}),

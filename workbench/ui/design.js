@@ -224,7 +224,7 @@ function designPanel(initialState) {
     return build && !["closed", "retired"].includes(build.status) ? build.id : "plan-" + state.revision;
   }
   function budgetPayload(build = state.builds.at(-1)) {
-    return budgetDraft?.key === planBudgetKey(build) ? {providerTokenLimit: budgetDraft.value} : {};
+    return budgetDraft?.key === planBudgetKey(build) ? budgetDraft.limits : {};
   }
   function planBudget() {
     const current = state.builds.at(-1);
@@ -232,34 +232,39 @@ function designPanel(initialState) {
     const key = planBudgetKey(build);
     const defaults = WorkbenchProfile.providerLimits(active(), data.active);
     const attempt = build?.attempts.at(-1);
-    const value = budgetDraft?.key === key ? budgetDraft.value :
-      build?.providerTokenLimit ?? attempt?.runtimeProfile?.providerTokenLimit ?? defaults.providerTokenLimit;
-    const [min, max] = WorkbenchProfile.providerBounds.providerTokenLimit;
-    const slider = element("input");
-    const exact = element("input");
-    for (const [input, type] of [[slider, "range"], [exact, "number"]]) {
-      input.type = type;
-      input.min = min;
-      input.max = max;
-      input.step = type === "range" ? 1000 : 1;
-      input.value = value;
-      input.disabled = Boolean(build && !["failed", "cancelled"].includes(build.status));
+    function limitControl(name, label, divisor, increment) {
+      const draft = () => budgetDraft?.key === key ? budgetDraft.limits : {};
+      const value = (draft()[name] ?? build?.[name] ?? attempt?.runtimeProfile?.[name] ?? defaults[name]) / divisor;
+      const [min, max] = WorkbenchProfile.providerBounds[name].map(bound => bound / divisor);
+      const slider = element("input");
+      const exact = element("input");
+      for (const [input, type] of [[slider, "range"], [exact, "number"]]) {
+        input.type = type;
+        input.min = min;
+        input.max = max;
+        input.step = type === "range" ? increment : divisor === 1 ? 1 : "any";
+        input.value = value;
+        input.disabled = Boolean(build && !["failed", "cancelled"].includes(build.status));
+      }
+      slider.setAttribute("aria-label", label + " slider");
+      exact.setAttribute("aria-label", "Exact " + label.toLowerCase());
+      const setBudget = amount => {
+        const rounded = Math.round(amount * divisor);
+        budgetDraft = {key, limits: {...draft(), [name]: rounded}};
+        slider.value = exact.value = rounded / divisor;
+      };
+      slider.oninput = () => setBudget(slider.valueAsNumber);
+      exact.onchange = () => {
+        if (Number.isFinite(exact.valueAsNumber) && exact.checkValidity()) setBudget(exact.valueAsNumber);
+        else exact.value = draft()[name] === undefined ? value : draft()[name] / divisor;
+      };
+      return element("div", "plan-budget-limit", element("strong", "", label), element("div", "plan-budget-inputs", slider, exact));
     }
-    slider.setAttribute("aria-label", "Build token limit slider");
-    exact.setAttribute("aria-label", "Exact build token limit");
-    const setBudget = amount => {
-      budgetDraft = {key, value: amount};
-      slider.value = exact.value = amount;
-    };
-    slider.oninput = () => setBudget(slider.valueAsNumber);
-    exact.onchange = () => {
-      if (Number.isSafeInteger(exact.valueAsNumber) && exact.checkValidity()) setBudget(exact.valueAsNumber);
-      else exact.value = budgetDraft?.key === key ? budgetDraft.value : value;
-    };
-    const section = element("section", "plan-budget", element("strong", "", "Build token limit"),
-      element("div", "plan-budget-inputs", slider, exact),
-      element("small", "stage-meta", "Applies to this build. Cached input does not count toward the limit."));
-    if (attempt?.errorCode === "PROVIDER_USAGE_BUDGET" && build.error) {
+    const section = element("section", "plan-budget", element("strong", "", "Build budget"),
+      limitControl("providerTokenLimit", "Token limit", 1, 1000),
+      limitControl("providerTimeSeconds", "Provider time limit (minutes)", 60, 1),
+      element("small", "stage-meta", "These limits apply to this build. Cached input does not count toward the token limit."));
+    if (["PROVIDER_USAGE_BUDGET", "PROVIDER_TASK_TIME_BUDGET"].includes(attempt?.errorCode) && build.error) {
       section.append(element("p", "evidence-warning", build.error));
       if (!state.restartRequired && !state.resumeBlocker) {
         section.append(button("Resume run", () =>

@@ -80,12 +80,15 @@ test('a build token limit blocks dispatch and can be increased for the same task
   assert.deepEqual(calls, ['plan', 'plan_review']);
   assert.match(blocked.error, /1500 cached input tokens/);
   await assert.rejects(action('design/continue', {build: blocked.id, providerTokenLimit: 1}), /Set the build token limit/);
-  await action('design/continue', {build: blocked.id, providerTokenLimit: 2000});
+  await assert.rejects(action('design/continue', {build: blocked.id, providerTimeSeconds: 59}), /Set the build provider time/);
+  await action('design/continue', {build: blocked.id, providerTokenLimit: 2000, providerTimeSeconds: 2100});
   const resumed = await waitForBuild(coordinator, 'failed');
   assert.equal(resumed.error, 'Stopped after confirming dispatch.');
   assert.equal(resumed.attempts.at(-1).task, blocked.attempts.at(-1).task);
   assert.equal(resumed.providerTokenLimit, 2000);
+  assert.equal(resumed.attempts.at(-1).runtimeProfile.providerTimeSeconds, 2100);
   assert.equal((await store.getProfile()).profiles[profile.active].providerTokenLimit, 5000);
+  assert.equal((await store.getProfile()).profiles[profile.active].providerTimeSeconds, undefined);
   assert.deepEqual(calls, ['plan', 'plan_review', 'build']);
 });
 
