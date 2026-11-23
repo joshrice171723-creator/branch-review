@@ -137,10 +137,11 @@ function normalizedSettings(input) {
 }
 
 export class PreviewProcess {
-  constructor(root, local, directory) {
+  constructor(root, local, directory, parentOrigin) {
     this.root = root;
     this.local = local;
     this.directory = directory;
+    this.parentOrigin = parentOrigin;
     this.children = [];
     this.log = null;
     this.queue = Promise.resolve();
@@ -245,6 +246,7 @@ export class PreviewProcess {
       const commit = await gitRead(this.root, 'rev-parse', 'HEAD').then(value => value.trim(), () => '');
       const expanded = expandRecipe(recipe, {port, root: this.root, side: 'workspace', data, commit});
       const env = {...process.env, ...expanded.env, BRANCH_REVIEW_DATA: data};
+      if (this.parentOrigin) env.BRANCH_REVIEW_PREVIEW_PARENT = this.parentOrigin;
       if (port) env.PORT = String(port);
       const command = argv => resolveProjectCommand(argv, {cwd, env, desktop: settings.mode === 'desktop'});
       this.children = [];

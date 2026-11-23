@@ -119,8 +119,7 @@ test('starts a web preview, captures desktop output, and leaves external preview
   });
   const post = (route, args = {}) => environment.dispatch('POST', '/api/workspace/' + route, args);
   const status = () => environment.dispatch('GET', '/api/workspace/preview');
-  const {previews} = await environment.dispatch('GET', 'project-capabilities');
-  await post('preview/start', {candidateId: previews[0].id});
+  await post('design/app-process/auto');
   const web = await until(async () => {
     const app = await status();
     return app.state === 'running' && app;
@@ -128,6 +127,7 @@ test('starts a web preview, captures desktop output, and leaves external preview
   assert.equal(web.owned, true);
   assert.equal(await fetch(web.url).then(response => response.text()), '<h1>Owned preview</h1>');
   assert.equal((await post('preview/stop')).owned, false);
+  assert.equal((await post('design/app-process/auto')).owned, false);
   await post('design/app-process/setup', {argv: ['desktop.mjs'], cwd: '.', url: ''});
   await post('design/app-process/start');
   await until(async () => (await status()).log.includes('desktop output'));

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "previews": [
+    {
+      "id": "branch-review-web",
+      "label": "Branch Review web app",
+      "mode": "web",
+      "url": "http://127.0.0.1:{port}",
+      "argv": [
+        "node",
+        "--input-type=module",
+        "-e",
+        "await (await import('./server.mjs')).startServer({allowPortFallback:true})"
+      ],
+      "env": {
+        "BRANCH_REVIEW_HOME": "{data}",
+        "BRANCH_REVIEW_DESKTOP_REPOSITORY": "{root}",
+        "BRANCH_REVIEW_PORT": "{port}"
+      }
+    }
+  ]
+}

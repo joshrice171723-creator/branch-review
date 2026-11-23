@@ -256,6 +256,36 @@ function designPanel(initialState) {
       try { state = await api("design"); redraw(); projectConversation?.update(state); } catch {}
     } finally { busy = false; panel.removeAttribute("aria-busy"); }
   }
+  let editPlan = false;
+  let planHeight = 340;
+  function renderPlan(text, target) {
+    target.replaceChildren();
+    let list, code;
+    for (const line of text.split(/\r?\n/)) {
+      if (/^\s*```/.test(line)) {
+        if (code) code = null;
+        else { code = element("code"); target.append(element("pre", "", code)); }
+        list = null;
+        continue;
+      }
+      if (code) { code.textContent += line + "\n"; continue; }
+      const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+      const bullet = /^\s*([-+*]|\d+\.)\s+(.+)$/.exec(line);
+      if (!line.trim()) { list = null; continue; }
+      const tag = bullet ? (/\d/.test(bullet[1]) ? "ol" : "ul") : null;
+      if (tag && list?.localName !== tag) { list = element(tag); target.append(list); }
+      if (!tag) list = null;
+      const node = element(heading ? "h" + Math.max(3, heading[1].length) : bullet ? "li" :
+        /^(Acceptance criteria|Verification|Scope|Constraints)$/i.test(line.trim()) ? "h3" : "p");
+      for (const fragment of (heading?.[2] || bullet?.[2] || line).split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g)) {
+        if (fragment.startsWith("**") && fragment.endsWith("**")) node.append(element("strong", "", fragment.slice(2, -2)));
+        else if (fragment.startsWith("`") && fragment.endsWith("`")) node.append(element("code", "", fragment.slice(1, -1)));
+        else if (fragment.startsWith("*") && fragment.endsWith("*") && fragment.length > 2) node.append(element("em", "", fragment.slice(1, -1)));
+        else node.append(fragment);
+      }
+      (list || target).append(node);
+    }
+  }
   function taskEditor() {
     const editing = localDraft.plan?.title !== undefined ? localDraft.plan : {title: state.title || "", plan: state.plan};
     const baseRevision = localDraft.plan?.title !== undefined ? localDraft.baseRevision : state.revision;
@@ -263,13 +293,39 @@ function designPanel(initialState) {
     const draft = element("textarea", "plan-text");
     draft.dataset.designFocus = "plan";
     draft.value = editing.plan;
+    draft.setAttribute("aria-label", "Plan and acceptance criteria");
     draft.addEventListener("input", () => { editing.plan = draft.value; edited(); });
+    const rendered = element("div", "plan-readable");
+    const placeholder = element("p", "", "Draft the plan in Project conversation or select Edit plan.");
+    const toggle = button("✎", () => {
+      editPlan = !editPlan;
+      if (!editPlan) planHeight = Math.max(340, draft.offsetHeight);
+      updatePlanView();
+      if (editPlan) draft.focus();
+    });
+    toggle.classList.add("plan-edit-toggle");
+    function updatePlanView() {
+      draft.hidden = !editPlan;
+      rendered.hidden = editPlan;
+      toggle.setAttribute("aria-pressed", String(editPlan));
+      toggle.setAttribute("aria-label", editPlan ? "Show formatted plan" : "Edit plan");
+      toggle.title = editPlan ? "Show formatted plan" : "Edit plan";
+      // Preserve the vertical resize when switching between edit and reading.
+      draft.style.minHeight = rendered.style.minHeight = planHeight + "px";
+      if (!editPlan) {
+        if (editing.plan.trim()) renderPlan(editing.plan, rendered);
+        else rendered.replaceChildren(placeholder);
+      }
+    }
+    updatePlanView();
     const summary = element("p", "design-draft-state");
     const save = button("Save draft", () => change("draft", {...editing, revision: baseRevision}, {reset: true}));
     save.dataset.designFocus = "plan-save";
     const discard = button("Discard local draft", () => { clearPlanDraft(); draw(); });
     const questions = projectState.questions.filter(q => q.required);
     const agreement = element("details", "", element("summary", "", "Build agreement"));
+    agreement.open = launchForm.agreementOpen;
+    agreement.addEventListener("toggle", () => { launchForm.agreementOpen = agreement.open; });
     for (const question of questions) {
       agreement.append(field(question.text, select(launchForm.decisions[question.id], question.options.map(value => [
         value, question.option_details?.find(option => option.id === value)?.label || value
@@ -311,7 +367,9 @@ function designPanel(initialState) {
       updateActions();
     }
     updateActions();
-    const result = box("Plan", field("Change title", title), field("Plan and acceptance criteria", draft), summary,
+    const result = box("Plan", field("Change title", title),
+      element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
+      rendered, draft, summary,
       agreement, element("p", "", "Start build approves this plan and confirms the agreement."),
       element("div", "actions", save, discard, start));
     if (baseRevision !== state.revision) result.append(
@@ -492,8 +550,9 @@ function designPanel(initialState) {
       if (frame) frame.src = frame.src;
     });
     const pages = element("div");
+    const automaticControls = element("div", "design-stack");
     const tools = element("div", "actions", open, fullScreen, refreshView, captureView);
-    mount.append(tools, pages, previewStatus, viewport);
+    mount.append(tools, pages, previewStatus, automaticControls, viewport);
     let process, checked, source, timer, pending = false, version = 0;
     let pageAddress = "", baseAddress = "";
     const publishView = () => {
@@ -625,6 +684,20 @@ function designPanel(initialState) {
       if (document.activeElement !== output) output.value = next.log || "No output yet.";
       controls();
       embed();
+      if (inPlan) {
+        automaticControls.replaceChildren();
+        if (!source && next.message) previewStatus.textContent = next.message;
+        if (!source && next.choices?.length) {
+          const appPicker = select("", [["", "Select the app"],
+            ...next.choices.map(item => [item.id, item.label])], value => {
+            if (value) void startAutomatic({id: value, retry: true});
+            return true;
+          });
+          automaticControls.append(field("Project app", appPicker));
+        } else if (!source && ["exited", "stopped"].includes(next.state)) {
+          automaticControls.append(button("Start project preview", () => startAutomatic({retry: true})));
+        }
+      }
     }
     function follow() {
       clearTimeout(timer);
@@ -640,6 +713,16 @@ function designPanel(initialState) {
         } catch (error) { processStatus.textContent = error.message; }
       }
       follow();
+    }
+    async function startAutomatic(options = {}) {
+      if (pending || !mount.isConnected) return;
+      pending = true;
+      version++;
+      controls();
+      previewStatus.textContent = "Preparing project preview…";
+      try { showProcess(await api("design/app-process/auto", options)); }
+      catch (error) { previewStatus.textContent = error.message; }
+      finally { pending = false; controls(); follow(); }
     }
     async function run(action) {
       if (pending) return;
@@ -668,14 +751,18 @@ function designPanel(initialState) {
       }
     }
     const reload = button("Refresh preview", () => { checkAddress(); refresh(); });
-    queueMicrotask(() => { checkAddress(); refresh(); });
+    queueMicrotask(async () => {
+      await checkAddress();
+      if (inPlan && !checked?.url) await startAutomatic();
+      else await refresh();
+    });
     fullScreen.hidden = refreshView.hidden = captureView.hidden = true;
     const setup = box("Manage preview process", discovered, field("Preview mode", previewMode), field("Executable", program),
       field("Arguments (one literal argument per line)", args), field("Working directory", cwd),
       element("div", "actions", start, stop), processStatus, details);
     const addressControls = element("div", "design-stack", field("App address", address), element("div", "actions", save, reload));
     if (inPlan) return box("Live project preview", mount,
-      element("details", "", element("summary", "", "Preview setup"), addressControls, setup));
+      element("details", "", element("summary", "", "Preview settings"), addressControls, setup));
     return element("div", "design-stack", box("Project app preview", addressControls, mount), setup);
   }
   function review(build, group, index, continueBuild) {
@@ -1194,6 +1281,7 @@ function designPanel(initialState) {
       if (!await change("continue", {build}, {wait: "Starting repair…"})) throw Error(status.textContent);
     };
     projectConversation.goToDesign = (next, focus) => {
+      if (next === "Plan" && focus === "plan") editPlan = true;
       tab = next;
       layoutSetting("tab", tab);
       if (state) draw();

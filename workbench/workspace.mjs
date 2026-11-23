@@ -9,7 +9,7 @@ import {toolDescriptions, workspaceMcp} from './mcp.mjs';
 
 const environmentRoutes = new Set([
   'environment','project-capabilities','project-instruction','design/preview',
-  'design/app-process','design/app-process/setup','design/app-process/start','design/app-process/stop',
+  'design/app-process','design/app-process/setup','design/app-process/start','design/app-process/stop','design/app-process/auto',
   'prepare','cleanup/preview','cleanup','attachments','profile/import','profile/export','profile/parse',
   'capabilities','preview','preview/setup','preview/start','preview/stop'
 ]);
@@ -18,7 +18,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   const quality = await createQuality({repository});
   const tasks = await createStore(repository,{qualityPin:quality.pin,qualityCheck:quality.taskCheck});
   let coordinator;
-  const environment = await createEnvironment({repository,store:tasks,git,local,
+  const environment = await createEnvironment({repository,store:tasks,git,local,origin,
     defaultProfile:()=>WorkbenchProfile.initial(presetDocuments),
     savedPreview:async()=> (await coordinator.dispatch('design')).preview,
     selectedAgent,
@@ -65,6 +65,8 @@ export async function createWorkspace({repository,local,git,origin,token,review,
       case 'project_capabilities': return readEnvironment('project-capabilities');
       case 'inspect_environment': return readEnvironment('environment');
       case 'prepare_environment': return prepare();
+      case 'start_project_preview': return environment.dispatch('POST','design/app-process/auto',
+        {...values,retry:true},new URLSearchParams());
       case 'preview_cleanup': return environment.dispatch('POST','cleanup/preview',{},new URLSearchParams());
       case 'clean_environment': return environment.dispatch('POST','cleanup',values,new URLSearchParams());
       case 'set_repair_budget':

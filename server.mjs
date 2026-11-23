@@ -607,7 +607,9 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
     }
     if(req.method!=='GET'||!['/','/app.js','/apex-panel.js','/error-message.js','/workflow.js','/guided.js','/review-model.js','/drafts.js','/shortcuts.js','/preview-routes.js','/frame-pool.js','/workbench.js','/change-request.js','/photo-markup.js','/branch-history.js','/batch-review.js','/project-setup.js','/onboarding.js','/activity.js','/office-model.js','/qa-model.js','/progress-model.js','/evidence-tools.js','/style.css','/theme.js'].includes(url.pathname))return json(res,404,{error:'Not found'});
     const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
-    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' "+[...previewOrigins,'http://127.0.0.1:*','http://localhost:*','https:'].filter(Boolean).join(' ')+"; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"});
+    const parent = process.env.BRANCH_REVIEW_PREVIEW_PARENT || '';
+    const frameAncestor = /^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(parent) ? parent : "'none'";
+    res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' "+[...previewOrigins,'http://127.0.0.1:*','http://localhost:*','https:'].filter(Boolean).join(' ')+"; frame-ancestors "+frameAncestor+"; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
   }catch(error){if(!res.headersSent)json(res,400,{error:error.message});else res.end();}
 }

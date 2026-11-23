@@ -66,7 +66,8 @@ async function cleanupEntries(folder) {
   return entries;
 }
 
-export function createEnvironment({repository, store, local, projectId, defaultProfile, isActive, savedPreview, selectedAgent}) {
+export function createEnvironment({repository, store, local, projectId, defaultProfile, isActive, savedPreview, selectedAgent, origin}) {
+  let automaticPreviewStopped = false;
   let rootPromise, directoryWrite, preview, queue = Promise.resolve();
   const repo = () => rootPromise ||= realpath(repository);
   const stateDirectory = path.resolve(local || path.join(repository, '.harness'));
@@ -124,7 +125,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
 
   async function getPreview() {
     const root = await repo();
-    return preview ||= new PreviewProcess(root, stateDirectory, directory);
+    return preview ||= new PreviewProcess(root, stateDirectory, directory, origin);
   }
 
   async function capabilities({routes = true} = {}) {
@@ -275,6 +276,31 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     return (await getPreview()).setup(input);
   }
 
+  async function autoPreview(input) {
+    const app = await getPreview();
+    const current = await app.status();
+    if (process.env.BRANCH_REVIEW_PREVIEW_PARENT) return current;
+    if (["external", "running", "starting"].includes(current.state)) return current;
+    if (automaticPreviewStopped && !input.retry) return current;
+    if (current.state === "exited" && !input.retry) return current;
+    if (await savedPreview?.()) return current;
+    if (current.settings) {
+      if (current.settings.mode !== "web") return current;
+      return app.start();
+    }
+    const candidates = (await capabilities({routes: false})).previews.filter(row =>
+      row.url && ["web", "external"].includes(row.mode));
+    const declared = candidates.filter(row => row.source.some(source => source.path === "workbench-capabilities.json"));
+    const choices = declared.length ? declared : candidates;
+    const selected = input.id ? candidates.find(row => row.id === input.id) :
+      choices.length === 1 ? choices[0] : null;
+    if (input.id && !selected) throw Error("Choose a detected project preview.");
+    if (!selected) return {...current, choices: choices.map(({id, label}) => ({id, label})),
+      message: choices.length ? "Choose the project app to preview." : "No web preview was detected. Set an app address in Preview settings."};
+    await app.setup(selected);
+    return app.start();
+  }
+
   async function dispatch(method, route, payload = {}, searchParams = new URLSearchParams()) {
     const endpoint = route.replace(/^\/?(?:api\/)?(?:workspace\/)?/, '');
     const requestedProject = payload?.projectId || searchParams.get('projectId');
@@ -299,6 +325,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       case 'GET preview': return (await getPreview()).status();
       case 'POST design/app-process/setup':
       case 'POST preview/setup': return write(() => setupPreview(payload));
+      case 'POST design/app-process/auto': return write(() => autoPreview(payload));
       case 'POST design/app-process/start':
       case 'POST preview/start':
         return write(async () => {
@@ -306,7 +333,10 @@ export function createEnvironment({repository, store, local, projectId, defaultP
           return (await getPreview()).start();
         });
       case 'POST design/app-process/stop':
-      case 'POST preview/stop': return write(async () => (await getPreview()).stop());
+      case 'POST preview/stop': return write(async () => {
+        automaticPreviewStopped = true;
+        return (await getPreview()).stop();
+      });
       default: return undefined;
     }
   }

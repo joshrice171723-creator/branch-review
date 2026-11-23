@@ -17,6 +17,7 @@ const tools = [
   tool('project_capabilities','Discover checks, preview commands, files, and Git references.'),
   tool('inspect_environment','Inspect the selected project environment.'),
   tool('prepare_environment','Prepare the selected project environment.',{},[],true),
+  tool('start_project_preview','Start the detected web preview for the selected project.',{id:string},[],true),
   tool('preview_cleanup','List managed files that can be cleaned.',{},[],true),
   tool('clean_environment','Clean the managed files in the confirmed preview.',{previewId:string},['previewId'],true),
   tool('set_repair_budget','Set the repair limit in a workflow profile.',{profile,value:{type:'integer',minimum:1,maximum:20}},['profile','value'],true),

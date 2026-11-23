@@ -264,6 +264,12 @@ async function applyAdapter(root, inventory, paths, config, files) {
         if (kind === 'preview') {
           details.mode = item.mode || (item.url ? 'web' : 'desktop');
           if (!['web', 'desktop', 'external'].includes(details.mode)) throw Error('Choose a preview mode.');
+          if (item.env !== undefined) {
+            if (!item.env || typeof item.env !== 'object' || Array.isArray(item.env) ||
+                Object.entries(item.env).some(([key, value]) => !/^\w+$/.test(key) ||
+                  typeof value !== 'string' || value.includes('\0'))) throw Error('Enter named preview environment values.');
+            details.env = item.env;
+          }
           if (item.url) {
             const address = new URL(item.url.replaceAll('{port}', '4000'));
             if (!['http:', 'https:'].includes(address.protocol) || address.username || address.password) throw Error('Enter an HTTP or HTTPS preview address.');
