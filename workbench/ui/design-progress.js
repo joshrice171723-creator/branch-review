@@ -219,7 +219,9 @@ function progressPanel(openBuild, onProgress) {
   const actions=element("div","actions",mode);
   const log=button("Show log",()=>showDesignLog(run.id,run.running));
   if(openBuild)actions.append(button("Build options",openBuild),log);
-  box.append(heading(active().name,"",actions),taskTitle,coordinatorInfo,shell);
+  const toolbar=element("div","panel-head run-map-toolbar",actions);
+  box.setAttribute("aria-label","Build progress");
+  box.append(toolbar,taskTitle,coordinatorInfo,shell);
   shell.append(grid,detail);
   let run, group, previewNext=false, selectedStage=null, previousState;
   const definitions=WorkbenchProfile.roles;
@@ -241,6 +243,7 @@ function progressPanel(openBuild, onProgress) {
     const pick=selectedStage || failure?.role || current?.evidenceRequest?.role || (gate?.waiting?"humanReview":last?.role || "plan");
     mode.hidden=!run;
     log.hidden=!run;
+    toolbar.hidden=!run && !openBuild;
     mode.textContent=previewNext?"Show current run":"Preview next build";
     const routeLabel={visual:"Automatic visual route", expanded:"Full audit required by the diff", full:"Full workflow"}[current?.routing];
     taskTitle.textContent=current ? [current.title, routeLabel, current.running && "Running"].filter(Boolean).join(" · ") : "Next build";
@@ -276,10 +279,23 @@ function progressPanel(openBuild, onProgress) {
       const status=failed?(limited?"Quota reached":budgetStopped?"Limit reached":failure.repairLimit?"Repair limit reached":"Stopped"):
         needsEvidence?"Needs evidence":skipped?"Skipped":waiting?"Waiting for you":live?(recovery?"Recovering":"Running"):isReturn?"Returned":
         completed?"Complete":key==="repair"&&!attempt?"If requested":key==="push"?"On request":attempt?"Paused":"Upcoming";
-      const card=button("",()=>{selectedStage=key;draw();},"stage-card run-map-card");
+      const reviewTarget=key==="humanReview" && gate?.target;
+      const card=button("",async()=>{
+        if (!reviewTarget) { selectedStage=key; draw(); return; }
+        card.disabled=true;
+        try {
+          const review=await api("design/group?" + new URLSearchParams(reviewTarget));
+          if(!review.runId || ["branch-changed","design-stale","different-preview"].includes(review.status)) {
+            throw Error(review.message || "This plan does not have a current review commit.");
+          }
+          await openReview(review.runId);
+        } catch(error) { notify(error.message); }
+        finally { card.disabled=false; }
+      },"stage-card run-map-card");
       card.dataset.stageKey=key;card.dataset.status=status;
       if(failed)card.dataset.failed="";
-      card.setAttribute("aria-pressed",String(key===pick));
+      if(reviewTarget) card.setAttribute("aria-label","Open Branch Review for " + current.title);
+      else card.setAttribute("aria-pressed",String(key===pick));
       if(live)card.setAttribute("aria-current","step");
       const glyph = failed ? element("span","run-map-error-icon","!") :
         live ? element("span","runtime-spinner") : stageIcon(role);

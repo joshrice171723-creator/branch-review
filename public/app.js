@@ -92,7 +92,8 @@ let allBranches = [],
   selectionGeneration = 0, selectedComparison = null, commitBranchSha = '', diffGeneration = 0;
 try{openingSelection=JSON.parse(sessionStorage.getItem('branch-review:opening') || 'null');if(openingSelection){openingSelection.starting=false;selected=openingSelection;}}catch{}
 const reviewWorkflow = workflow({api,getState:()=>currentState,getSide:()=>active,error,poll,
-  reopen:(force=true)=>mountFrames(currentState,force),openHandoff:()=>projectWorkbench.openReview()});
+  reopen:(force=true)=>mountFrames(currentState,force),openHandoff:()=>projectWorkbench.openReview(),
+  onApproved:record=>projectWorkbench.completeReview(record)});
 const reviewTools=workbench({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),previewReady:()=>previews.isPrepared(currentState.preparedReview),poll,error,reopen:()=>mountFrames(currentState,true)});
 const batch=batchReview({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,capture:()=>evidence.snapshot(),poll,error,
   repair:(record,findings)=>projectWorkbench.repair(record,findings)});

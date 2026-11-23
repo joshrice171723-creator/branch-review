@@ -24,7 +24,7 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
   const draftPanel = byId('apex-pr-draft-panel');
   const draftText = byId('apex-pr-draft-text');
   let selectedRun, receipt, requestId = 0, opening, panel, qa = false, selectedStage = 'plan';
-  let deliveryKey, approvalKey;
+  let deliveryKey, approvalKey, approvalSync;
   function message(text) {
     const target = qa ? deliveryStatus : status;
     target.textContent = text;
@@ -68,6 +68,17 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
       message(error.message);
     });
   }
+  async function syncApproval(handoff, runtime) {
+    const key = handoff.runId + ':' + handoff.commit;
+    if (approvalKey !== key) {
+      approvalKey = key;
+      approvalSync = runtime.syncReview({build:handoff.taskBuild,sha:handoff.commit}).catch(error => {
+        if (approvalKey === key) { approvalKey = null; approvalSync = null; }
+        throw error;
+      });
+    }
+    await approvalSync;
+  }
   async function showSelection() {
     const request=++requestId;
     const reviewState=byId('apex-review-state'), checks=byId('apex-review-checks');
@@ -107,10 +118,7 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
       checks.append(row);
     }
     if(handoff.status==='approved'){
-      if (handoff.taskBuild && panel && approvalKey !== run) {
-        await panel.syncReview({build:handoff.taskBuild,sha:handoff.commit});
-        approvalKey = run;
-      }
+      if (handoff.taskBuild && panel) await syncApproval(handoff, panel);
       const branch=handoff.ref.slice('refs/heads/'.length);
       const destination=handoff.pushTarget;
       const pushed=handoff.delivery?.repository===destination;
@@ -228,6 +236,21 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
     showWorkspace(false);
     return load();
   }
+  async function completeReview(record) {
+    const runId = record?.identity?.workbenchRun;
+    if (!runId || getState().record?.id !== record.id) return;
+    const handoff = await api('/api/workbench-review?run=' + encodeURIComponent(runId));
+    if (!handoff.taskBuild) return;
+    if (handoff.status !== 'approved' || handoff.reviewId !== record.id || handoff.commit !== record.identity.changed) {
+      throw Error('The active review no longer matches this plan.');
+    }
+    const runtime = await load();
+    if (!runtime) throw Error('Open Workbench to continue with the approved plan.');
+    await syncApproval(handoff, runtime);
+    if (getState().record?.id !== record.id) return;
+    showWorkspace(false);
+    runtime.openPlan();
+  }
 
   async function repair(record, findings) {
     const runtime = await load();
@@ -338,7 +361,7 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
     message('Created repair task '+result.task_id+'.');
   });
   return {
-    open, inspect, render, repair,
+    open, inspect, render, repair, completeReview,
     async prepareChecks(route) {
       const runtime = await open();
       runtime?.openQuality('prepare',{route});

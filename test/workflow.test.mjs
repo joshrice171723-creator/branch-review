@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { workflow } from '../public/workflow.js';
+import { apexPanel } from '../public/apex-panel.js';
 import { findingKey, loadDraft, saveDraft } from '../public/drafts.js';
 import { defaultManifest } from '../reviews.mjs';
 
@@ -27,7 +28,8 @@ function harness(t, options = {}) {
   const state = {status:'ready', busy:false, repository:'test', record:{id:'review-a',identity:{ref:'refs/heads/test',base:'aaaaaaa',changed:'bbbbbbb'},manifest:defaultManifest,checks:{},issues:[],updatedAt:'1'}};
   let side = 'changed';
   const view = workflow({getState:()=>state,getSide:()=>side,error:message=>{elements.error.textContent=message;},reopen:options.reopen || (()=>{}),
-    api:async(path,data)=>{calls.push({path,data});if(path==='/api/history')return [];return options.api?.(path,data);},poll:async()=>view.render(state)});
+    api:async(path,data)=>{calls.push({path,data});if(path==='/api/history')return [];return options.api?.(path,data);},poll:async()=>view.render(state),
+    onApproved:options.onApproved});
   view.render(state);
   return {elements,state,view,calls,saved,switchSide(next){side=next;view.viewChanged();}};
 }
@@ -256,6 +258,36 @@ test('failed approval keeps the reviewer and approval action available',async t=
   h.view.render(h.state);e.reviewer.value='Josh';await e['approve'].onclick();
   assert.equal(e.reviewer.value,'Josh');assert.equal(e['results-action'].textContent,'Approve changes');assert.equal(e['results-action'].disabled,false);assert.equal(r.approval,undefined);
   assert.match(e.error.textContent,/Main changed/);
+});
+
+test('a saved Workbench approval returns to its exact plan once',async t=>{
+  const synced=[], opened=[];
+  let integration;
+  const h=harness(t,{onApproved:record=>integration.completeReview(record),api:async(path,data)=>{
+    if(path==='/api/approve') h.state.record.approval={reviewer:data.reviewer,commit:h.state.record.identity.changed};
+  }});
+  const record=h.state.record;
+  record.identity.workbenchRun='specific-run';
+  record.integration={sha:record.identity.changed,main:record.identity.base};
+  for(const item of record.manifest.scenarios)item.steps.forEach((_,i)=>record.checks[`${item.id}:${i}`]=true);
+  globalThis.location={origin:'http://127.0.0.1:4338'};
+  t.after(()=>{delete globalThis.location;});
+  integration=apexPanel({getState:()=>h.state,api:async path=>{
+    if(path==='/api/workbench')return {installed:true};
+    if(path==='/api/workbench-open')return {result:{src:'/workspace/',managed:true}};
+    assert.equal(path,'/api/workbench-review?run=specific-run');
+    return {taskBuild:'specific-plan',runId:'specific-run',reviewId:record.id,commit:record.identity.changed,
+      status:record.approval?'approved':'reviewing'};
+  },loadPanel:async()=>({mount:async()=>({
+    syncReview:async payload=>synced.push(payload),
+    openPlan:()=>opened.push(record.id)
+  })})});
+  h.view.render(h.state);
+  h.elements.reviewer.value='Reviewer';
+  await h.elements.approve.onclick();
+  assert.deepEqual(synced,[{build:'specific-plan',sha:record.identity.changed}]);
+  assert.deepEqual(opened,[record.id]);
+  assert.equal(h.elements['change-workspace'].dataset.qa,'false');
 });
 
 test('latest fix opens a retest panel and requires completed checks before explicit verification',async t=>{

@@ -41,3 +41,5 @@
 @media(prefers-reduced-motion:reduce){.run-map .runtime-spinner{animation:none}}
 @media(max-width:800px){.run-map-body{grid-template-columns:1fr}.run-map-detail{border:0;padding:0}.run-map-task{padding-inline:14px}.run-map-body{padding-inline:14px}}
 @media(max-width:410px){.run-map-grid{grid-template-columns:1fr 1fr}.run-map-card{padding:5px}.run-map-card .stage-icon{display:none}}
+.run-map-toolbar .actions{margin-inline-start:auto}
+.run-map-toolbar[hidden] + .run-map-task{padding-top:14px}

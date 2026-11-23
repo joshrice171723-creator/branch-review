@@ -925,6 +925,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         loop.fullAudit ? 'expanded' : 'full'}),
       question: ['question', 'question_retry'].includes(loop.stage) ? loop.question : ''},
       review: {waiting: build.status === 'review', approved: !!group.sha && group.reviews.at(-1)?.sha === group.sha,
+        ...(group.sha && !group.pending.length && {target: {build: build.id, group: build.index}}),
         pushed: !!group.sha && group.pushed?.sha === group.sha,
         pushMs: group.pushed?.sha === group.sha ? group.pushed?.milliseconds : undefined,
         evidence: {humanReview: statuses(gateEvidence('humanReview', build, group)),

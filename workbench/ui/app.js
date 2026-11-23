@@ -37,7 +37,7 @@ function stageChanged(stage) {
 
 function openReview(runId) {
   if (signal.aborted) return;
-  Promise.resolve().then(() => hostOptions.onReview(runId)).catch(error => notify(error.message));
+  return Promise.resolve().then(() => hostOptions.onReview(runId)).catch(error => notify(error.message));
 }
 
 function reviewLink(link, runId) {

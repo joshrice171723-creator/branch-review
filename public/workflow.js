@@ -18,7 +18,7 @@ export async function mergeAndPublish(api, state, wait = ms => new Promise(resol
   }
   await api('/api/publish',{id,confirmation:`PUBLISH ${sha} TO ${state.publishTarget}`});
 }
-export function workflow({api, getState, getSide, error, poll, reopen, openHandoff}) {
+export function workflow({api, getState, getSide, error, poll, reopen, openHandoff, onApproved}) {
   let scenario = 'intake', rendered = '', screenshot = null, screenshotKey = null, screenshotContext = null, draftKey = '', savingFinding = false, capturing = false;
   const retestNotes = new Map();
   const contexts = {original:{}, changed:{}};
@@ -33,7 +33,7 @@ export function workflow({api, getState, getSide, error, poll, reopen, openHando
   const currentKey = () => findingKey(getState().record?.id, scenario, getSide());
   const notice = message => { $('review-notice').textContent = message; if($('problem-status'))$('problem-status').textContent=message; };
   async function act(action, data = {}) {
-    try { if(!await guide.flush())return;error(''); await api('/api/' + action, {id:getState().record?.id, ...data});if(action==='resolve'){const key=`${getState().record.id}:${data.issueId}`;retestNotes.delete(key);saveDraft(localStorage,`branch-review:retest:${key}`,{expected:'',actual:''});} notice(action === 'check' ? 'Checklist saved.' : action === 'resolve' ? 'Retest result saved.' : action === 'approve' ? 'Approval saved for this exact version.' : 'Request accepted.'); }
+    try { if(!await guide.flush())return false;error(''); await api('/api/' + action, {id:getState().record?.id, ...data});if(action==='resolve'){const key=`${getState().record.id}:${data.issueId}`;retestNotes.delete(key);saveDraft(localStorage,`branch-review:retest:${key}`,{expected:'',actual:''});} notice(action === 'check' ? 'Checklist saved.' : action === 'resolve' ? 'Retest result saved.' : action === 'approve' ? 'Approval saved for this exact version.' : 'Request accepted.'); return true; }
     catch(e) { error(e.message); }
     finally { await poll(); }
   }
@@ -122,7 +122,10 @@ export function workflow({api, getState, getSide, error, poll, reopen, openHando
     const reviewer=$('reviewer').value.trim();
     if(!reviewer){error('Enter your name to approve these changes.');$('reviewer').focus();return;}
     approving=true;render(state);
-    try{await act('approve',{reviewer});}finally{approving=false;render(getState());}
+    try{
+      if(await act('approve',{reviewer})) await onApproved?.(state.record);
+    }catch(e){error('Approval was saved. '+e.message);}
+    finally{approving=false;render(getState());}
   };
   $('results-action').onclick=async()=>{
     const state=getState(),r=state.record;
