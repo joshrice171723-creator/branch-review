@@ -736,9 +736,15 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return configurationFor(await selected(id));
   }
 
-  async function configurationFor(run) {
+  async function pinnedConfiguration(run) {
     return run.task.configuration ?? await readJson(run.taskDir, 'execution_config.json').catch(missing) ??
       projectedConfig(await config(), run.task.profile, run.task.quality);
+  }
+
+  async function configurationFor(run) {
+    const pinned = await pinnedConfiguration(run);
+    const added = (await records(run.taskDir, 'lifecycle')).findLast(row => row.verification_checks)?.verification_checks;
+    return added?.length ? {...pinned, checks: [...pinned.checks, ...added]} : pinned;
   }
 
   async function agreementIssues(run) {
@@ -759,7 +765,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     }
     if (task.profile && task.profile_sha256 !== fingerprint(task.profile)) issues.push('The pinned profile differs from the task agreement.');
     const frozen = await readJson(taskDir, 'execution_config.json').catch(missing);
-    if (frozen && fingerprint(frozen) !== fingerprint(settings)) issues.push('The frozen execution configuration changed.');
+    if (frozen && fingerprint(frozen) !== fingerprint(await pinnedConfiguration(run))) issues.push('The frozen execution configuration changed.');
     if (!task.configuration && frozen &&
         fingerprint(projectedConfig(await config(), task.profile, task.quality)) !== fingerprint(frozen)) {
       issues.push('The project execution configuration changed after agreement.');
@@ -1210,13 +1216,15 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       const rounds = (await records(run.taskDir, 'repair_rounds')).length;
       if (operation === 'pause' || operation === 'stop' || operation === 'limit') {
         assert(state.status === 'active', 'Only an active task accepts this action.');
+      } else if (operation === 'retryVerification') {
+        assert(state.status === 'stopped' && state.cause === 'repair_limit', 'Select a build stopped at its repair limit.');
       } else if (operation === 'resume') {
         assert(['paused', 'stopped'].includes(state.status), 'Only a paused or stopped task can resume.');
       } else {
         assert(['active', 'completed'].includes(state.status), 'Resume the task before recording a repair.');
       }
-      if (operation === 'resume' || operation === 'repair') {
-        assert(state.cause !== 'repair_limit', 'This task reached its repair limit.');
+      if (['resume', 'repair', 'retryVerification'].includes(operation)) {
+        assert(operation === 'retryVerification' || state.cause !== 'repair_limit', 'This task reached its repair limit.');
         const active = await activeId(home);
         if (active && active !== run.id) {
           const other = await lifecycle(await selected(active, home));
@@ -1227,6 +1235,16 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       if (operation === 'repair' && state.status === 'active') await requireAgreement(run);
       const snapshot = await sourceSnapshot(await resolvedRoot, run.task);
       const common = {reason:reason.trim(), at:now(), snapshot_sha256:snapshot.snapshot_sha256};
+      if (operation === 'retryVerification') {
+        assert(state.snapshot_sha256 === snapshot.snapshot_sha256, 'Restore the stopped build’s source before retrying verification.');
+        const pinned = await pinnedConfiguration(run);
+        const current = await effectiveConfig();
+        const additions = run.task.quality || current.quality_revision ? [] : current.checks.filter(check =>
+          check.required && !check.benchmark && check.phases?.join(',') === 'after' &&
+          !pinned.checks.some(row => row.name === check.name));
+        await validateChecks({...pinned, checks: [...pinned.checks, ...additions]});
+        common.verification_checks = additions;
+      }
       const reached = operation === 'limit' || operation === 'repair' && rounds >= (run.task.execution?.max_repair_rounds ?? 3);
       const artifacts = [];
       if (operation === 'repair' && !reached) artifacts.push(['repair_rounds/' + identifier() + '.json', json({...common, round:rounds + 1})]);
@@ -1280,5 +1298,6 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),
     pause:(id, reason) => changeLifecycle(id, 'pause', reason), stop:(id, reason) => changeLifecycle(id, 'stop', reason),
     stopAtLimit:(id, reason) => changeLifecycle(id, 'limit', reason),
+    retryVerification:id => changeLifecycle(id, 'retryVerification', 'User requested verification only.'),
     resume:(id, reason = 'Explicit resume request') => changeLifecycle(id, 'resume', reason)};
 }

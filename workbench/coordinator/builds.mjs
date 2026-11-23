@@ -107,6 +107,13 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (attempt.step === 'evidence_blocked') return 'Runtime verification is blocked. Configure the missing check before starting another build.';
     return changedAgents(pinned.task.profile, await store.getProfile()).length ? workflowChangedMessage(build) : '';
   }
+  async function verificationAvailable(build) {
+    const attempt = build?.attempts.at(-1);
+    if (build?.status !== 'failed' || attempt?.step !== 'stopped') return false;
+    const [run, loop] = await Promise.all([store.getRun(attempt.task), files.read(statePath(attempt.task))]);
+    return run.lifecycle.cause === 'repair_limit' && !loop?.design_sha &&
+      ['build_review', 'final_review'].includes(loop?.history.at(-2)?.stage);
+  }
   async function profileMatches(build, profile) {
     if (build.profile === jsonHash(profile)) return true;
     const bytes = await files.bytes('.harness/profile.json', 4_000_000, null);
@@ -137,7 +144,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return {ready: items.filter(row => row.id !== 'review').every(row => row.status === 'ready'), items};
   }
 
-  async function newAttempt(state, build, answer) {
+  async function newAttempt(state, build, answer, verificationOnly) {
     if (!approved(state, build)) throw Error('The approved plan changed. Retire this build before continuing.');
     if (state.branch !== build.branch) throw Error('Restore the configured branch before continuing.');
     const previous = build.attempts.at(-1);
@@ -147,14 +154,22 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (!member) throw Error('This group is waiting for Branch Review.');
     const prior = previous?.slice === member && previous.outcome !== 'completed'
       ? await store.getRun(previous.task) : null;
-    const blocker = await resumeBlocker(build, prior);
+    if (verificationOnly) {
+      const loop = prior && await files.read(statePath(prior.id));
+      if (prior?.lifecycle.cause !== 'repair_limit' || loop?.stage !== 'stopped' ||
+          !['build_review', 'final_review'].includes(loop.history.at(-2)?.stage) || loop.design_sha) {
+        throw Error('Select a build stopped during audit before it produced a review commit.');
+      }
+      if (await commitment(git, build.branch) !== build.base) throw Error('Restore the stopped build’s branch and commit.');
+    }
+    const blocker = verificationOnly ? '' : await resumeBlocker(build, prior);
     if (blocker) throw Error(blocker);
-    let task = prior && ['active', 'paused', 'completed'].includes(prior.lifecycle.status) ? prior.task : null;
-    if (task) {
+    let task = prior && (verificationOnly || ['active', 'paused', 'completed'].includes(prior.lifecycle.status)) ? prior.task : null;
+    if (task && !verificationOnly) {
       const loop = await files.read(statePath(task.id));
       if (loop?.stage === 'stopped') throw Error('The audit return limit was reached. Retire this build before continuing.');
       if (prior.lifecycle.status === 'paused') await store.resume(task.id);
-    } else {
+    } else if (!task) {
       await audit.ensureCleanTarget(build, build.base);
       const profile = await ensureProfile();
       if (!await profileMatches(build, profile)) throw Error('Restore the applied profile before continuing.');
@@ -190,12 +205,13 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const saved = await files.read(markerPath(task.id));
     if (!saved) await files.write(markerPath(task.id), marker);
     else if (!isDeepStrictEqual(saved, marker)) throw Error('The recorded build scope changed.');
+    if (verificationOnly) await store.retryVerification(task.id);
     const attempt = {id: id(), job: id(), slice: member, task: task.id, started: now(), outcome: 'running',
       reason: group.findings.at(-1)?.text ?? previous?.error ?? ''};
     build.attempts.push(attempt);
     build.status = 'working';
     delete build.error;
-    return {build: structuredClone(build), attempt, task, answer};
+    return {build: structuredClone(build), attempt, task, answer, verificationOnly};
   }
 
   async function recordResult(buildId, job, loop) {
@@ -277,14 +293,14 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return {...job};
   }
 
-  async function drive(change, answer) {
+  async function drive(change, answer, verificationOnly = false) {
     const release = await files.acquire(leasePath);
     let handedOff = false;
     try {
       let prepared;
       const state = await design.edit(async state => {
         const build = await change(state);
-        prepared = await newAttempt(state, build, answer);
+        prepared = await newAttempt(state, build, answer, verificationOnly);
       });
       const job = start(prepared, release);
       handedOff = true;
@@ -339,6 +355,14 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       if (!['ready', 'failed', 'cancelled'].includes(build.status)) throw Error('This build is waiting for another action.');
       return build;
     })).state;
+  }
+
+  async function retryVerification(payload) {
+    return (await drive(state => {
+      const build = current(state, payload.build);
+      if (build.status !== 'failed') throw Error('Select the stopped build.');
+      return build;
+    }, undefined, true)).state;
   }
 
   async function cancel(payload) {
@@ -686,7 +710,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     })};
   }
 
-  return {launch, advance, cancel, reconnect, decision, readiness, chat, live, history, progress, step, events, summary, resumeBlocker, busy: () => [...jobs.values()].some(({job}) => ['running', 'cancelling'].includes(job.state)),
+  return {launch, advance, retryVerification, verificationAvailable, cancel, reconnect, decision, readiness, chat, live, history, progress, step, events, summary, resumeBlocker, busy: () => [...jobs.values()].some(({job}) => ['running', 'cancelling'].includes(job.state)),
     async group(payload) {
       const build = current(await design.read(), payload.build);
       return reviewed(build, groupAt(build, payload.group));

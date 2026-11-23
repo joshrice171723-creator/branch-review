@@ -183,7 +183,7 @@ export function createAudit({repository, files, git, store, agent}) {
     await files.append(loopPath(run) + '/activity.jsonl', {run, stage, actor, timestamp: now(), activity: String(message).slice(0, 500)});
   }
 
-  async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget}) {
+  async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly}) {
     const run = task.id;
     const profile = task.profile;
     const config = await store.executionConfig(run);
@@ -241,6 +241,11 @@ export function createAudit({repository, files, git, store, agent}) {
     }
 
     async function returnTo(stage, verdict, reason) {
+      if (state.verificationOnly) {
+        await checkpoint('stopped', reason);
+        await store.stopAtLimit(run, reason);
+        return;
+      }
       const {route, requirementsRoute, limit, provider} = action(stage, profile);
       const next = verdict === 'replan' && stage !== 'plan_review' ? requirementsRoute ?? 'plan' :
         route ?? (stage === 'plan_review' ? 'plan' : 'build');
@@ -375,6 +380,10 @@ export function createAudit({repository, files, git, store, agent}) {
     }
 
     if (!pending) await checkpoint('plan');
+    if (verificationOnly) {
+      state.verificationOnly = true;
+      await checkpoint('checks', 'Retry verification on the existing changes.');
+    }
     if (state.stage === 'completed') return state;
     if (state.stage === 'evidence' && answer) {
       if (await commitment(git, build.branch) !== build.base) throw Error('Restore the exact branch and commit for this task.');
@@ -451,6 +460,7 @@ export function createAudit({repository, files, git, store, agent}) {
         }
       } else if (stage === 'checks') {
         const result = await checkStage('after');
+        if (state.verificationOnly && !result.passed) throw Error('Verification failed. Open Project checks to inspect the recorded result.');
         const requested = new Set(state.auditCheckFailed ?? []);
         Object.assign(state, {checks: result.checks, checked_source: result.source, checked_pass: result.passed,
           auditCheckFailed: result.checks.filter(row => requested.has(row.check) && row.exit_code !== 0).map(row => row.check)});

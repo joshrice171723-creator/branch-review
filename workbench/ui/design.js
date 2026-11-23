@@ -1148,6 +1148,11 @@ function designPanel(initialState) {
         change("continue", {build: build.id}, {wait: "Resuming the run…"}), "button primary"));
       const canRestart = embedded && state.mode === "task" && state.approved === state.revision &&
         build.revision === state.revision && ["failed", "cancelled"].includes(build.status);
+      if (state.verificationAvailable &&
+          state.approved === build.revision && state.revision === build.revision) {
+        controls.append(button("Retry verification", () => change("retry-verification", {build: build.id},
+          {wait: "Running checks on the existing changes…", done: "Verification restarted."}), "button primary"));
+      }
       if (canRestart) {
         const restart = button("Restart build", async () => {
           if (busy || startingFromPlan) return;
@@ -1170,7 +1175,7 @@ function designPanel(initialState) {
               feedback.textContent = restartError?.message || "";
             }
           }
-        }, state.resumeBlocker || state.restartRequired ? "button primary" : "button");
+        }, !state.verificationAvailable && (state.resumeBlocker || state.restartRequired) ? "button primary" : "button");
         const feedback = element("small", "design-status", restartError?.build === build.id ? restartError.message : "");
         feedback.setAttribute("role", "status");
         controls.append(restart, feedback);

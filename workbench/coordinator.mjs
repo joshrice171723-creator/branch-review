@@ -99,7 +99,8 @@ export async function createCoordinator({
       const head = await git('rev-parse', 'HEAD').catch(() => null);
       restartRequired = Boolean(head && head !== current.base);
     }
-    return {...state, checklist, layout, restartRequired, resumeBlocker: await builds.resumeBlocker(current)};
+    return {...state, checklist, layout, restartRequired, resumeBlocker: await builds.resumeBlocker(current),
+      verificationAvailable: !restartRequired && await builds.verificationAvailable(current)};
   }
 
   async function dispatch(route, payload = {}, {method = 'GET'} = {}) {
@@ -134,6 +135,7 @@ export async function createCoordinator({
           return await design.archive(data);
         }
         case 'POST design/continue': return await builds.advance(data);
+        case 'POST design/retry-verification': return await builds.retryVerification(data);
         case 'POST design/cancel': return await builds.cancel(data);
         case 'POST design/reconnect': return await builds.reconnect(data);
         case 'POST design/finding':

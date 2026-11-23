@@ -99,6 +99,47 @@ test('restarts a stopped build with saved agent settings and preserves working c
   assert.equal(await readFile(path.join(repository, 'greeting.txt'), 'utf8'), 'Edit kept from the stopped build');
 });
 
+test('retries verification on the stopped source without rebuilding it', async t => {
+  const {git, store, repository} = await fixture(t);
+  const profile = await store.getProfile();
+  profile.profiles[profile.active].stages.buildReview.limit = 1;
+  await store.setProfile(profile);
+  let builderCalls = 0;
+  const coordinator = await createCoordinator({repository, store, git, async invoke({stage, prompt}) {
+    if (stage === 'plan') return {text: JSON.stringify({plan: ['Update the greeting.']})};
+    if (stage === 'build') {
+      builderCalls++;
+      await writeFile(path.join(repository, 'greeting.txt'), 'After');
+      return {text: 'Updated greeting.'};
+    }
+    if (stage === 'build_review' && !prompt.includes('"check":"desktop_acceptance"')) {
+      return {text: JSON.stringify({verdict: 'repair', reason: 'The acceptance check is missing.'})};
+    }
+    return {text: JSON.stringify({verdict: 'pass', reason: 'Reviewed current evidence.', ...(stage === 'final_review' && {criteria})})};
+  }});
+  t.after(() => coordinator.close());
+  const post = (route, data) => coordinator.dispatch(route, data, {method: 'POST'});
+  const draft = await post('design/draft', {revision: 0, mode: 'task', title: 'Update greeting',
+    plan: 'Edit the greeting.\n\n## Acceptance criteria\n- The greeting is updated.'});
+  await post('design/approve', {revision: draft.revision, mode: 'task'});
+  await post('design/build', {revision: draft.revision, mode: 'task', decisions});
+  const stopped = await waitForBuild(coordinator, 'failed');
+  const count = builderCalls;
+  const task = stopped.attempts.at(-1).task;
+  profile.checks.push({name: 'desktop_acceptance', argv: ['node', '-e', 'process.exit(0)'],
+    cwd: '.', phases: ['after'], required: true, benchmark: false});
+  await store.setProfile(profile);
+  await writeFile(path.join(repository, 'greeting.txt'), 'Changed outside the run');
+  await assert.rejects(post('design/retry-verification', {build: stopped.id}), /Restore the stopped build’s source/);
+  await writeFile(path.join(repository, 'greeting.txt'), 'After');
+  await post('design/retry-verification', {build: stopped.id});
+  const finished = await waitForBuild(coordinator);
+  assert.equal(finished.attempts.at(-1).task, task);
+  assert.equal(builderCalls, count);
+  assert.ok((await store.getRun(task)).checks.some(row => row.check === 'desktop_acceptance' && row.exit_code === 0));
+  assert.match(await git('diff', '--cached', '--name-only'), /^unrelated\.txt$/);
+});
+
 test('asks for plan clarification and runs registered audit checks without user input', async t => {
   const {git, store, repository} = await fixture(t);
   const calls = [];
