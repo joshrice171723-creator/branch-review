@@ -104,7 +104,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (!attempt || !['failed', 'cancelled'].includes(build.status)) return '';
     const pinned = run ?? await store.getRun(attempt.task);
     if (pinned.lifecycle.cause === 'repair_limit') return repairLimitMessage;
-    if (attempt.step === 'evidence_blocked') return 'Runtime verification is blocked. Configure the missing check before starting another build.';
+    if (attempt.step === 'evidence_blocked') return 'The previous verification attempt stopped. Use Retry verification to run the current checks.';
     return changedAgents(pinned.task.profile, await store.getProfile()).length ? workflowChangedMessage(build) : '';
   }
   function verificationCheckpoint(run, loop) {

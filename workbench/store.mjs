@@ -138,6 +138,8 @@ async function git(root, ...args) {
     .then(result => result.stdout, () => '');
 }
 
+const localPreviewLog = '.local-dev/workspace/workbench-environment/preview-output.json';
+
 async function sourceSnapshot(root, task) {
   const legacyGitFile = task?.harness_version !== '0.3.0-native' &&
     Object.keys(task?.initial_snapshot?.files ?? {}).some(name => path.posix.basename(name) === '.git');
@@ -149,6 +151,7 @@ async function sourceSnapshot(root, task) {
   const tracked = new Set(index.split('\0').filter(Boolean).map(row => row.slice(row.indexOf('\t') + 1)));
   const trackedProtected = Object.create(null);
   for (const {name, file, symlink} of all) {
+    if (name === localPreviewLog && !tracked.has(name)) continue;
     files[name] = symlink ?
       hash(Buffer.concat([Buffer.from('symlink:'), await fs.readlink(file, {encoding:'buffer'})])) : await fileHash(file);
     if (dependencies.test(path.posix.basename(name)) || /(?:^|\/)db\/(?:migrate\/|schema\.|structure\.)/.test(name)) {
@@ -1237,8 +1240,16 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       const snapshot = await sourceSnapshot(await resolvedRoot, run.task);
       const common = {reason:reason.trim(), at:now(), snapshot_sha256:snapshot.snapshot_sha256};
       if (operation === 'retryVerification') {
-        assert(snapshot.snapshot_sha256 === (state.status === 'stopped' ? state.snapshot_sha256 : verificationSource),
-          'Restore the stopped build’s source before retrying verification.');
+        const expected = state.status === 'stopped' ? state.snapshot_sha256 : verificationSource;
+        if (snapshot.snapshot_sha256 !== expected) {
+          assert(digestPattern.test(expected ?? ''), 'The stopped build has no recorded source snapshot.');
+          const prior = await readJson(run.taskDir, 'snapshots/' + expected.slice(0, 20) + '.json').catch(missing);
+          const files = {...prior?.files};
+          const recordedPreviewLog = Object.hasOwn(files, localPreviewLog);
+          delete files[localPreviewLog];
+          assert(recordedPreviewLog && fingerprint(prior.files) === expected && fingerprint(files) === snapshot.snapshot_sha256,
+            'Restore the stopped build’s source before retrying verification.');
+        }
         const pinned = await pinnedConfiguration(run);
         const current = await effectiveConfig();
         const additions = run.task.quality || current.quality_revision ? [] : current.checks.filter(check =>
