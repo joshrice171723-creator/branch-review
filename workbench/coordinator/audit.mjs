@@ -198,7 +198,7 @@ export function createAudit({repository, files, git, store, agent}) {
     const input = paths.join('\0') + '\0';
     const pathspec = ['--pathspec-from-file=-', '--pathspec-file-nul'];
     await git('--literal-pathspecs', 'add', '-A', ...pathspec, {input});
-    if ((await store.snapshot()).snapshot_sha256 !== state.final_snapshot || await commitment(git, build.branch) !== head) {
+    if ((await store.snapshot(task.id, {record:false})).snapshot_sha256 !== state.final_snapshot || await commitment(git, build.branch) !== head) {
       throw Error('The checked source changed while staging the local commit.');
     }
     const title = (build.title || task.action).trim().split(/\r?\n/)[0];
@@ -268,6 +268,7 @@ export function createAudit({repository, files, git, store, agent}) {
   async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly, retryRepair,
     runtimeProfile, recoveredPaths}) {
     const run = task.id;
+    const readSource = () => store.snapshot(run, {record:false});
     const profile = task.profile;
     const config = await store.executionConfig(run);
     const pending = await files.read(statePath(run));
@@ -345,7 +346,7 @@ export function createAudit({repository, files, git, store, agent}) {
         return;
       }
       if (next === 'build') {
-        const source = (await store.snapshot()).snapshot_sha256;
+        const source = (await readSource()).snapshot_sha256;
         const checkResults = hash(JSON.stringify((state.checks ?? []).map(row =>
           [row.check, row.check_sha256, row.check_inputs_sha256, row.exit_code])));
         // A builder that made no further change cannot resolve the same finding on the same input.
@@ -381,10 +382,10 @@ export function createAudit({repository, files, git, store, agent}) {
     async function checkStage(phase) {
       const stage = phase === 'after' ? 'checks' : 'baseline';
       await activity(run, stage, 'Workbench', 'Started configured ' + phase + ' checks');
-      const before = await store.snapshot();
+      const before = await readSource();
       const result = await store.runChecks(run, {phase, signal, measure, reusePassing: phase === 'after'});
       signal.throwIfAborted();
-      const after = await store.snapshot();
+      const after = await readSource();
       if (before.snapshot_sha256 !== after.snapshot_sha256) throw Error('Project source changed during checks. Restore the expected source and retry.');
       for (const row of result.checks) {
         await activity(run, stage, 'Workbench', (row.reused ? 'Reused passing receipt for ' :
@@ -425,7 +426,7 @@ export function createAudit({repository, files, git, store, agent}) {
     }
 
     async function audit(stage) {
-      const before = await measure('0', () => store.snapshot());
+      const before = await measure('0', () => readSource());
       if (stage !== 'plan_review' && before.snapshot_sha256 !== state.checked_source) {
         return block(stage, 'Project source changed since checks. Restore the checked files before continuing.', 'source_changed');
       }
@@ -642,7 +643,7 @@ export function createAudit({repository, files, git, store, agent}) {
     if (state.stage === 'evidence' && answer) {
       if (await commitment(git, build.branch) !== build.base) throw Error('Restore the exact branch and commit for this task.');
       const request = state.evidenceRequest;
-      const snapshot = await store.snapshot();
+      const snapshot = await readSource();
       (state.acceptanceEvidence ??= []).push({stage: request.stage, request: request.text,
         snapshot: snapshot.snapshot_sha256, note: sentence(answer, 'an evidence note', 8000), time: now()});
       await checkpoint(request.stage, 'Evidence supplied. Audit the current source.');
@@ -702,7 +703,7 @@ export function createAudit({repository, files, git, store, agent}) {
             {plan: state.plan, approvedPlanHash: hash(build.plan)}));
         }
       } else if (stage === 'plan_skip') {
-        const snapshot = await store.snapshot();
+        const snapshot = await readSource();
         const reason = 'Automatic visual route. A focused UI check is configured and the approved scope is cosmetic.';
         await store.record(run, 'audits', {stage: 'plan_review', actor: 'Workbench', verdict: 'skipped', reason,
           snapshot_sha256: snapshot.snapshot_sha256, plan_sha256: hash(state.plan),
@@ -749,7 +750,7 @@ export function createAudit({repository, files, git, store, agent}) {
       } else if (stage === 'checks') {
         const blockers = await store.preflightChecks(run, {phase: 'after'});
         if (blockers.length) {
-          state.checked_source = (await store.snapshot()).snapshot_sha256;
+          state.checked_source = (await readSource()).snapshot_sha256;
           return block('checks', 'Check setup needs attention. ' + blockers.map(row => row.check + ': ' + row.reason).join('\n'),
             'check_launch', blockers[0].check);
         }
@@ -768,7 +769,7 @@ export function createAudit({repository, files, git, store, agent}) {
           launchFailure.spawn_error, 'check_launch', launchFailure.check);
         if (state.verificationOnly && !result.passed) return block('checks',
           'Verification failed. Open Project checks to inspect the recorded result.', 'failed_check');
-        const snapshot = await store.snapshot();
+        const snapshot = await readSource();
         if (visualRoute() && !await store.cosmeticSource(run, snapshot)) {
           state.fullAudit = true;
           state.escalatedReviewPending = true;
@@ -783,7 +784,7 @@ export function createAudit({repository, files, git, store, agent}) {
       } else if (stage.endsWith('_review')) {
         await audit(stage);
       } else if (stage === 'final_skip') {
-        const current = await store.snapshot();
+        const current = await readSource();
         if (current.snapshot_sha256 !== state.final_snapshot) {
           return block('finish', 'Project source changed after review. Restore the checked files before continuing.', 'source_changed');
         }
@@ -794,11 +795,11 @@ export function createAudit({repository, files, git, store, agent}) {
           profile_sha256: task.profile_sha256, quality_revision: task.quality?.revision});
         await checkpoint('finish');
       } else if (stage === 'finish') {
-        if ((await store.snapshot()).snapshot_sha256 !== state.final_snapshot) {
+        if ((await readSource()).snapshot_sha256 !== state.final_snapshot) {
           return block('finish', 'Project source changed after the final audit. Restore the checked files before continuing.',
             'source_changed');
         }
-        const outdated = (await receipts(await store.snapshot()))
+        const outdated = (await receipts(await readSource()))
           .find(row => row.required && ['stale', 'missing'].includes(row.status));
         if (outdated && !state.design_sha) {
           await checkpoint('checks', 'Recovering changed inputs for ' + outdated.name + '.');
@@ -824,7 +825,7 @@ export function createAudit({repository, files, git, store, agent}) {
             state.design_sha = await commit(task, build, state);
             await files.write(statePath(run), state);
           }
-          if ((await store.snapshot()).snapshot_sha256 !== state.final_snapshot) throw Error('Source changed during commit.');
+          if ((await readSource()).snapshot_sha256 !== state.final_snapshot) throw Error('Source changed during commit.');
           return store.verify(run, {record: true, complete: true});
         });
         if (completion.verdict !== 'pass' || completion.lifecycle.status !== 'completed') throw Error('The checked commit cannot complete verification.');

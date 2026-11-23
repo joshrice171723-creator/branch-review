@@ -125,6 +125,9 @@ test('reuses after receipts only while their source and file inputs match', asyn
   const previewFolder = path.join(folder, '.local-dev/workspace/workbench-environment');
   await fs.mkdir(previewFolder, {recursive:true});
   await edit('.local-dev/workspace/workbench-environment/preview-output.json', 'Changed preview log');
+  await fs.mkdir(path.join(folder, '.local-dev/workspace/previews/changed'), {recursive:true});
+  await edit('.local-dev/workspace/jobs.json', '{"newJob":true}');
+  await edit('.local-dev/workspace/previews/changed/package.json', '{"name":"generated-preview"}');
   const reused = await run();
   assert.equal(reused.reused, true);
   assert.equal(reused.id, first.id);

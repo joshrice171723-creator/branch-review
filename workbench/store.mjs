@@ -120,15 +120,16 @@ async function fileHash(file) {
   return digest.digest('hex');
 }
 
-async function filesUnder(root, {source = false, legacyGitFile = false, prefix = ''} = {}) {
+async function filesUnder(root, {source = false, legacyGitFile = false, prefix = '', skip} = {}) {
   const files = [];
   for (const entry of await fs.readdir(root, {withFileTypes: true})) {
     const name = prefix + entry.name;
     const candidate = path.join(root, entry.name);
+    if (skip?.(name, entry.isDirectory())) continue;
     if (source && (name === 'workbench-quality.json' || !legacyGitFile && entry.name === '.git' ||
       excluded.has(entry.name) && (entry.isDirectory() || entry.isSymbolicLink()))) continue;
     if (entry.isDirectory()) {
-      files.push(...await filesUnder(candidate, {source, legacyGitFile, prefix:name + '/'}));
+      files.push(...await filesUnder(candidate, {source, legacyGitFile, prefix:name + '/', skip}));
     } else if (entry.isFile() || entry.isSymbolicLink()) {
       files.push({name, file:candidate, symlink:entry.isSymbolicLink()});
     }
@@ -142,17 +143,24 @@ async function git(root, ...args) {
 }
 
 const localPreviewLog = '.local-dev/workspace/workbench-environment/preview-output.json';
+const devRuntime = /^(?:\.local-dev\/(?:workspace|desktop))(?:\/|$)/;
 
 async function sourceSnapshot(root, task) {
   const legacyGitFile = task?.harness_version !== '0.3.0-native' &&
     Object.keys(task?.initial_snapshot?.files ?? {}).some(name => path.posix.basename(name) === '.git');
-  const all = await filesUnder(root, {source:true, legacyGitFile});
+  const index = await git(root, 'ls-files', '--stage', '-z');
+  const tracked = new Set(index.split('\0').filter(Boolean).map(row => row.slice(row.indexOf('\t') + 1)));
+  const skip = (name, directory) => devRuntime.test(name) && !tracked.has(name) &&
+    (!directory || ![...tracked].some(file => file.startsWith(name + '/')));
+  const all = await filesUnder(root, {source:true, legacyGitFile, skip});
   all.sort((left, right) => compareKeys(left.name, right.name));
   const files = Object.create(null);
   const protectedFiles = Object.create(null);
-  const index = await git(root, 'ls-files', '--stage', '-z');
-  const tracked = new Set(index.split('\0').filter(Boolean).map(row => row.slice(row.indexOf('\t') + 1)));
   const trackedProtected = Object.create(null);
+  for (const [name, digest] of Object.entries(task?.initial_snapshot?.files ?? {})) {
+    // Old runs included local state. Keep its recorded hashes to preserve their receipt identities.
+    if (name !== localPreviewLog && devRuntime.test(name) && !tracked.has(name)) files[name] = digest;
+  }
   for (const {name, file, symlink} of all) {
     if (name === localPreviewLog && !tracked.has(name)) continue;
     files[name] = symlink ?
@@ -933,8 +941,13 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     throw new Error('Snapshot identity conflicts with recorded evidence.');
   }
 
-  async function snapshot(id) {
+  async function snapshot(id, {record = true} = {}) {
     if (!id) return sourceSnapshot(await resolvedRoot);
+    if (!record) {
+      const run = await selected(id);
+      const state = await sourceSnapshot(await resolvedRoot, run.task);
+      return {...state, diff_sha256:changeFingerprint(run.task.initial_snapshot.files, state.files)};
+    }
     return mutate(async home => {
       const run = await selected(id, home);
       const issues = await integrityIssues(run.taskDir);
