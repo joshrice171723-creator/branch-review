@@ -205,6 +205,8 @@ summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .compact-nav nav button { padding:7px 10px; background:transparent; color:#c6d0e8; border:0; border-radius:5px; font-weight:600; }
 .compact-nav nav button:hover, .compact-nav nav button[aria-current] { background:#303e62; color:white; }
 .workbench-surface > .compact-nav { padding-block: 6px; }
+.profile-actions { margin-block-end:12px; }
+.profile-actions[hidden] { display:none; }
 .workbench-surface > .compact-nav { position:sticky; top:var(--shell-header-height, 0px); z-index:9; }
 .workbench-surface > .workspace > .topbar {
   position:sticky;

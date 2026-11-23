@@ -30,7 +30,7 @@ function livePanel() {
     const scope = element("textarea");
     const mode = select("build", ["build", "feature", "refactor", "audit"].map(x => [x, x]), () => true);
     const create = button("Create task", () => submit(async () => {
-      if (byId("apply-profile").textContent === "Apply changes") throw Error("Apply your profile changes first.");
+      if (byId("apply-profile").textContent === "Apply changes") throw Error("Apply profile changes in Configure → Stage designer.");
       if (!stateProfileApplied()) throw Error("Apply a profile before creating a panel run.");
       const saved = await api("task", {mode: mode.value, action: action.value, scope: scope.value});
       status.textContent = "Created " + saved.created.data.task_id;

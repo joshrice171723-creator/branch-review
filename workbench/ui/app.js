@@ -548,7 +548,7 @@ function render(design) {
   clearTimeout(historyTimer);
   const [title, description] = titles[view];
   byId("profile-group").hidden = ["history", "live", "quality"].includes(view);
-  byId("profile-actions").hidden = view === "quality";
+  byId("profile-actions").hidden = view !== "stages";
   byId("view-title").textContent = title;
   byId("view-description").textContent = description;
   for (const tab of panelRoot.querySelectorAll("[data-profile]")) tab.setAttribute("aria-pressed", String(tab.dataset.profile === data.active));

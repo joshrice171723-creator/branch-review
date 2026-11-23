@@ -19,7 +19,6 @@
     <header class="topbar">
       <div class="location"><strong id="project-name">Project</strong><small id="engine-version" hidden></small></div>
       <button class="button" id="open-project-conversation" aria-controls="project-conversation" aria-expanded="false" hidden>Project conversation</button>
-      <div class="actions" id="profile-actions"><button class="button primary" id="apply-profile">Apply profile</button><button class="button" id="import">Import</button><button class="button" id="export">Export profile</button></div>
     </header>
     <main>
       <div class="titlebar">
@@ -28,6 +27,11 @@
           <button data-profile="audited" aria-pressed="true">Audited</button>
           <button data-profile="fast" aria-pressed="false"><span aria-hidden="true">ϟ</span> Fast</button>
         </div></div>
+      </div>
+      <div class="actions profile-actions" id="profile-actions" aria-label="Workflow profile" hidden>
+        <button class="button primary" id="apply-profile">Apply profile</button>
+        <button class="button" id="import">Import profile</button>
+        <button class="button" id="export">Export profile</button>
       </div>
       <div id="content"></div>
     </main>

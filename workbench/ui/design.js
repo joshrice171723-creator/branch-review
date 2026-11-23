@@ -1070,7 +1070,7 @@ function designPanel(initialState) {
       const openQuality = button("Open Quality", () => goQuality("checks"));
       const prepare = button("Prepare project", async () => {
         if (byId("apply-profile").textContent === "Apply changes") {
-          notify("Apply your profile changes before preparing the project.");
+          notify("Apply profile changes in Configure → Stage designer before preparing the project.");
           return;
         }
         prepare.disabled = true;
