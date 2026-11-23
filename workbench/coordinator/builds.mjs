@@ -8,6 +8,19 @@ const pendingStates = ['working', 'cancelling'];
 const closedStates = ['closed', 'retired'];
 const roles = {plan: 'plan', plan_review: 'planReview', baseline: 'baseline', build: 'build', building: 'build',
   checks: 'checks', build_review: 'buildReview', final_review: 'finalReview', final_skip: 'finalReview', finish: 'verify'};
+const workflowChangedMessage = 'Agent settings changed after this run started. Retire this run and start a new build to use the saved settings.';
+
+function agentSettings(stage) {
+  return stage && {provider: stage.provider, model: stage.model, effort: stage.effort};
+}
+
+function changedAgents(pinned, saved) {
+  const before = selectedProfile(pinned)?.stages ?? {};
+  const after = selectedProfile(saved)?.stages ?? {};
+  return Object.keys(before).filter(key => before[key]?.enabled !== false && after[key]?.enabled !== false &&
+    before[key]?.provider && after[key]?.provider &&
+    !isDeepStrictEqual(agentSettings(before[key]), agentSettings(after[key])));
+}
 
 function current(state, key) {
   const build = state.builds.at(-1);
@@ -58,6 +71,12 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const runs = await store.listRuns();
     return runs.active ? store.getRun(runs.active) : null;
   }
+  async function resumeBlocker(build, run) {
+    const attempt = build?.attempts.at(-1);
+    if (!attempt || !['failed', 'cancelled'].includes(build.status)) return '';
+    const pinned = run ?? await store.getRun(attempt.task);
+    return changedAgents(pinned.task.profile, await store.getProfile()).length ? workflowChangedMessage : '';
+  }
   async function profileMatches(build, profile) {
     if (build.profile === jsonHash(profile)) return true;
     const bytes = await files.bytes('.harness/profile.json', 4_000_000, null);
@@ -98,6 +117,8 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (!member) throw Error('This group is waiting for Branch Review.');
     const prior = previous?.slice === member && previous.outcome !== 'completed'
       ? await store.getRun(previous.task) : null;
+    const blocker = await resumeBlocker(build, prior);
+    if (blocker) throw Error(blocker);
     let task = prior && ['active', 'paused', 'completed'].includes(prior.lifecycle.status) ? prior.task : null;
     if (task) {
       const loop = await files.read(statePath(task.id));
@@ -524,8 +545,16 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         reason: (typeof step.detail === 'string' ? step.detail : step.detail?.reason ?? '').slice(0, 1200)});
     }
     const tail = attempts.at(-1);
-    const failure = build.status === 'failed' && build.error && (tail?.role || roles[attempt.step])
-      ? {role: tail?.role || roles[attempt.step], message: build.error.slice(0, 4000)} : null;
+    const failedRole = tail?.role || roles[attempt.step];
+    let failure = null;
+    if (build.status === 'failed' && build.error && failedRole) {
+      const saved = await store.getProfile();
+      const stage = failedRole === 'repair' ? 'build' : failedRole;
+      const changed = changedAgents(task.task.profile, saved);
+      failure = {role: failedRole, message: build.error.slice(0, 4000),
+        resumeBlocker: changed.length ? workflowChangedMessage : '',
+        savedAgent: changed.includes(stage) ? agentSettings(selectedProfile(saved).stages[stage]) : null};
+    }
     const activity = await files.bytes(loopPath(attempt.task) + '/activity.jsonl', 32_000_000, Buffer.alloc(0));
     const tailStart = Math.max(0, activity.length - 65536);
     const lines = activity.subarray(tailStart ? activity.indexOf(10, tailStart) + 1 : 0).toString('utf8').split('\n').slice(0, -1);
@@ -581,7 +610,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     })};
   }
 
-  return {launch, advance, cancel, reconnect, decision, readiness, chat, live, history, progress, events, summary, busy: () => [...jobs.values()].some(({job}) => ['running', 'cancelling'].includes(job.state)),
+  return {launch, advance, cancel, reconnect, decision, readiness, chat, live, history, progress, events, summary, resumeBlocker, busy: () => [...jobs.values()].some(({job}) => ['running', 'cancelling'].includes(job.state)),
     async group(payload) {
       const build = current(await design.read(), payload.build);
       return reviewed(build, groupAt(build, payload.group));

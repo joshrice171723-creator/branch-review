@@ -78,14 +78,19 @@ function progressPanel(openBuild, onProgress) {
       detail.dataset.stageKey=key;
       detail.replaceChildren(element("h3","",role.name),element("p","stage-meta",config?.provider || (key==="humanReview"?"Human":"Workbench")));
       if(failed) {
+        const agentLabel = ({provider,model,effort}) =>
+          [provider,model || "Provider default",effort].filter(Boolean).join(" · ");
         const reset = /resets at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(failure.message)?.[1];
         const resetTime = reset && new Date(reset);
         detail.append(element("div","run-map-error",
           element("strong","",limited?"Provider quota reached":"Stage stopped"),
+          ...(config?.provider ? [element("p","","Stopped attempt · " + agentLabel(config))] : []),
+          ...(failure.savedAgent ? [element("p","","Saved agent · " + agentLabel(failure.savedAgent))] : []),
           element("p","",failure.message.replace(/\s*\[request_id=[^\]]+\]/i,"")),
           ...(resetTime && !Number.isNaN(resetTime.valueOf()) ? [element("p","","Quota resets " +
             resetTime.toLocaleString(undefined,{dateStyle:"medium",timeStyle:"short"}) + " local time.")] : []),
-          ...(limited ? [element("p","","Resume after the quota resets. To switch models or providers, retire this run and start a new build with the updated workflow.")] : [])));
+          ...(failure.resumeBlocker ? [element("p","",failure.resumeBlocker)] :
+            limited ? [element("p","","Resume after the quota resets.")] : [])));
       }
       let titles=steps;
       if(key==="baseline" || key==="checks"){

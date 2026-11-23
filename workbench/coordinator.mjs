@@ -87,7 +87,7 @@ export async function createCoordinator({
       const head = await git('rev-parse', 'HEAD').catch(() => null);
       restartRequired = Boolean(head && head !== current.base);
     }
-    return {...state, checklist, layout, restartRequired};
+    return {...state, checklist, layout, restartRequired, resumeBlocker: await builds.resumeBlocker(current)};
   }
 
   async function dispatch(route, payload = {}, {method = 'GET'} = {}) {

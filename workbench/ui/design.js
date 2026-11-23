@@ -1096,7 +1096,7 @@ function designPanel(initialState) {
       const continueBuild = build.status === "ready" ? button(embedded ? "Start repair" : "Continue build", () =>
         change("continue", {build: build.id}, {wait: embedded ? "Starting repair…" : "Starting the next slice…"}), "button primary") : null;
       if (continueBuild && !showContinueByReview) controls.append(continueBuild);
-      if (["failed", "cancelled"].includes(build.status) && !state.restartRequired) controls.append(button("Resume run", () =>
+      if (["failed", "cancelled"].includes(build.status) && !state.restartRequired && !state.resumeBlocker) controls.append(button("Resume run", () =>
         change("continue", {build: build.id}, {wait: "Resuming the run…"}), "button primary"));
       if (["working", "cancelling"].includes(build.status)) {
         const cancel = button("Cancel run", () => change("cancel", {build: build.id},
@@ -1129,6 +1129,10 @@ function designPanel(initialState) {
       if (state.restartRequired) {
         info.append(element("p", "evidence-warning",
           "The branch changed after this run started. Retire this run, then start a new build from the current commit."));
+        if (build.error) info.append(element("details", "", element("summary", "", "Previous attempt error"),
+          element("p", "", build.error)));
+      } else if (state.resumeBlocker) {
+        info.append(element("p", "evidence-warning", state.resumeBlocker));
         if (build.error) info.append(element("details", "", element("summary", "", "Previous attempt error"),
           element("p", "", build.error)));
       } else if (build.error) info.append(element("p", "evidence-warning",
@@ -1336,8 +1340,9 @@ function designPanel(initialState) {
     };
     let next;
     if (activeBuild) {
-      const label = {ready: "Continue the build", review: "Review checked work", failed: state.restartRequired ? "View failed run" : "Resume the run",
-        cancelled: "Resume the run", question: "Answer the build question"}[build.status] || "View the current build";
+      const resumeLabel = state.restartRequired || state.resumeBlocker ? "View the stopped build" : "Resume the run";
+      const label = {ready: "Continue the build", review: "Review checked work", failed: resumeLabel,
+        cancelled: resumeLabel, question: "Answer the build question"}[build.status] || "View the current build";
       next = [label, () => goBuild()];
     } else if (state.question || state.plannerRetry) next = ["Resolve the planning decision", () => projectConversation.open()];
     else if (localDraft.plan) next = ["Save the local draft", focus("plan-save")];

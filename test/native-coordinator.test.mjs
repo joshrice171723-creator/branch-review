@@ -50,6 +50,39 @@ async function waitForBuild(coordinator, wanted = 'review') {
   assert.fail('Build did not reach ' + wanted);
 }
 
+test('shows saved agent settings and blocks retries on the previous provider', async t => {
+  const {git, store, repository} = await fixture(t);
+  let auditCalls = 0;
+  const coordinator = await createCoordinator({repository, store, git, async invoke({stage, provider}) {
+    if (stage === 'plan') return {text: JSON.stringify({plan: ['Edit the greeting.']})};
+    assert.equal(stage, 'plan_review');
+    assert.equal(provider, 'Muse');
+    auditCalls++;
+    throw Error('API error 429: Subscription quota exhausted.');
+  }});
+  t.after(() => coordinator.close());
+  const action = (name, data) => coordinator.dispatch(name, data, {method: 'POST'});
+  const draft = await action('design/draft', {revision: 0, mode: 'task', title: 'Update greeting',
+    plan: 'Edit the greeting.\n\n## Acceptance criteria\n- The greeting is updated.'});
+  await action('design/approve', {revision: draft.revision, mode: 'task'});
+  await action('design/build', {revision: draft.revision, mode: 'task', decisions});
+  const build = await waitForBuild(coordinator, 'failed');
+  assert.equal((await coordinator.dispatch('design')).resumeBlocker, '');
+  const profile = await store.getProfile();
+  const agent = {provider: 'Codex', model: 'gpt-6.1-terra', effort: 'high'};
+  Object.assign(profile.profiles[profile.active].stages.planReview, agent);
+  await store.setProfile(profile);
+
+  const {run} = await coordinator.dispatch('design/progress');
+  assert.equal(run.stages.planReview.provider, 'Muse');
+  assert.equal(run.failure.role, 'planReview');
+  assert.deepEqual(run.failure.savedAgent, agent);
+  assert.match((await coordinator.dispatch('design')).resumeBlocker, /Agent settings changed/);
+  await assert.rejects(action('design/continue', {build: build.id}), /Agent settings changed/);
+  assert.equal(auditCalls, 1);
+  assert.equal((await coordinator.dispatch('design')).builds.at(-1).attempts.length, 1);
+});
+
 test('pins a checked commit, returns a failed check, and repairs the same approved task against its original base', async t => {
   const {git, store, repository} = await fixture(t);
   let reviewState;
