@@ -675,6 +675,16 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         deadline = Date.now();
       }
     }
+    if (!Number.isFinite(deadline) && prepareBrowserRecovery &&
+        /source changed (?:before baseline verification|during checks)/i.test(attempt.error ?? '') &&
+        !build.attempts.some(row => row.task === attempt.task && row.automaticRecovery?.kind === 'browserBaseline')) {
+      const loop = await files.read(statePath(attempt.task), {});
+      const stage = loop.stage === 'evidence_blocked' ? loop.history.at(-1)?.detail?.stage : loop.stage;
+      if (stage === 'baseline' && await store.needsBrowserPreview(attempt.task).catch(() => false)) {
+        recovery = {kind: 'browserBaseline'};
+        deadline = Date.now();
+      }
+    }
     if (!Number.isFinite(deadline) && !budgetErrors.includes(attempt.errorCode)) {
       try {
         const decision = await superviseStop(build, attempt);
@@ -710,6 +720,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         if (next?.id !== build.id || next.status !== 'failed' || next.attempts.at(-1)?.id !== attempt.id) {
           throw Error('The run has already changed.');
         }
+        if (recovery.kind === 'browserBaseline') await prepareStoppedChecks(next);
         if (recovery.kind === 'supervisor') {
           const source = await store.snapshot(attempt.task, {record: false});
           if (Object.entries(recovery.source).some(([key, value]) => source[key] !== value)) {
