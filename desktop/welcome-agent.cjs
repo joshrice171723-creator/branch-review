@@ -15,11 +15,16 @@ async function askAgent(provider,cwd,prompt,override){
     const raw=provider!=='codex'?job.agentResult:await readFile(output,'utf8');const text=String(raw||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');try{return JSON.parse(text);}catch{throw Error('The agent returned an unexpected response. Try again.');}
   }finally{await rm(tmp,{recursive:true,force:true});}
 }
-async function askProjectAgent(provider,messages){
+async function askProjectAgent(provider,messages,{candidates,executable}={}){
   if(!Array.isArray(messages)||!messages.length||messages.length>16||messages.some(m=>!m||!['user','assistant'].includes(m.role)||typeof m.text!=='string'||m.text.length>4000))throw Error('Please enter a shorter message.');
-  const cwd=os.homedir(),candidates=await describeProjectCandidates(await findProjectCandidates(cwd,messages));
+  const cwd=os.homedir();
+  const discoveryComplete = candidates !== undefined;
+  candidates ??= await describeProjectCandidates(await findProjectCandidates(cwd,messages));
   const prompt='Help the user find an existing local Git project to review. These are possible matching folders, with Git evidence: '+JSON.stringify(candidates)+'. checkout "main" means the main checkout of a Git repository, not necessarily its main branch; "worktree" is another checkout. relatedWorktrees counts discovered linked worktrees and relatedCopies counts discovered copies with the same remote; these are hints, not proof of the user\'s intended project. Group linked worktrees and related copies instead of listing each one. When evidence strongly suggests a main working folder, recommend it in one short sentence and return its projectPath so the user can confirm using the app button. Prefer a main checkout with linked worktrees over temporary worktrees or one-off copies when appropriate; a recent commit alone does not identify the right project. Do not claim certainty or automatically open a folder. If several distinct projects or main folders are equally plausible, ask a short plain-language question distinguishing them; return null. Only mention folder paths if needed to distinguish choices or requested. If no candidate matches, search further or ask for a location. Search only for matching folder names and Git repositories on local disks. Verify an explicitly supplied folder with Git before saying it is not a repository. If you cannot verify it, say so rather than guessing. Never modify files or run project code. Do not invent a path. Reply only as JSON: {"message":"brief user-facing reply","projectPath":null or "absolute local path"}. Conversation follows:\n'+JSON.stringify(messages);
-  const result=await askAgent(provider,cwd,prompt);
+  const scope = discoveryComplete
+    ? '\nUse only the supplied MCP search results. Do not search the filesystem or run commands. If the results are insufficient, ask for a project name, distinguishing folder, or full path for the next search. Recommend only a path from the supplied results.'
+    : '';
+  const result=await askAgent(provider,cwd,prompt+scope,executable);
   if(typeof result.message!=='string')throw Error('The agent returned an unexpected response. Try again.');
   return {message:result.message.slice(0,2000),projectPath:typeof result.projectPath==='string' && path.isAbsolute(result.projectPath)?result.projectPath:null};
 }

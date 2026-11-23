@@ -31,7 +31,7 @@ export function connectProjects({launcher, flush, error}) {
       <form>
         <label for="project-query">Describe the project</label>
         <div class="project-query-row">
-          <input id="project-query" required maxlength="500" placeholder="Find my Appointment Flow project">
+          <input id="project-query" required maxlength="500" placeholder="Project name, folder, or description">
           <button type="submit">Send</button>
         </div>
       </form>
@@ -50,6 +50,7 @@ export function connectProjects({launcher, flush, error}) {
   const matches = $('[data-matches]');
   const send = $('button[type="submit"]');
   let recent = [];
+  let messages = [];
   let searching = false;
   let opening = false;
 
@@ -85,7 +86,7 @@ export function connectProjects({launcher, flush, error}) {
     open.className = 'project-open';
     open.disabled = project.current || project.available === false;
     const state = project.current ? 'Current project' : project.available === false ? 'Folder not found' :
-      project.checkout === 'worktree' ? 'Linked worktree' : 'Open project';
+      project.recommended ? 'Suggested match' : project.checkout === 'worktree' ? 'Linked worktree' : 'Open project';
     open.append(make('strong', project.name), make('small', project.path), make('span', state));
     open.onclick = () => openProject(project.path, discovered);
     row.append(open);
@@ -129,15 +130,14 @@ export function connectProjects({launcher, flush, error}) {
     searching = send.disabled = true;
     query.value = '';
     say('You', message);
+    messages = [...messages.slice(-14), {role: 'user', text: message}];
     matches.replaceChildren();
     status.textContent = 'Searching for local Git projects…';
     try {
-      const found = await desktop.findProjects(message);
-      say('Project finder', found.length
-        ? (found.length === 1 ? 'I found one project. Check its folder before opening it.' :
-          'I found ' + found.length + ' projects. Choose the folder you want to open.')
-        : 'I found no matching Git project. Try the folder name or paste its full path.');
-      matches.append(...found.map(project => projectRow(project, true)));
+      const reply = await desktop.findProjects(messages);
+      say('Project finder', reply.message);
+      messages.push({role: 'assistant', text: reply.message});
+      matches.append(...reply.projects.map(project => projectRow(project, true)));
       status.textContent = '';
     } catch (issue) {
       status.textContent = issue.message;

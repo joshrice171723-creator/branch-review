@@ -229,16 +229,40 @@ async function launch() {
     settings.hiddenProjects=[...new Set([...(settings.hiddenProjects || []),key])];settings.recentProjects=(settings.recentProjects || []).filter(p=>p!==key);await writeFile(settingsPath,JSON.stringify({...settings,home}));return true;
   });
   let discoveredProjects = new Map();
-  ipcMain.handle('review:find-projects', async (event, query) => {
+  ipcMain.handle('review:find-projects', async (event, messages) => {
     trusted(event);
+    if (!Array.isArray(messages) || !messages.length || messages.length > 15 ||
+        messages.some(turn => !turn || !['user', 'assistant'].includes(turn.role) ||
+          typeof turn.text !== 'string' || turn.text.length > (turn.role === 'user' ? 500 : 2000)) ||
+        messages.at(-1).role !== 'user' || !messages.at(-1).text.trim()) throw Error('Enter a project description.');
+    const latest = messages.at(-1).text.trim();
+    const first = messages.find(turn => turn.role === 'user').text.trim();
+    const query = /^(?:[a-z]:[\\/]|\/)/i.test(latest) || /["'][a-z]:[\\/]/i.test(latest)
+      ? latest : [latest, first === latest ? '' : first].join(' ').trim().slice(0, 500);
     discoveredProjects.clear();
     const reply = await control('/api/workspace/mcp', {jsonrpc: '2.0', id: 1, method: 'tools/call',
       params: {name: 'find_local_projects', arguments: {query}}});
     const projects = reply.result?.structuredContent?.projects;
     if (!projects) throw Error(reply.error?.message || reply.result?.content?.[0]?.text || 'Project search failed.');
-    discoveredProjects = new Map(projects.map(project => [path.resolve(project.path).toLowerCase(), project.path]));
+    const settings = JSON.parse(await readFile(path.join(home, 'agent-settings.json'), 'utf8')
+      .catch(error => { if (error.code === 'ENOENT') return '{}'; throw error; }));
+    const provider = settings.provider || 'codex';
+    let answer;
+    try {
+      answer = await askProjectAgent(provider, messages, {candidates: projects, executable: settings.executables?.[provider]});
+    } catch {
+      answer = {message: 'The agent could not reply. Check the search results or try again.'};
+    }
     const current = path.resolve(savedConfig.repository).toLowerCase();
-    return projects.map(project => ({...project, current: path.resolve(project.path).toLowerCase() === current}));
+    discoveredProjects = new Map(projects.map(project => [path.resolve(project.path).toLowerCase(), project.path]));
+    const recommended = answer.projectPath && path.resolve(answer.projectPath).toLowerCase();
+    const results = projects.map(project => {
+      const key = path.resolve(project.path).toLowerCase();
+      return {...project, current: key === current, recommended: key === recommended};
+    });
+    results.sort((a, b) => Number(b.recommended) - Number(a.recommended));
+    return {message: answer.projectPath && !discoveredProjects.has(recommended)
+      ? 'The suggested folder did not match the search results. Try its full path.' : answer.message, projects: results};
   });
   ipcMain.handle('review:choose-repository', async (event,requested,discovered=false) => {
     trusted(event);
