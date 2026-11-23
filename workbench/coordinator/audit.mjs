@@ -389,16 +389,19 @@ export function createAudit({repository, files, git, store, agent}) {
       const smallUiChange = paths.length > 0 && paths.length <= 6 &&
         paths.every(name => /(?:^|\/)(?:ui|public|test|tests|__tests__|views|components)\//i.test(name) &&
           !/(?:auth|migration|session|payments|credentials|permissions)/i.test(name));
+      const reviewedExistingSource = stage === 'final_review' && Boolean(buildAudit) && paths.length === 0;
       const canScopeAudit = (stage === 'build_review' || stage === 'final_review' && Boolean(buildAudit)) &&
         !selectedRubric &&
-        smallUiChange && !selectedProfile(profile)?.sharedDocs?.length &&
+        (smallUiChange || reviewedExistingSource) && !selectedProfile(profile)?.sharedDocs?.length &&
         (!stageConfig.instructions?.trim() ||
           stageConfig.instructions === 'Inspect the current source and check receipts. Send confirmed code findings to the builder.' ||
           stageConfig.instructions === 'Use a fresh review session. Verify all rubric criteria against the checked source.') &&
         (stageConfig.docs ?? []).every(name => name === 'REVIEW.md') && !stageConfig.toolHints?.length &&
         !state.auditExpansion?.includes(stage + ':' + inputs);
       let scopedDiff;
-      if (canScopeAudit || stage !== 'plan_review' && stageConfig.shellTools === false) {
+      if (reviewedExistingSource && canScopeAudit) {
+        scopedDiff = {patch: '', newFiles: [], note: 'Build audit already passed on these checks and source. No task-owned source changed.'};
+      } else if (canScopeAudit || stage !== 'plan_review' && stageConfig.shellTools === false) {
         const patch = await gitRaw(['--literal-pathspecs', 'diff', '--no-ext-diff', 'HEAD', '--', ...paths]);
         if (patch.length <= 18_000) {
           const newFiles = await Promise.all(paths.filter(name => !task.initial_snapshot.files[name]).map(async name => ({
@@ -412,7 +415,8 @@ export function createAudit({repository, files, git, store, agent}) {
       const correction = state.auditCorrection?.stage === stage && state.auditCorrection.inputs === inputs ?
         state.auditCorrection.reason : '';
       const prompt = (limitedInspection ?
-        'Independently assess the scoped diff and supplied observations. Focus on unsupported claims. ' :
+        'Independently assess the scoped diff and supplied observations. Focus on unsupported claims. When no task-owned source changed, ' +
+        'review the recorded behavior and constraints without reopening the checkout. A pass still needs relevant evidence. ' :
         'Independently audit the approved plan. Inspect only the changed files and evidence needed to resolve a specific criterion. ') +
         'Return the JSON verdict and cite evidence in reason. Return replan only for a requirements finding. ' +
         'The approved plan alone defines the requested behavior. The implementation method describes approach and cannot expand scope. ' +

@@ -169,7 +169,8 @@ const WorkbenchProfile = (() => {
   function providerLimits(item, mode, stage) {
     const fast = mode === "fast";
     return {
-      timeoutSeconds: item.stages?.[stage]?.timeoutSeconds ?? (stage === "build" ? 300 : 120),
+      timeoutSeconds: item.stages?.[stage]?.timeoutSeconds ??
+        (stage === "build" ? 600 : ["buildReview", "finalReview"].includes(stage) ? 300 : 120),
       providerTimeSeconds: item.providerTimeSeconds ?? (fast ? 600 : 1800),
       providerTokenLimit: item.providerTokenLimit ?? (fast ? 60_000 : 180_000)
     };

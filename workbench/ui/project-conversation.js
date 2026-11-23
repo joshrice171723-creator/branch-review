@@ -107,8 +107,36 @@ function connectProjectConversation(initial) {
   try { accepted = JSON.parse(localStorage.getItem(acceptedKey)) || {}; } catch {}
   let state = initial, busy = false, outgoing, previousOpener, quality = {}, slice = {}, review = {}, lastQuestion, fingerprint;
   let buildQuestionKey = "";
+  let decisionLabel = "", buildAttention;
+  const seenAttentionKey = "workbench.build.attention:" + projectState.project.path;
+  let seenAttention;
+  try { seenAttention = localStorage.getItem(seenAttentionKey); } catch {}
   const visible = () => !drawer.hidden;
   composer.value = stored.message;
+
+  function syncLauncher() {
+    launch.textContent = "Project conversation" +
+      (decisionLabel ? " · " + decisionLabel : buildAttention ? " · Build needs attention" : "");
+    launch.toggleAttribute("data-build-attention", Boolean(buildAttention));
+  }
+  function markAttentionSeen(message) {
+    seenAttention = message.id;
+    try { localStorage.setItem(seenAttentionKey, seenAttention); } catch {}
+  }
+  function showBuildAttention(message) {
+    const changed = buildAttention?.id !== message?.id;
+    buildAttention = message;
+    syncLauncher();
+    if (!message || !state) return;
+    if (!state.messages.some(row => row.id === message.id)) state.messages.push(message);
+    if (changed && visible()) {
+      markAttentionSeen(message);
+      renderMessages();
+      messages.scrollTop = messages.scrollHeight;
+    } else if (changed && message.id !== seenAttention) {
+      notify("Build needs attention. Open Project conversation.");
+    }
+  }
 
   function context() {
     if (Object.keys(review).length) return {view, ...review};
@@ -135,9 +163,8 @@ function connectProjectConversation(initial) {
     if (signature === buildQuestionKey) return;
     buildQuestionKey = signature;
     const evidence = task?.decision_kind === "evidence";
-    const label = evidence ? "Project conversation · Evidence needed" :
-      waiting ? "Project conversation · Reply needed" : "Project conversation";
-    launch.textContent = label;
+    decisionLabel = evidence ? "Evidence needed" : waiting ? "Reply needed" : "";
+    syncLauncher();
     buildDecisionCard.replaceChildren();
     buildDecisionCard.hidden = !waiting;
     if (!waiting) return;
@@ -164,9 +191,13 @@ function connectProjectConversation(initial) {
     try {
       const build = state?.builds.at(-1);
       const offPlan = view !== "workflow" || (layoutSetting("tab") || "Plan") !== "Plan";
-      if (!document.hidden && offPlan && (visible() || ["working", "question", "cancelling"].includes(build?.status))) {
-        const {active_task: task} = await api("live");
-        showBuildDecision(task?.status === "active" ? task : null);
+      if (!document.hidden) {
+        const active = ["working", "question", "cancelling"].includes(build?.status);
+        const [attention, live] = await Promise.all([api("design/attention"),
+          offPlan && (visible() || active) ? api("live").catch(() => null) : null]);
+        if (signal.aborted) return;
+        showBuildAttention(attention);
+        if (live) showBuildDecision(live.active_task?.status === "active" ? live.active_task : null);
       }
     } catch {}
     finally { setTimeout(followBuildQuestions, 4000); }
@@ -185,6 +216,7 @@ function connectProjectConversation(initial) {
     if (!visible()) previousOpener = activeElement() || document.activeElement;
     drawer.hidden = false;
     launch.setAttribute("aria-expanded", "true");
+    if (buildAttention) markAttentionSeen(buildAttention);
     showContext();
     renderMessages();
     composer.focus();
@@ -363,6 +395,9 @@ function connectProjectConversation(initial) {
       mockupTarget.onchange();
     }
     state = next;
+    const current = state.builds?.at(-1);
+    const message = current?.status === "failed" && state.messages.find(row => row.id === current.attention?.id);
+    showBuildAttention(message || null);
     showContext();
     if (visible()) renderMessages();
     if (changeDesign) projectConversation.design?.(next);

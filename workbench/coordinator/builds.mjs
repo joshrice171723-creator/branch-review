@@ -183,8 +183,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (!budgetErrors.includes(previous.errorCode)) return previous.runtimeProfile;
     const saved = await store.getProfile();
     const profile = selectedProfile(saved);
-    const stages = Object.fromEntries(Object.keys(profile.stages).map(key =>
-      [key, {timeoutSeconds: WorkbenchProfile.providerLimits(profile, saved.active, key).timeoutSeconds}]));
+    const stages = Object.fromEntries(Object.entries(profile.stages)
+      .filter(([, stage]) => stage.timeoutSeconds !== undefined)
+      .map(([key, stage]) => [key, {timeoutSeconds: stage.timeoutSeconds}]));
     const {providerTimeSeconds, providerTokenLimit} = WorkbenchProfile.providerLimits(profile, saved.active);
     return {providerTimeSeconds, providerTokenLimit, stages};
   }
@@ -284,7 +285,11 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const savedLimits = await runtimeProfile(previous, task.id);
     const overrides = Object.fromEntries(['providerTokenLimit', 'providerTimeSeconds']
       .filter(key => build[key] !== undefined).map(key => [key, build[key]]));
-    const limits = Object.keys(overrides).length ? {...savedLimits, ...overrides} : savedLimits;
+    let limits = Object.keys(overrides).length ? {...savedLimits, ...overrides} : savedLimits;
+    if (automaticRecovery?.kind === 'stageTimeout') {
+      const {role, timeoutSeconds} = automaticRecovery;
+      limits = {...limits, stages: {...limits?.stages, [role]: {timeoutSeconds}}};
+    }
     const attempt = {id: id(), job: id(), slice: member, task: task.id, started: now(), outcome: 'running',
       ...(limits && {runtimeProfile: limits}),
       ...(automaticRecovery && {automaticRecovery}),
@@ -294,6 +299,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     build.attempts.push(attempt);
     build.status = 'working';
     delete build.error;
+    delete build.attention;
     return {build: structuredClone(build), attempt, task, answer, verificationOnly, retryRepair, runtimeProfile: limits,
       step: verificationOnly || retryRepair ? 'checks' : loop?.stage};
   }
@@ -325,6 +331,53 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     });
   }
 
+  async function publishAttention(build, attempt, recoveryError) {
+    const loop = await files.read(statePath(attempt.task), {});
+    const detail = loop.stage === 'evidence_blocked' ? loop.history?.at(-1)?.detail : null;
+    const role = buildStageRoles[detail?.stage ?? attempt.step];
+    const stage = WorkbenchProfile.roles.find(item => item.id === role)?.name ??
+      ({baseline: 'Baseline checks', checks: 'Project checks', repair: 'Repair'})[role] ?? 'Build';
+    const reason = (build.error || attempt.error || 'The build stopped.')
+      .replace(/\s*\[request_id=[^\]]+\]/gi, '').trim().slice(0, 2800);
+    const fingerprint = hash(JSON.stringify([attempt.task, role, attempt.errorCode ?? detail?.kind, reason]));
+    if (build.attention?.fingerprint === fingerprint) return;
+    const budget = budgetErrors.includes(attempt.errorCode);
+    const next = budget
+      ? attempt.errorCode === 'PROVIDER_CALL_TIMEOUT'
+        ? 'The provider call reached its stage time limit. Check the call time limit in Configure → Stages.'
+        : 'Retry starts a fresh allowance. Use Build budget in Plan if you want to change the limit.'
+      : detail?.kind === 'no_task_changes' || detail?.kind === 'checkout_ownership'
+        ? 'I need you to decide which changes belong to this build before I can include them in a commit.'
+        : /\b429\b|rate_limit_error|quota exhausted/i.test(reason)
+          ? 'The provider still cannot run. Check its quota or connection before retrying.'
+          : 'Review this blocker before retrying. You can ask me about it here.';
+    const checked = (loop.checks ?? []).filter(row => row.exit_code === 0 && !row.source_changed && !row.inputs_changed);
+    const receiptNote = checked.length
+      ? 'I kept ' + checked.length + ' passing check ' + (checked.length === 1 ? 'receipt.' : 'receipts.') : '';
+    const recoveryNote = attempt.automaticRecovery?.kind === 'stageTimeout' ? 'I retried this stage with a longer call allowance.' :
+      attempt.automaticRecovery?.resetAt ? 'I retried this stage after the provider reset.' : '';
+    const text = ['“' + (build.title || 'Current build') + '” needs attention at ' + stage + '.',
+      reason, receiptNote, recoveryNote, recoveryError && 'Automatic recovery could not start. ' + recoveryError, next].filter(Boolean).join('\n\n');
+    await design.edit(state => {
+      const current = state.builds.at(-1);
+      if (current?.id !== build.id || current.status !== 'failed' || current.attempts.at(-1)?.id !== attempt.id ||
+          current.attention?.fingerprint === fingerprint) return;
+      const existing = state.messages.find(row => row.buildAttention?.fingerprint === fingerprint);
+      const message = existing ?? {id: id(), author: 'agent', coordinator: true, time: now(), text,
+        buildAttention: {fingerprint, stage, task: attempt.task}, choices: budget ?
+          ['Where is the build budget?', 'Build status'] : ['Build status']};
+      if (!existing) state.messages.push(message);
+      current.attention = {id: message.id, fingerprint};
+    });
+  }
+
+  async function attention() {
+    const state = await files.read(workspaceFile);
+    const build = state?.builds?.at(-1);
+    return build?.status === 'failed' && build.attention ?
+      state.messages?.find(row => row.id === build.attention.id) ?? null : null;
+  }
+
   function start(prepared, release) {
     const {build, attempt, task} = prepared;
     const controller = new AbortController();
@@ -335,6 +388,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     execution.done = (async () => {
       let loop;
       try {
+        if (attempt.automaticRecovery?.kind === 'stageTimeout') {
+          await audit.activity(task.id, prepared.step, 'Workbench', 'Retrying the audit with more time.');
+        }
         loop = await audit.workflow({...prepared, signal: controller.signal,
           setCancellable: value => { job.cancellable = value; },
           refresh: stage => { job.step = stage; },
@@ -374,7 +430,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
           finally { execution.active = false; }
         }
       }
-      if (!build.standalone && job.providerLimit?.resetAt) await refreshRecovery();
+      if (!build.standalone && job.state === 'failed') await refreshRecovery();
       if (!build.standalone && job.state === 'completed' && loop?.stage === 'completed') {
         const state = await design.read();
         if (state.builds.at(-1)?.id === build.id && state.builds.at(-1).status === 'ready') {
@@ -497,10 +553,30 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       return refreshRecovery();
     }
     if (build.status !== 'failed') return;
-    const limit = await providerLimitFor(attempt);
-    const deadline = Date.parse(limit?.resetAt);
-    if (!Number.isFinite(deadline) ||
-        build.attempts.some(row => row.task === attempt.task && isDeepStrictEqual(row.automaticRecovery, limit))) return;
+    let recovery = await providerLimitFor(attempt);
+    let deadline = Date.parse(recovery?.resetAt);
+    if (attempt.errorCode === 'PROVIDER_CALL_TIMEOUT' &&
+        ['plan', 'plan_review', 'build_review', 'final_review'].includes(attempt.step)) {
+      const role = buildStageRoles[attempt.step];
+      const run = await store.getRun(attempt.task);
+      const pinned = selectedProfile(run.task.profile);
+      const saved = selectedProfile(await store.getProfile());
+      if (pinned?.stages[role]?.timeoutSeconds === undefined && saved?.stages[role]?.timeoutSeconds === undefined) {
+        const defaults = WorkbenchProfile.providerLimits(pinned, run.task.profile.active, role);
+        recovery = {kind: 'stageTimeout', role, budgetResetAt: attempt.budgetResetAt ?? null,
+          timeoutSeconds: Math.min(1800, defaults.timeoutSeconds * 2)};
+        deadline = Date.now();
+      }
+    }
+    const tried = build.attempts.some(row => row.task === attempt.task && isDeepStrictEqual(row.automaticRecovery, recovery));
+    if (!Number.isFinite(deadline) || tried) {
+      try { await publishAttention(build, attempt); }
+      catch (error) {
+        if (error.message === 'This checkout already has an active Workbench operation.') scheduleRecovery(refreshRecovery, 1000);
+        else throw error;
+      }
+      return;
+    }
     const wait = deadline - Date.now();
     if (wait > 0) {
       scheduleRecovery(refreshRecovery, wait);
@@ -513,9 +589,10 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
           throw Error('The run has already changed.');
         }
         return next;
-      }, undefined, false, limit);
+      }, undefined, false, recovery);
     } catch (error) {
       if (error.message === 'This checkout already has an active Workbench operation.') scheduleRecovery(refreshRecovery, 1000);
+      else await publishAttention(build, attempt, error.message);
     }
   }
 
@@ -912,7 +989,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
 
   const busy = () => operations > 0 || [...jobs.values()].some(entry => entry.active);
   void refreshRecovery(true).catch(() => {});
-  return {launch, advance, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, readiness, chat, live, history, progress, conversationContext, step, events, summary, resumeBlocker, busy,
+  return {launch, advance, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
     suspendRecovery() {
       if (busy() || closing || recoverySuspended) throw Error('Finish or cancel the active build before leaving this project.');
       recoverySuspended = true;

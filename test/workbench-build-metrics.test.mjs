@@ -45,7 +45,8 @@ test('keeps provider budget defaults for older profiles and validates explicit l
   const {profiles} = WorkbenchProfile.initial([]);
   const limits = (mode, stage) => WorkbenchProfile.providerLimits(profiles[mode], mode, stage);
   assert.deepEqual(limits('fast', 'planReview'), {timeoutSeconds: 120, providerTimeSeconds: 600, providerTokenLimit: 60_000});
-  assert.deepEqual(limits('audited', 'build'), {timeoutSeconds: 300, providerTimeSeconds: 1800, providerTokenLimit: 180_000});
+  assert.deepEqual(limits('audited', 'build'), {timeoutSeconds: 600, providerTimeSeconds: 1800, providerTokenLimit: 180_000});
+  assert.equal(limits('audited', 'finalReview').timeoutSeconds, 300);
   profiles.fast.stages.planReview.timeoutSeconds = 12000;
   assert.throws(() => WorkbenchProfile.validate({version: 1, active: 'fast', documents: [], profiles}), /call time limit/);
 });

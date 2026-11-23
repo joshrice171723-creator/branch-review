@@ -152,6 +152,7 @@ export async function createCoordinator({
         case 'GET design/readiness': return await builds.readiness();
         case 'GET design/providers': return await checkProviders(await store.getProfile(), data.refresh === '1');
         case 'GET design/history': return await builds.history();
+        case 'GET design/attention': return await builds.attention();
         case 'GET design/tool-suggestions': {
           const stage = Object.keys(stageKeys).find(key => stageKeys[key] === data.stage);
           if (!stage) return [];

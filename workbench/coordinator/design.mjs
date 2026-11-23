@@ -344,9 +344,13 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       const build = await buildContext?.(state.builds.at(-1));
       const command = !payload.preparePlan && !payload.changeScreenshot ?
         text.trim().toLowerCase().replace(/[?.]+$/, '') : '';
-      if (['/status', 'build status', 'what is the build status', 'why did the build stop', '/retry-verification'].includes(command)) {
+      if (['/status', 'build status', 'what is the build status', 'why did the build stop', '/retry-verification',
+        'where is the build budget'].includes(command)) {
         let reply = 'There is no current build for this project.';
-        if (build && command === '/retry-verification') {
+        if (command === 'where is the build budget') {
+          reply = 'Open Design → Plan → Build budget. You can set token and provider time limits for this build. ' +
+            'Retry gives the build a fresh allowance under those limits.';
+        } else if (build && command === '/retry-verification') {
           try {
             await retryBuildVerification(build.id);
             reply = 'Verification restarted for “' + build.title + '” using the existing changes.';

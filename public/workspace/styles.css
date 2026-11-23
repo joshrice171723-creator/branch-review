@@ -309,3 +309,7 @@ summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .run-map-coordinator { padding: .2rem .85rem .65rem; }
 .run-map-coordinator summary { cursor: pointer; }
 .run-map-coordinator p { margin: .35rem 0 0; }
+#open-project-conversation[data-build-attention] {
+  border-color: var(--accent);
+  font-weight: 700;
+}

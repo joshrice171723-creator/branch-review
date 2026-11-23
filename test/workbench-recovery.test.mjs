@@ -18,14 +18,9 @@ test('reads a provider reset without inventing a deadline', () => {
   assert.equal(annotateProviderFailure(Error('API error 402: Billing Issue'), request).providerLimit, undefined);
 });
 
-test('restores a quota retry after restart and keeps the task and stage', {timeout: 90000}, async t => {
+async function setup(t) {
   const repository = await mkdtemp(path.join(tmpdir(), 'branch-review-recovery-'));
   const git = async (...args) => execFileSync('git', args, {cwd: repository, encoding: 'utf8', windowsHide: true}).trim();
-  let coordinator;
-  t.after(async () => {
-    await coordinator?.close();
-    await rm(repository, {recursive: true, force: true});
-  });
   await git('init', '-q', '-b', 'change');
   await git('config', 'user.email', 'test@example.com');
   await git('config', 'user.name', 'Recovery test');
@@ -37,6 +32,25 @@ test('restores a quota retry after restart and keeps the task and stage', {timeo
   await store.setConfig({...await store.config(), checks: [{name: 'greeting', argv: ['node', '-e', 'process.exit(0)'],
     cwd: '.', phases: ['baseline', 'after'], required: true, benchmark: false}]});
   await store.setProfile(await store.getProfile());
+  return {repository, git, store};
+}
+
+async function launch(coordinator) {
+  const post = (endpoint, data) => coordinator.dispatch(endpoint, data, {method: 'POST'});
+  const draft = await post('design/draft', {revision: 0, mode: 'task', title: 'Update greeting',
+    plan: 'Edit the greeting.\n\n## Acceptance criteria\n- The greeting is updated.'});
+  await post('design/approve', {revision: draft.revision, mode: 'task'});
+  await post('design/build', {revision: draft.revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
+    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+}
+
+test('restores a quota retry after restart and keeps the task and stage', {timeout: 90000}, async t => {
+  const {repository, git, store} = await setup(t);
+  let coordinator;
+  t.after(async () => {
+    await coordinator?.close();
+    await rm(repository, {recursive: true, force: true});
+  });
 
   let resetAt;
   const calls = [];
@@ -47,7 +61,6 @@ test('restores a quota retry after restart and keeps the task and stage', {timeo
     resetAt ??= new Date(Date.now() + 10000).toISOString();
     throw Error('API error 429: Subscription quota exhausted. It resets at ' + resetAt);
   }};
-  const post = (endpoint, data) => coordinator.dispatch(endpoint, data, {method: 'POST'});
   const current = async () => (await coordinator.dispatch('design')).builds.at(-1);
   async function waitForAttempt(count) {
     const deadline = Date.now() + 30000;
@@ -60,16 +73,13 @@ test('restores a quota retry after restart and keeps the task and stage', {timeo
   }
 
   coordinator = await createCoordinator(args);
-  const draft = await post('design/draft', {revision: 0, mode: 'task', title: 'Update greeting',
-    plan: 'Edit the greeting.\n\n## Acceptance criteria\n- The greeting is updated.'});
-  await post('design/approve', {revision: draft.revision, mode: 'task'});
-  await post('design/build', {revision: draft.revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
-    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+  await launch(coordinator);
   const before = await waitForAttempt(1);
   const first = before.attempts[0];
   assert.equal(first.providerLimit?.resetAt, resetAt, before.error);
   assert.equal(first.step, 'plan_review');
   assert.match((await coordinator.dispatch('design')).resumeBlocker, /resume when the quota resets/);
+  assert.equal(await coordinator.dispatch('design/attention'), null);
   assert.equal(coordinator.busy(), false);
   await coordinator.close();
 
@@ -83,6 +93,43 @@ test('restores a quota retry after restart and keeps the task and stage', {timeo
   assert.deepEqual(calls.map(call => call.stage), ['plan', 'plan_review', 'plan_review']);
   assert.deepEqual(calls.at(-1), calls.at(-2));
   assert.equal((await store.listRuns()).runs.length, 1);
-  await delay(250);
+  let attention;
+  for (let count = 0; count < 30 && !attention; count++) {
+    attention = await coordinator.dispatch('design/attention');
+    if (!attention) await delay(100);
+  }
+  assert.equal(attention?.coordinator, true);
+  assert.match(attention.text, /needs attention at Plan audit/);
+  assert.match(attention.text, /quota exhausted/);
+  assert.equal((await coordinator.dispatch('design')).messages.filter(message => message.buildAttention).length, 1);
   assert.equal((await current()).attempts.length, 2);
+});
+
+test('retries a default audit timeout before posting a single coordinator message', {timeout: 90000}, async t => {
+  const {repository, git, store} = await setup(t);
+  const calls = [];
+  let state;
+  const coordinator = await createCoordinator({repository, git, store, async invoke({stage, timeoutMs}) {
+    if (stage === 'plan') return {text: JSON.stringify({plan: ['Edit the greeting.']})};
+    calls.push({stage, timeoutMs});
+    throw Object.assign(Error('The audit call timed out.'), {code: 'PROVIDER_CALL_TIMEOUT'});
+  }});
+  t.after(async () => {
+    await coordinator.close();
+    await rm(repository, {recursive: true, force: true});
+  });
+  await launch(coordinator);
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    state = await coordinator.dispatch('design');
+    if (state.messages.some(row => row.buildAttention)) break;
+    await delay(150);
+  }
+  const notices = state.messages.filter(row => row.buildAttention);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].text, /retried this stage with a longer call allowance/);
+  assert.deepEqual(calls, [{stage: 'plan_review', timeoutMs: 120000}, {stage: 'plan_review', timeoutMs: 240000}]);
+  const attempts = state.builds.at(-1).attempts;
+  assert.equal(attempts[0].task, attempts[1].task);
+  assert.equal(attempts[1].budgetResetAt, undefined);
 });

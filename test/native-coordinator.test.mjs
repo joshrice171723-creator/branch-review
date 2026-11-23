@@ -213,6 +213,8 @@ test('recovers planning evidence and reuses a current audit receipt without user
       assert.match(prompt, /"receiptStatus":\[\{"name":"greeting","required":true,"receiptId":"[^"]+","status":"passed"\}/);
       reply = {verdict: 'run_check', check: 'greeting', reason: 'Collect a fresh greeting check result.'};
     } else if (stage === 'final_review' && calls.filter(item => item === 'final_review').length === 1) {
+      assert.equal(evidenceOnly, true);
+      assert.match(prompt, /"buildAudit":\{"stage":"build_review"/);
       reply = {verdict: 'repair', reason: 'Add persistent screenshots because the implementation method calls for them.',
         scope: {basis: 'approved', requirement: 'Persist the screenshot in chat history.', before: null,
           observed: 'The attachment reaches the planner.'}};
