@@ -96,28 +96,35 @@ const active = () => data.profiles[data.active];
 const current = () => active().stages[selected];
 
 let providerStatusRequest = 0;
+function showWorkflowProviderStatus() {
+  const notice = byId("workflow-provider-status");
+  notice.hidden = !notice.childElementCount ||
+    (notice.dataset.blocking !== "true" && !["stages", "documents", "rules"].includes(view));
+}
 async function checkWorkflowProviders(refresh = false) {
   const request = ++providerStatusRequest;
   const notice = byId("workflow-provider-status");
   if (refresh) {
-    notice.hidden = false;
-    notice.textContent = "Checking workflow providers…";
+    notice.replaceChildren(element("p", "", "Checking workflow providers…"));
+    showWorkflowProviderStatus();
   }
   try {
     const rows = await api("design/providers" + (refresh ? "?refresh=1" : ""));
     if (request !== providerStatusRequest) return;
     const problems = rows.filter(row => row.status !== "ready");
-    notice.hidden = !problems.length;
+    notice.dataset.blocking = String(problems.some(row => row.status !== "unverified"));
     notice.replaceChildren(...problems.map(row => element("p", "",
       element("strong", "", row.roles.join(", ") + " · " + row.name), " · " + row.message)));
     if (problems.length) notice.append(element("div", "actions",
       button("Open Stage designer", () => openView("stages")),
       button("Recheck providers", () => checkWorkflowProviders(true))));
+    showWorkflowProviderStatus();
   } catch (error) {
     if (request !== providerStatusRequest) return;
-    notice.hidden = false;
+    notice.dataset.blocking = "false";
     notice.replaceChildren(element("p", "", "Could not check workflow providers. " + error.message),
       button("Recheck providers", () => checkWorkflowProviders(true)));
+    showWorkflowProviderStatus();
   }
 }
 
@@ -578,6 +585,7 @@ function render(design) {
   byId("profile-actions").hidden = view !== "stages";
   const configuring = ["stages", "documents", "rules"].includes(view);
   byId("configure-sections").hidden = !configuring;
+  showWorkflowProviderStatus();
   if (configuring) byId("open-configure").setAttribute("aria-current", "page");
   else byId("open-configure").removeAttribute("aria-current");
   byId("view-title").textContent = title;
