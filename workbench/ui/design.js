@@ -323,7 +323,7 @@ function designPanel(initialState) {
       rememberDraft();
     }
     const baseRevision = localDraft.plan?.title !== undefined ? localDraft.baseRevision : state.revision;
-    const title = input(editing.title, "Change title", value => { editing.title = value; edited(); });
+    const title = input(editing.title, "Title", value => { editing.title = value; edited(); });
     title.dataset.designFocus = "plan-title";
     const draft = element("textarea", "plan-text");
     draft.dataset.designFocus = "plan";
@@ -431,7 +431,7 @@ function designPanel(initialState) {
       updateActions();
     }
     updateActions();
-    const result = box("Plan", field("Change title", title),
+    const result = box("Plan", field("Title", title),
       element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
       rendered, draft, summary,
       agreement, element("p", "", "Start build uses the " + active().name + " workflow and approves this plan and agreement."),
