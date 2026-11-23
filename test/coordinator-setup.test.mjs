@@ -173,3 +173,24 @@ test('a direct recovery instruction resumes the stopped build without drafting a
   assert.equal(resumed.builds[0].attempts.length, 2);
   assert.equal(resumed.builds[0].attempts[0].task, resumed.builds[0].attempts[1].task);
 });
+test('Retry checks the stopped baseline before starting another attempt', async t => {
+  const {store, coordinator, git} = await fixture(t, {'greeting.txt': 'Before'}, {
+    invoke: async ({stage}) => ({text: JSON.stringify(stage === 'plan' ? {plan: ['Update the greeting.']} :
+      {verdict: 'pass', reason: 'The plan covers the greeting.'})})
+  });
+  const argv = ['node', '-e', "require('node:fs').writeFileSync('external-change.txt', 'keep me')"];
+  await store.setProfile({...await store.getProfile(), checks: [{name: 'fixture', argv, cwd: '.', required: true, benchmark: false}]});
+  const post = (route, data) => coordinator.dispatch('design/' + route, data, {method: 'POST'});
+  const {revision} = await post('draft', {...plan, revision: 0, mode: 'task'});
+  await post('approve', {revision, mode: 'task'});
+  const started = await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
+    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+  const build = started.builds.at(-1);
+  for (let i = 0; i < 200; i++) {
+    if ((await coordinator.dispatch('design')).builds.at(-1).attention) break;
+    await delay(100);
+  }
+  await assert.rejects(post('continue', {build: build.id}), /baseline differs in external-change.txt/);
+  assert.equal((await coordinator.dispatch('design')).builds.at(-1).attempts.length, 1);
+  assert.match(await git('status', '--porcelain'), /external-change.txt/);
+});

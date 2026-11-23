@@ -522,11 +522,36 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return state;
   }
 
+  async function prepareStoppedChecks(build) {
+    const attempt = build.attempts.at(-1);
+    const loop = await files.read(statePath(attempt.task), {});
+    const stage = loop.stage === 'evidence_blocked' ? loop.history.at(-1)?.detail?.stage : loop.stage;
+    if (!['baseline', 'checks'].includes(stage)) return [];
+    await ensureResumeTarget(build, attempt.task, loop);
+    const blocker = await resumeBlocker(build);
+    if (blocker) throw Error(blocker);
+    let preview;
+    if (['baseline', 'checks'].includes(stage) && prepareBrowserRecovery && await store.needsBrowserPreview(attempt.task)) {
+      preview = await prepareBrowserRecovery();
+      await verifyBrowserPreview(await store.browserCheckUrl()).catch(error => {
+        throw Error(error.message + ' ' + preview);
+      });
+    }
+    const output = stage === 'baseline' && await store.restoreBrowserBaseline(attempt.task);
+    if (loop.stage === 'evidence_blocked' && loop.checked_source &&
+        (await store.snapshot(attempt.task, {record: false})).snapshot_sha256 !== loop.checked_source) {
+      throw Error('The checkout differs from the source recorded for verification.');
+    }
+    if (output) await audit.activity(attempt.task, stage, 'Coordinator', 'Moved recorded browser results to ' + output);
+    return [output && 'Moved the recorded browser output outside the checkout.', preview].filter(Boolean);
+  }
+
   async function advance(payload) {
-    return (await drive(state => {
+    return (await drive(async state => {
       const build = current(state, payload.build);
       if (!['ready', 'failed', 'cancelled'].includes(build.status)) throw Error('This build is waiting for another action.');
       applyBuildBudget(build, payload);
+      if (build.status === 'failed' && approved(state, build)) await prepareStoppedChecks(build);
       return build;
     })).state;
   }
@@ -536,33 +561,15 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const stoppedAttempt = stopped.attempts.at(-1);
     if (stopped.status !== 'failed' || !stoppedAttempt) throw Error('Choose the stopped build.');
     const verificationOnly = await verificationAvailable(stopped);
-    let output;
-    let preview;
+    let preparation;
     await drive(async state => {
       const build = current(state, id);
       if (build.status !== 'failed' || !approved(state, build)) throw Error('The stopped build or its approved plan changed.');
-      const attempt = build.attempts.at(-1);
-      if (attempt.id !== stoppedAttempt.id) throw Error('The stopped attempt changed.');
-      const loop = await files.read(statePath(attempt.task), {});
-      const stage = loop.stage === 'evidence_blocked' ? loop.history.at(-1)?.detail?.stage : loop.stage;
-      await ensureResumeTarget(build, attempt.task, loop);
-      const blocker = await resumeBlocker(build);
-      if (blocker) throw Error(blocker);
-      if (['baseline', 'checks'].includes(stage) && prepareBrowserRecovery && await store.needsBrowserPreview(attempt.task)) {
-        preview = await prepareBrowserRecovery();
-        await verifyBrowserPreview(await store.browserCheckUrl()).catch(error => {
-          throw Error(error.message + ' ' + preview);
-        });
-      }
-      if (stage === 'baseline') output = await store.restoreBrowserBaseline(attempt.task);
-      else if (loop.stage === 'evidence_blocked' && loop.checked_source &&
-        (await store.snapshot(attempt.task, {record: false})).snapshot_sha256 !== loop.checked_source) {
-        throw Error('The checkout differs from the source recorded for verification.');
-      }
+      if (build.attempts.at(-1).id !== stoppedAttempt.id) throw Error('The stopped attempt changed.');
+      preparation = await prepareStoppedChecks(build);
       return build;
     }, undefined, verificationOnly, {kind: 'conversation'});
-    return [output && 'Moved the recorded browser output outside the checkout.', preview,
-      'Resumed the existing build.'].filter(Boolean).join(' ');
+    return [...preparation, 'Resumed the existing build.'].join(' ');
   }
 
   async function retryVerification(payload) {

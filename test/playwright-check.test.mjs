@@ -46,7 +46,8 @@ test('moves recorded browser results and reruns the pinned baseline with isolate
     "const args = process.argv.slice(2);",
     "const dest = args.includes('--output') ? args[args.indexOf('--output') + 1] : 'test-results';",
     "fs.mkdirSync(dest, {recursive:true});",
-    "fs.writeFileSync(require('node:path').join(dest, 'receipt.txt'), process.env.BASE_URL || 'legacy');"
+    "fs.writeFileSync(require('node:path').join(dest, 'receipt.txt'), process.env.BASE_URL || 'legacy');",
+    "fs.writeFileSync(require('node:path').join(dest, '.last-run.json'), JSON.stringify({status:'failed', failedTests:['fixture']}));"
   ].join('\n'));
   await mkdir(path.join(root, 'node_modules', '.bin'), {recursive: true});
   await writeFile(path.join(root, 'node_modules', '.bin', 'playwright.cmd'), '@node fake.cjs %*\r\n');
@@ -54,6 +55,9 @@ test('moves recorded browser results and reruns the pinned baseline with isolate
   git('init', '-q', '-b', 'working');
   git('add', '.');
   git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'Fixture');
+  const baselineMarker = JSON.stringify({status: 'passed', failedTests: []}, null, 2);
+  await mkdir(path.join(root, 'test-results'));
+  await writeFile(path.join(root, 'test-results', '.last-run.json'), baselineMarker);
   const legacy = createStore(root);
   const check = {name: 'browser', cwd: '.', argv: ['npm', 'run', 'test:ui'], required: true, benchmark: false};
   await legacy.setProfile({...await legacy.getProfile(), checks: [check]});
@@ -70,6 +74,7 @@ test('moves recorded browser results and reruns the pinned baseline with isolate
   const store = createStore(root, {browserPreview: () => ({url}), browserArtifacts: path.join(temp, 'artifacts')});
   const directory = await store.restoreBrowserBaseline(task.id);
   assert.equal(await readFile(path.join(directory, 'receipt.txt'), 'utf8'), 'legacy');
+  assert.equal(await readFile(path.join(root, 'test-results', '.last-run.json'), 'utf8'), baselineMarker);
   const retry = await store.runChecks(task.id, {phase: 'baseline'});
   const [receipt] = retry.checks;
   assert.equal(retry.verdict, 'pass', receipt.spawn_error);

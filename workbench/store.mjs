@@ -1186,8 +1186,12 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
         if (!await playwrightCheck(check.argv, cwd)) continue;
         const directory = path.relative(root, path.join(cwd, 'test-results')).replaceAll(path.sep, '/');
         const prefix = directory + '/';
-        if (!changes.length || !changes.every(name => name.startsWith(prefix)) ||
-            Object.keys(expected.files).some(name => name.startsWith(prefix))) continue;
+        if (!changes.length || !changes.every(name => name.startsWith(prefix))) continue;
+        const recorded = Object.keys(expected.files).filter(name => name.startsWith(prefix));
+        const marker = JSON.stringify({status: 'passed', failedTests: []}, null, 2);
+        const restoreMarker = recorded.length === 1 && recorded[0] === prefix + '.last-run.json' &&
+          expected.files[recorded[0]] === hash(marker);
+        if (recorded.length && !restoreMarker) continue;
         const receipts = await checkResults(run, check.name, 'baseline');
         if (!receipts.some(row => row.source_changed && row.source_after_sha256 === current.snapshot_sha256)) continue;
         const tracked = await git(root, 'ls-files', '--', directory);
@@ -1196,11 +1200,26 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
         if (tracked || !info.isDirectory() || info.isSymbolicLink() || await fs.realpath(source) !== source) continue;
         const retained = await browserArtifactDirectory(root, 'branch-review-recovery-' + run.id);
         const destination = path.join(retained, 'test-results');
+        const replacement = path.join(retained, 'baseline-marker');
+        if (restoreMarker) {
+          await fs.mkdir(replacement);
+          await fs.writeFile(path.join(replacement, '.last-run.json'), marker, {flag: 'wx'});
+        }
         await fs.rename(source, destination);
-        const restored = await sourceSnapshot(root, run.task);
-        if (restored.snapshot_sha256 !== expected.snapshot_sha256 || identity.some(key => restored[key] !== expected[key])) {
+        let markerInstalled = false;
+        try {
+          if (restoreMarker) {
+            await fs.rename(replacement, source);
+            markerInstalled = true;
+          }
+          const restored = await sourceSnapshot(root, run.task);
+          if (restored.snapshot_sha256 !== expected.snapshot_sha256 || identity.some(key => restored[key] !== expected[key])) {
+            throw Error('The checkout changed while moving the recorded browser output.');
+          }
+        } catch (error) {
+          if (markerInstalled) await fs.rename(source, replacement);
           await fs.rename(destination, source);
-          throw Error('The checkout changed while moving the recorded browser output.');
+          throw error;
         }
         return destination;
       }
