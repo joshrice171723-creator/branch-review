@@ -9,12 +9,125 @@ import {createHealthReviewer} from '../workbench/coordinator/health.mjs';
 import {observeRuntime} from '../workbench/coordinator/runtime-probes.mjs';
 import {repairRuntime} from '../workbench/coordinator/health-repair.mjs';
 import {gitRead} from '../workbench/environment/paths.mjs';
+import {healthRegression, verifyHostHttpRegression} from '../workbench/coordinator/health-regression.mjs';
 
 async function temp(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'br-health-test-'));
   t.after(() => rm(dir, {recursive: true, force: true, maxRetries: 3}));
   return dir;
 }
+
+test('a reported repair runs its saved HTTP regression only after manual restart', async t => {
+  const directory = await temp(t);
+  let probes = 0;
+  const options = {directory, start: false, idle: () => true, observe: () => [],
+    repair: async () => ({summary: 'Fixed the workspace API.', checks: 'Focused request check passed.', files: ['server.mjs'],
+      regression: {kind: 'http', path: '/api/workspace/design', status: 200}}),
+    verifyRegression: async check => {
+      probes++;
+      assert.equal(check.path, '/api/workspace/design');
+      return {passed: true, detail: 'GET /api/workspace/design returned HTTP 200.'};
+    }};
+  const monitor = await createHealthReviewer(options);
+  await monitor.report({title: 'Workspace API failure', issue: 'The workspace response fails.', request: 'Fix it.'});
+  await monitor.tick();
+  assert.equal(monitor.status().incidents[0].state, 'restart-required');
+  await monitor.tick();
+  assert.equal(probes, 0);
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  await restarted.tick();
+  const [row] = restarted.status().incidents;
+  assert.equal(probes, 1);
+  assert.equal(row.state, 'recovered');
+  assert.equal(row.history[0].outcome, 'verified');
+  assert.equal(row.verification.passed, true);
+});
+
+test('reported interaction repairs wait for their exact observation after restart', async t => {
+  const directory = await temp(t);
+  let observed = [];
+  const options = {directory, start: false, idle: () => true, observe: () => observed,
+    repair: async () => ({summary: 'Fixed settings.', checks: 'Settings request check passed.', files: ['server.mjs'],
+      regression: {kind: 'observation', id: 'request:GET /api/settings'}})};
+  const monitor = await createHealthReviewer(options);
+  await monitor.report({title: 'Settings failure', issue: 'The settings request fails.', request: 'Fix it.'});
+  await monitor.tick();
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  observed = [{owner: 'host', id: 'request:GET /api/other', title: 'Other request', error: ''}];
+  await restarted.tick();
+  assert.equal(restarted.status().incidents[0].state, 'awaiting-observation');
+  observed = [{owner: 'host', id: 'request:GET /api/settings', title: 'Settings request', error: ''}];
+  await restarted.tick();
+  assert.equal(restarted.status().incidents[0].state, 'recovered');
+});
+
+test('a failed saved regression becomes evidence for the next repair attempt', async t => {
+  const directory = await temp(t);
+  let now = 1000;
+  const options = {directory, start: false, interval: 10, clock: () => now, idle: () => true, observe: () => [],
+    repair: async row => {
+      if (row.attempts === 2) assert.match(row.history[0].detail, /HTTP 500/);
+      return {summary: 'Fixed the request.', checks: 'Focused check passed.', files: ['server.mjs'],
+        regression: {kind: 'http', path: '/api/workspace/design', status: 200}};
+    },
+    verifyRegression: async () => ({passed: false, detail: 'GET /api/workspace/design returned HTTP 500.'})};
+  const monitor = await createHealthReviewer(options);
+  await monitor.report({title: 'Request fails', issue: 'Workspace fails.', request: 'Fix it.'});
+  await monitor.tick();
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(restarted.status().incidents[0].state, 'retrying');
+  now += 30;
+  await restarted.tick();
+  const [row] = restarted.status().incidents;
+  assert.equal(row.state, 'restart-required');
+  assert.equal(row.attempts, 2);
+  assert.equal(row.history[0].outcome, 'failed');
+});
+
+test('legacy reported repairs show an observation wait and a repeated report resumes repair', async t => {
+  const directory = await temp(t);
+  const options = {directory, start: false, idle: () => true, observe: () => [],
+    repair: async () => ({summary: 'Fixed dialog.', checks: 'Open the dialog to observe its behavior.', files: ['public/app.js']})};
+  const monitor = await createHealthReviewer(options);
+  await monitor.report({title: 'Dialog failure', issue: 'The dialog does not open.', request: 'Fix it.'});
+  await monitor.tick();
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  await restarted.tick();
+  const [row] = restarted.status().incidents;
+  assert.equal(row.state, 'awaiting-observation');
+  assert.match(row.note, /no automatic regression check/);
+  await restarted.report({title: row.title, issue: row.error, request: 'It still fails.'});
+  assert.equal(restarted.status().incidents[0].state, 'retrying');
+  assert.equal(restarted.status().incidents[0].history[0].outcome, 'failed');
+});
+
+test('regression probes reject writes, external paths, and arbitrary commands', async () => {
+  for (const probe of [
+    {kind: 'http', path: '/api/workspace/design/build', status: 200},
+    {kind: 'http', path: 'https://example.com', status: 200},
+    {kind: 'command', argv: ['node', '-e', 'process.exit(0)']},
+    {kind: 'observation', id: 'request:DELETE /api/settings'}
+  ]) assert.throws(() => healthRegression(probe), /supported read-only/);
+  const probe = {kind: 'http', path: '/api/workspace/design', status: 200};
+  const result = await verifyHostHttpRegression({probe, origin: 'http://127.0.0.1:4310', request: async (url, options) => {
+    assert.equal(url, 'http://127.0.0.1:4310/api/workspace/design');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.redirect, 'manual');
+    return new Response('', {status: 500});
+  }});
+  assert.equal(result.passed, false);
+  await assert.rejects(verifyHostHttpRegression({probe, origin: 'https://example.com'}), /local Branch Review origin/);
+});
 test('observes host requests during use and excludes the loaded project', async () => {
   const origin = 'http://127.0.0.1:4310';
   const project = 'http://127.0.0.1:4410';
@@ -149,8 +262,9 @@ test('applies a repair from an isolated checkout and preserves local edits', asy
   const repair = (prior = [], change = 'fixed', receiptDir = directory) => repairRuntime({repository, directory: receiptDir, prior,
     incident:{owner:'host',error:'fixture error'},
     profile:{active:'fast',profiles:{fast:{stages:{build:{provider:'Codex'}}}}},
-    signal:new AbortController().signal, mayApply: () => true, invoke:async ({cwd}) => {
+    signal:new AbortController().signal, mayApply: () => true, invoke:async ({cwd, timeoutMs}) => {
       assert.notEqual(cwd, repository);
+      assert.equal(timeoutMs, null);
       await writeFile(path.join(cwd, 'service.js'), change + '\n');
       return {text: JSON.stringify({verified:true,summary:'Fixed service',checks:'Fixture check passed'})};
     }});

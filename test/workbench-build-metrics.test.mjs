@@ -41,17 +41,20 @@ test('charges reported usage and preserves cache reads and unknown calls', () =>
   ]), {tokens: 80, cached: 40, unknown: 2, milliseconds: 4500});
 });
 
-test('keeps provider budget defaults for older profiles and validates explicit limits', () => {
-  const {profiles} = WorkbenchProfile.initial([]);
-  const limits = (mode, stage) => WorkbenchProfile.providerLimits(profiles[mode], mode, stage);
-  assert.deepEqual(limits('fast', 'planReview'), {timeoutSeconds: 120, providerTimeSeconds: 600, providerTokenLimit: 60_000});
-  assert.deepEqual(limits('audited', 'build'), {timeoutSeconds: 600, providerTimeSeconds: 1800, providerTokenLimit: 180_000});
-  assert.equal(limits('audited', 'finalReview').timeoutSeconds, 300);
-  profiles.fast.stages.planReview.timeoutSeconds = 12000;
-  assert.throws(() => WorkbenchProfile.validate({version: 1, active: 'fast', documents: [], profiles}), /call time limit/);
+test('loads historical provider limit fields with the configured repair loop', () => {
+  const profile = WorkbenchProfile.initial([]);
+  profile.profiles.fast.providerTokenLimit = 1000;
+  profile.profiles.fast.providerTimeSeconds = 60;
+  profile.profiles.fast.stages.planReview.timeoutSeconds = 10;
+  profile.profiles.fast.stages.buildReview.limit = 4;
+  const loaded = WorkbenchProfile.validate(profile);
+  assert.equal(loaded.profiles.fast.stages.buildReview.limit, 4);
+  assert.equal(loaded.profiles.fast.providerTokenLimit, 1000);
+  assert.equal(loaded.profiles.fast.providerTimeSeconds, 60);
+  assert.equal(loaded.profiles.fast.stages.planReview.timeoutSeconds, 10);
 });
 
-test('launches a Codex evidence-only call with shell disabled and enforces its time limit', async t => {
+test('launches a Codex evidence-only call without a deadline and supports cancellation', async t => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'branch-review-provider-'));
   t.after(() => rm(cwd, {recursive: true, force: true}));
   const executable = path.join(cwd, 'provider.mjs');
@@ -63,11 +66,13 @@ test('launches a Codex evidence-only call with shell disabled and enforces its t
     '  console.log(JSON.stringify({type: "turn.completed", usage: {input_tokens: 3, output_tokens: 2}}));\n' +
     '}\n');
   const request = {cwd, output: path.join(cwd, 'reply.txt'), stage: 'final_review', provider: 'Codex',
-    prompt: 'Review the supplied evidence.', providerOptions: {codex: {executable}}, write: true, evidenceOnly: true};
+    prompt: 'Review the supplied evidence.', providerOptions: {codex: {executable}}, write: true, evidenceOnly: true, timeoutMs: null};
   const {text} = await runProvider(request);
   const args = JSON.parse(text);
   assert.equal(args[args.indexOf('--sandbox') + 1], 'read-only');
   assert.ok(args.some((arg, index) => arg === '--disable' && args[index + 1] === 'shell_tool'));
-  await assert.rejects(runProvider({...request, model: 'slow-provider', timeoutMs: 250,
-    timeoutCode: 'PROVIDER_TASK_TIME_BUDGET'}), {code: 'PROVIDER_TASK_TIME_BUDGET'});
+  const controller = new AbortController();
+  const pending = runProvider({...request, model: 'slow-provider', signal: controller.signal});
+  setTimeout(() => controller.abort(), 250);
+  await assert.rejects(pending, /cancel|abort/i);
 });

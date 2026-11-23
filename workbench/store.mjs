@@ -267,7 +267,7 @@ async function prepareCheck(root, check, {quality, allowFuture} = {}) {
       inputs.push(file);
     }
   }
-  return {root, cwd, argv, command, inputs, timeout:check.timeout_seconds ?? 300};
+  return {root, cwd, argv, command, inputs, timeout:null};
 }
 
 async function checkInputFingerprint({root, cwd, command, inputs, timeout, browser}, executableHash) {
@@ -299,7 +299,7 @@ function failedCommand(error, signal) {
 async function command(prepared, signal) {
   try {
     const {cwd, argv, command, timeout, env} = prepared;
-    const result = await capture(argv, {cwd, command, env, signal, encoding:null, limit:maxRecord, timeout, stopOnLimit:true});
+    const result = await capture(argv, {cwd, command, env, signal, encoding:null, limit:maxRecord, timeout});
     return {...result, exit_code:result.exit_code ?? (signal?.aborted ? 128 : 127), spawn_error:result.error ?? null};
   } catch (error) {
     return failedCommand(error, signal);
@@ -975,8 +975,11 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     const prepared = await prepareCheck(await resolvedRoot, check, {quality:run.task.quality});
     if (!run.task.quality && !check.benchmark && browserPreview) {
       const browser = await playwrightCheck(prepared.argv, prepared.cwd);
-      if (browser) prepared.browser = {...browser,
-        ...(browser.managedUrl && {url: (await browserPreview()).url || ''})};
+      if (browser) {
+        const preview = browser.managedUrl ? await browserPreview() : null;
+        prepared.browser = {...browser, ...(preview && {url: preview.url || '',
+          revision: preview.revision ?? null, source: preview.source ?? null, owned: Boolean(preview.owned)})};
+      }
     }
     return {prepared, sha256:await checkInputFingerprint(prepared, executableHash)};
   }
@@ -1071,14 +1074,17 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       } else {
         const prepared = inputs.prepared;
         if (prepared.browser) {
-          const {npm, managedUrl, url} = prepared.browser;
+          const {npm, managedUrl, url, revision, source, owned} = prepared.browser;
+          if (managedUrl && (!owned || revision !== before.head || source !== before.snapshot_sha256)) {
+            throw Error('Start a managed preview from the exact source that this browser check verifies.');
+          }
           const baseUrl = managedUrl ? await verifyBrowserPreview(url, signal) : undefined;
           const output = await browserArtifactDirectory(root, 'branch-review-browser-' + id);
           const env = {...process.env, ...(baseUrl && {BASE_URL: baseUrl}),
             PLAYWRIGHT_HTML_OUTPUT_DIR: path.join(output, 'html')};
           const args = [...prepared.command.args, ...(npm ? ['--'] : []), '--output', path.join(output, 'results')];
           result = await command({...prepared, env, command: {...prepared.command, args}}, signal);
-          result.browser = {base_url: baseUrl, output};
+          result.browser = {base_url: baseUrl, revision, source, output};
         } else result = await command(prepared, signal);
       }
     } catch (error) {
@@ -1153,6 +1159,46 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       const gating = results.filter(row => configured.some(check => check.name === row.check && (check.required || check.benchmark)));
       return {checks:results, verdict:gating.every(passing) ? 'pass' : 'revise'};
     });
+  }
+
+  async function configuredCheckReadiness(config) {
+    config ??= await effectiveConfig();
+    const root = await resolvedRoot;
+    const checks = [];
+    for (const check of config.checks.filter(row => row.required || row.benchmark)) {
+      try {
+        const allowFuture = (check.phases ?? phases).join(',') === 'after';
+        const prepared = await prepareCheck(root, check, {quality: config.quality_revision, allowFuture});
+        const browser = await playwrightCheck(check.argv, prepared.cwd);
+        const [program, action, name] = check.argv;
+        const script = /^npm(?:\.cmd)?$/i.test(program) ? (action === 'test' ? 'test' : action === 'run' ? name : '') : '';
+        if (script) {
+          const manifest = await fs.readFile(path.join(prepared.cwd, 'package.json'), 'utf8').catch(error => {
+            if (error.code === 'ENOENT') throw Error('The npm check has no package.json in its working directory.');
+            throw error;
+          });
+          const pkg = JSON.parse(manifest);
+          const scriptCommand = pkg.scripts?.[script];
+          if (typeof scriptCommand !== 'string' || !scriptCommand.trim()) throw Error('The npm script ' + script + ' is missing.');
+          const [binary] = scriptCommand.trim().split(/\s+/);
+          const packageBin = browser?.npm || ['vite', 'vitest', 'jest', 'eslint', 'tsc', 'cypress', 'playwright'].includes(binary) ||
+            Object.hasOwn({...pkg.dependencies, ...pkg.devDependencies}, binary);
+          if (packageBin) {
+            const executable = binary + (process.platform === 'win32' ? '.cmd' : '');
+            let installed = false;
+            for (let cwd = prepared.cwd; checkPathInside(root, cwd); cwd = path.dirname(cwd)) {
+              if (await checkFile(path.join(cwd, 'node_modules', '.bin', executable))) { installed = true; break; }
+              if (cwd === root) break;
+            }
+            if (!installed) throw Error('The project dependency that provides ' + binary + ' is missing.');
+          }
+        }
+        checks.push({name: check.name, status: prepared.command ? 'ready' : 'deferred', browser: Boolean(browser?.managedUrl)});
+      } catch (error) {
+        checks.push({name: check.name, status: 'blocked', reason: error.message});
+      }
+    }
+    return checks;
   }
 
   async function needsBrowserPreview(id) {
@@ -1594,7 +1640,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
   }
 
   return {initialize:() => mutate(install), config, setConfig, effectiveConfig, getProfile, setProfile, profileApplied, discover, startTask, questions, answer,
-    freeze, prompt, executionConfig, snapshot, cosmeticSource, runCheck, runChecks:runConfigured, needsBrowserPreview, browserCheckUrl: async () => (await browserPreview?.())?.url, restoreBrowserBaseline,
+    freeze, prompt, executionConfig, snapshot, cosmeticSource, runCheck, runChecks:runConfigured, configuredCheckReadiness, needsBrowserPreview, browserCheckUrl: async () => (await browserPreview?.())?.url, restoreBrowserBaseline,
     preflightChecks, checkReceiptStatus,
     benchmark:(id, options) => runConfigured(id, {...options, benchmarks:true}), record, readRunRecord, getRun, listRuns,
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),

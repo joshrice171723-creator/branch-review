@@ -73,7 +73,7 @@ async function cleanupEntries(folder) {
 
 export function createEnvironment({repository, store, local, projectId, defaultProfile, isActive, savedPreview, selectedAgent, origin}) {
   let automaticPreviewStopped = false;
-  let rootPromise, directoryWrite, preview, queue = Promise.resolve();
+  let rootPromise, directoryWrite, preview, readinessController, queue = Promise.resolve();
   const repo = () => rootPromise ||= realpath(repository);
   const stateDirectory = path.resolve(local || path.join(repository, '.harness'));
   const id = async () => projectId || stableId(process.platform === 'win32' ? (await repo()).toLowerCase() : await repo());
@@ -281,6 +281,12 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     return (await getPreview()).setup(input);
   }
 
+  async function startPreview(app, options = {}) {
+    const {taskId, ...settings} = options;
+    const snapshot = await store.snapshot?.(taskId, {record: false});
+    return app.start({...settings, source: snapshot?.snapshot_sha256});
+  }
+
   async function autoPreview(input) {
     const app = await getPreview();
     const current = await app.status();
@@ -292,7 +298,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     if (await savedPreview?.()) return current;
     if (current.settings) {
       if (current.settings.mode !== "web") return current;
-      return app.start();
+      return startPreview(app, {taskId: input.taskId, signal: input.signal});
     }
     const candidates = (await capabilities({routes: false})).previews.filter(row =>
       row.url && ["web", "external"].includes(row.mode));
@@ -304,45 +310,58 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     if (!selected) return {...current, choices: choices.map(({id, label}) => ({id, label})),
       message: choices.length ? "Choose the project app to preview." : "No web preview was detected. Set an app address in Preview settings."};
     await app.setup(selected);
-    return app.start();
+    return startPreview(app, {taskId: input.taskId, signal: input.signal});
   }
 
-  async function previewForPlan(inventory, previewId) {
+  async function previewForPlan(inventory, previewId, expectedRevision, {rerunSetup = false, taskId, signal, waitForReady = false} = {}) {
     try {
       const candidate = inventory.previews.find(row => row.id === previewId && row.url && ['web', 'external'].includes(row.mode));
-      let state = await autoPreview({retry: true, id: candidate?.id});
+      let state = await autoPreview({retry: true, id: candidate?.id, taskId, signal});
       const app = await getPreview();
       async function check() {
-        for (let attempt = 0; state.state === 'starting' && attempt < 10; attempt++) {
-          await delay(500);
+        for (let attempt = 0; state.state === 'starting' && (waitForReady || attempt < 10); attempt++) {
+          await delay(500, undefined, {signal});
           state = await app.status();
         }
         if (!state.owned || state.state !== 'running' || state.settings?.mode !== 'web') return null;
-        const response = await fetch(state.url, {redirect: 'manual', signal: AbortSignal.timeout(5000)});
+        const deadline = AbortSignal.timeout(5000);
+        const response = await fetch(state.url, {redirect: 'manual', signal: signal ? AbortSignal.any([signal, deadline]) : deadline});
         await response.body?.cancel();
         return response.status;
       }
       let status = await check();
-      const retrying = status >= 500;
+      const expectedSource = (await store.snapshot?.(taskId, {record: false}))?.snapshot_sha256;
+      const outdated = state.owned && ((expectedRevision && state.revision !== expectedRevision) ||
+        (expectedSource && state.source !== expectedSource));
+      const retrying = status >= 500 || outdated || (rerunSetup && state.owned);
       if (retrying) {
         await app.stop();
-        state = await app.start();
+        state = await startPreview(app, {rerunSetup, taskId, signal});
         status = await check();
       }
-      if (status >= 400) return ['The managed preview responded with HTTP ' + status +
-        (retrying ? ' after a restart.' : '.'), state.log && redact(state.log).slice(-750)].filter(Boolean).join('\n');
-      if (status) return retrying ? 'The managed preview responded after restart.' : 'The preview responded.';
-      if (state.state === 'starting') return 'The preview is starting.';
-      if (state.state === 'external' || await savedPreview?.()) return 'Using the saved preview address.';
-      return [state.message || 'The preview is unavailable.',
-        state.state === 'exited' && state.log && redact(state.log).slice(-750)].filter(Boolean).join('\n');
+      const report = (stateName, message) => ({state: stateName, message, url: state.url || '', revision: state.revision ?? null, source: state.source ?? null});
+      if (status >= 400) return report('blocked', ['The managed preview responded with HTTP ' + status +
+        (retrying ? ' after a restart.' : '.'), state.log && redact(state.log).slice(-750)].filter(Boolean).join('\n'));
+      if (status >= 200 && status < 300 && (!expectedRevision || state.revision === expectedRevision) &&
+          (!expectedSource || state.source === expectedSource)) {
+        return report('ready', retrying ? 'The managed preview responded after restart.' : 'The preview responded.');
+      }
+      if (status) return report('blocked', 'The managed preview did not confirm the expected revision and a successful response.');
+      if (state.state === 'starting') return report('pending', 'The preview is still starting.');
+      if (state.state === 'external' || await savedPreview?.()) {
+        return report('external', 'The saved preview address is available. Its revision is unverified.');
+      }
+      return report('blocked', [state.message || 'The preview is unavailable.',
+        state.state === 'exited' && state.log && redact(state.log).slice(-750)].filter(Boolean).join('\n'));
     } catch (error) {
-      return 'Preview setup did not finish. ' + redact(error.message);
+      return {state: 'blocked', message: 'Preview setup did not finish. ' + redact(error.message)};
     }
   }
 
   function prepareBuild({checkId, previewId} = {}) {
     return write(async () => {
+      const active = await activeTask();
+      if (active?.status === 'active') throw Error('An active build owns the project settings. Use Coordinator to recover that build.');
       const root = await repo();
       const profile = await store.getProfile();
       const config = await store.effectiveConfig();
@@ -355,8 +374,8 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         let discovered;
         for (const candidate of ordered) {
           if (!preferred.includes(candidate.kind)) continue;
-          const cwd = await plainPath(root, candidate.cwd, {directory: true}).catch(missing);
-          if (cwd && await programAvailable(candidate.argv[0], cwd)) { discovered = candidate; break; }
+          const [evidence] = await store.configuredCheckReadiness({checks: [checkDefinition(candidate)]});
+          if (evidence.status === 'ready') { discovered = candidate; break; }
         }
         const required = discovered ? checkDefinition(discovered) : smokeCheck;
         const checks = profile.checks.filter(row => row.name !== required.name);
@@ -368,9 +387,13 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       const smoke = !effective.quality_revision && effective.checks.some(row => row.name === smokeCheck.name &&
         row.argv.join(' ') === smokeCheck.argv.join(' ')) &&
         !await plainPath(root, smokePath).catch(missing) ? smokePath : '';
-      const previewMessage = await previewForPlan(inventory, previewId);
-      return {checks: effective.checks.filter(row => row.required || row.benchmark).map(row => row.name),
-        smoke, previewMessage};
+      let checks = await store.configuredCheckReadiness(effective);
+      const app = await getPreview();
+      const settings = await app.settings();
+      const rerunSetup = Boolean(settings?.setup?.length && checks.some(row => row.status === 'blocked'));
+      const preview = await previewForPlan(inventory, previewId, inventory.head, {rerunSetup});
+      if (preview.state === 'ready') checks = await store.configuredCheckReadiness(effective);
+      return {checks, smoke, previewMessage: preview.message, preview};
     });
   }
 
@@ -404,13 +427,17 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         return write(async () => {
           if (payload.id || payload.candidateId) await setupPreview(payload);
           automaticPreviewStopped = false;
-          return (await getPreview()).start();
+          return startPreview(await getPreview());
         });
       case 'POST design/app-process/stop':
-      case 'POST preview/stop': return write(async () => {
-        automaticPreviewStopped = true;
-        return (await getPreview()).stop();
-      });
+      case 'POST preview/stop': {
+        readinessController?.abort();
+        (await getPreview()).cancelSetup();
+        return write(async () => {
+          automaticPreviewStopped = true;
+          return (await getPreview()).stop();
+        });
+      }
       default: return undefined;
     }
   }
@@ -418,16 +445,29 @@ export function createEnvironment({repository, store, local, projectId, defaultP
   return {inspect, prepare, prepareBuild,
     async browserPreview() {
       const process = await (await getPreview()).status();
-      return {url: process.url || await savedPreview?.()};
+      return {url: process.url || await savedPreview?.(), revision: process.revision, source: process.source, owned: process.owned};
     },
-    prepareBrowserRecovery: () => write(async () => previewForPlan(await capabilities({routes: false}))), cleanupPreview, cleanup, capabilities, exportProfile, importProfile, checkedPreview, dispatch,
+    prepareBrowserRecovery: ({signal, ...options} = {}) => write(async () => {
+      readinessController = new AbortController();
+      try {
+        const stop = signal ? AbortSignal.any([signal, readinessController.signal]) : readinessController.signal;
+        const inventory = await capabilities({routes: false});
+        return await previewForPlan(inventory, undefined, inventory.head, {...options, signal: stop});
+      } finally {
+        readinessController = null;
+      }
+    }), cleanupPreview, cleanup, capabilities, exportProfile, importProfile, checkedPreview, dispatch,
     recoverPreview: () => write(async () => {
       const app = await getPreview();
       const state = await app.status();
       if (automaticPreviewStopped || state.settings?.mode !== 'web' || state.state === 'external' ||
           (!state.owned && state.state !== 'exited')) throw Error('The managed preview is no longer active.');
       await app.stop();
-      return app.start();
+      return startPreview(app);
     }),
-    close: () => write(() => preview?.close())};
+    close: () => {
+      readinessController?.abort();
+      preview?.cancelSetup();
+      return write(() => preview?.close());
+    }};
 }

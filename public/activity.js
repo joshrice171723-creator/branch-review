@@ -40,7 +40,7 @@ export function coordinatorHealth(api) {
     notice.hidden = true;
   };
   function showNotice(incidents, maxAttempts) {
-    const key = row => row.id + (row.state === 'attention' ? ':failed' : row.state === 'restart-required' ? ':restart' : ':active');
+    const key = row => row.id + (row.state === 'attention' ? ':failed' : row.state === 'restart-required' ? ':restart' : row.state === 'awaiting-observation' ? ':observing' : ':active');
     const row = incidents.find(row => row.state === 'attention' && !dismissed.includes(key(row))) ||
       incidents.find(row => row.state !== 'recovered' && !dismissed.includes(key(row)));
     notice.hidden = !row;
@@ -49,10 +49,12 @@ export function coordinatorHealth(api) {
     restart.hidden = row.state !== 'restart-required';
     const heading = row.state === 'attention' ? 'App Health could not fix this issue' :
       row.state === 'restart-required' ? 'Restart required' :
+      row.state === 'awaiting-observation' ? 'Repair loaded · awaiting observation' :
       row.state === 'verifying' ? 'App Health is checking a repair' : 'App Health found an issue';
     const detail = row.state === 'attention' ? `Repair stopped after ${row.attempts} attempts. ${row.note || ''}` :
       row.state === 'restart-required' ? `${row.note || ''} Select Restart to load the repair.` :
       row.state === 'verifying' ? row.note :
+      row.state === 'awaiting-observation' ? row.note :
       row.state === 'retrying' ? `Attempt ${row.attempts} of ${maxAttempts} failed. App Health will try another approach.` :
       row.note || 'App Health will investigate and repair it automatically.';
     const message = row.title + ' — ' + row.error;
@@ -101,7 +103,8 @@ export function coordinatorHealth(api) {
         status.textContent = row.state.replaceAll('-', ' ');
         heading.append(title, status);
         item.append(heading);
-        for (const [label, text] of [['Issue', row.error], ['Activity', row.note], ['Checks', row.checks], ['Verified', row.verifiedAt && new Date(row.verifiedAt).toLocaleString()]]) {
+        for (const [label, text] of [['Issue', row.error], ['Activity', row.note], ['Checks', row.checks],
+          ['Regression check', row.verification?.detail], ['Verified', row.verifiedAt && new Date(row.verifiedAt).toLocaleString()]]) {
           if (!text) continue;
           const detail = document.createElement('div');
           detail.className = 'health-detail';

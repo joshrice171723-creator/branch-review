@@ -15,17 +15,6 @@ const pendingStates = ['working', 'cancelling'];
 const closedStates = ['closed', 'retired'];
 const decisionStages = ['question', 'question_retry', 'evidence'];
 const budgetErrors = ['PROVIDER_CALL_TIMEOUT', 'PROVIDER_TASK_TIME_BUDGET', 'PROVIDER_USAGE_BUDGET'];
-function applyBuildBudget(build, payload) {
-  for (const [key, label] of [['providerTokenLimit', 'token limit'], ['providerTimeSeconds', 'provider time in seconds']]) {
-    const value = payload[key];
-    if (value === undefined) continue;
-    const [min, max] = WorkbenchProfile.providerBounds[key];
-    if (!Number.isSafeInteger(value) || value < min || value > max) {
-      throw Error('Set the build ' + label + ' between ' + min + ' and ' + max + '.');
-    }
-    build[key] = value;
-  }
-}
 const repairLimitMessage = 'This run reached its repair limit. Review the last audit before starting another build.';
 const workflowChangedMessage = build => 'Agent settings changed after this run started. ' + (build.mode === 'task'
   ? 'Restart the build to use the saved settings.'
@@ -106,6 +95,13 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     }
     return config;
   }
+  async function ensureRunnableChecks() {
+    const config = await ensureChecks();
+    const checks = await store.configuredCheckReadiness(config);
+    const blockers = checks.filter(row => row.status === 'blocked');
+    if (blockers.length) throw Error(blockers.map(row => row.name + ': ' + row.reason).join(' '));
+    return config;
+  }
   async function active() {
     const runs = await store.listRuns();
     return runs.active ? store.getRun(runs.active) : null;
@@ -181,18 +177,6 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const bytes = await files.bytes('.harness/profile.json', 4_000_000, null);
     return !!bytes && hash(bytes) === build.profile;
   }
-  async function runtimeProfile(previous, taskId) {
-    if (previous?.task !== taskId) return;
-    if (!budgetErrors.includes(previous.errorCode)) return previous.runtimeProfile;
-    const saved = await store.getProfile();
-    const profile = selectedProfile(saved);
-    const stages = Object.fromEntries(Object.entries(profile.stages)
-      .filter(([, stage]) => stage.timeoutSeconds !== undefined)
-      .map(([key, stage]) => [key, {timeoutSeconds: stage.timeoutSeconds}]));
-    const {providerTimeSeconds, providerTokenLimit} = WorkbenchProfile.providerLimits(profile, saved.active);
-    return {providerTimeSeconds, providerTokenLimit, stages};
-  }
-
   async function readiness({automaticRouting} = {}) {
     const state = await design.read();
     const build = state.builds.at(-1);
@@ -213,7 +197,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       await test('profile', ensureProfile, 'A workflow profile is applied.'),
       ...(await checkProviders(profile, false, visual ? 'Codex' : undefined)).map(row =>
         check(row.id, providerReady(row), providerMessage(row))),
-      await test('checks', ensureChecks, 'Required project checks are configured.'),
+      await test('checks', ensureRunnableChecks, 'Required project check commands passed preflight.'),
       await test('branch', () => commitment(git, state.branch), 'The configured branch is checked out.'),
       check('review', !!review, review ? 'Branch Review is ready.' : 'Open the completed commit in Branch Review.'),
       check('native', native, native ? 'No unfinished build or active task.' : 'Finish or pause the current build or task.')
@@ -290,26 +274,15 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (verificationOnly || retryRepair) await store.retryVerification(task.id, verificationSource,
       retryRepair ? 'User requested a build retry with fresh allowances.' : undefined);
     else if (manualRetry && prior.lifecycle.status !== 'completed') await store.resetRetryLimits(task.id);
-    const savedLimits = await runtimeProfile(previous, task.id);
-    const overrides = Object.fromEntries(['providerTokenLimit', 'providerTimeSeconds']
-      .filter(key => build[key] !== undefined).map(key => [key, build[key]]));
-    let limits = Object.keys(overrides).length ? {...savedLimits, ...overrides} : savedLimits;
-    if (automaticRecovery?.kind === 'stageTimeout') {
-      const {role, timeoutSeconds} = automaticRecovery;
-      limits = {...limits, stages: {...limits?.stages, [role]: {timeoutSeconds}}};
-    }
     const attempt = {id: id(), job: id(), slice: member, task: task.id, started: now(), outcome: 'running',
-      ...(limits && {runtimeProfile: limits}),
       ...(automaticRecovery && {automaticRecovery}),
       reason: group.findings.at(-1)?.text ?? previous?.error ?? ''};
-    const budgetResetAt = manualRetry ? Date.now() : previous?.task === task.id ? previous.budgetResetAt : undefined;
-    if (budgetResetAt !== undefined) attempt.budgetResetAt = budgetResetAt;
     build.attempts.push(attempt);
     build.status = 'working';
     delete build.error;
     delete build.attention;
     const recoveredPaths = automaticRecovery?.kind === 'handoff' ? automaticRecovery.paths : undefined;
-    return {build: structuredClone(build), attempt, task, answer, verificationOnly, retryRepair, runtimeProfile: limits,
+    return {build: structuredClone(build), attempt, task, answer, verificationOnly, retryRepair,
       recoveredPaths, step: recoveredPaths ? 'finish' : verificationOnly || retryRepair ? 'checks' : loop?.stage};
   }
 
@@ -352,9 +325,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (build.attention?.fingerprint === fingerprint) return;
     const budget = budgetErrors.includes(attempt.errorCode);
     const next = budget
-      ? attempt.errorCode === 'PROVIDER_CALL_TIMEOUT'
-        ? 'The provider call reached its stage time limit. Check the call time limit in Configure → Stages.'
-        : 'Retry starts a fresh allowance. Use Build budget in Plan if you want to change the limit.'
+      ? 'Retry to resume under the current workflow.'
       : detail?.kind === 'no_task_changes' || detail?.kind === 'checkout_ownership'
         ? 'I need you to decide which changes belong to this build before I can include them in a commit.'
         : /\b429\b|rate_limit_error|quota exhausted/i.test(reason)
@@ -363,8 +334,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const checked = (loop.checks ?? []).filter(row => row.exit_code === 0 && !row.source_changed && !row.inputs_changed);
     const receiptNote = checked.length
       ? 'I kept ' + checked.length + ' passing check ' + (checked.length === 1 ? 'receipt.' : 'receipts.') : '';
-    const recoveryNote = attempt.automaticRecovery?.kind === 'stageTimeout' ? 'I retried this stage with a longer call allowance.' :
-      attempt.automaticRecovery?.resetAt ? 'I retried this stage after the provider reset.' : '';
+    const recoveryNote = attempt.automaticRecovery?.resetAt ? 'I retried this stage after the provider reset.' : '';
     const text = ['“' + (build.title || 'Current build') + '” needs attention at ' + stage + '.',
       reason, diagnosis, receiptNote, recoveryNote, recoveryError && 'Automatic recovery could not start. ' + recoveryError, next].filter(Boolean).join('\n\n');
     await design.edit(state => {
@@ -373,8 +343,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
           current.attention?.fingerprint === fingerprint) return;
       const existing = state.messages.find(row => row.buildAttention?.fingerprint === fingerprint);
       const message = existing ?? {id: id(), author: 'agent', coordinator: true, time: now(), text,
-        buildAttention: {fingerprint, stage, task: attempt.task}, choices: budget ?
-          ['Where is the build budget?', 'Build status'] : ['Build status']};
+        buildAttention: {fingerprint, stage, buildId: build.id, task: attempt.task}, choices: ['Build status']};
       if (!existing) state.messages.push(message);
       current.attention = {id: message.id, fingerprint};
     });
@@ -397,9 +366,6 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     execution.done = (async () => {
       let loop;
       try {
-        if (attempt.automaticRecovery?.kind === 'stageTimeout') {
-          await audit.activity(task.id, prepared.step, 'Workbench', 'Retrying the audit with more time.');
-        }
         if (attempt.automaticRecovery?.kind === 'supervisor') {
           await audit.activity(task.id, prepared.step, 'Coordinator', attempt.automaticRecovery.reason || 'Retrying after reviewing the failure.');
         }
@@ -465,14 +431,17 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     let handedOff = false;
     try {
       release = await files.acquire(leasePath);
-      let prepared;
+      let prepared, preparation = [];
       const state = await design.edit(async state => {
         const build = await change(state);
+        if (['failed', 'cancelled'].includes(build.status) && approved(state, build)) {
+          preparation = await prepareStoppedChecks(build, automaticRecovery);
+        }
         prepared = await newAttempt(state, build, answer, verificationOnly, automaticRecovery);
       });
       const job = start(prepared, release);
       handedOff = true;
-      return {state, job};
+      return {state, job, preparation};
     } finally {
       try { if (!handedOff) await release?.(); }
       finally { operations--; }
@@ -496,7 +465,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       if (previousTask && ['active', 'unverified'].includes(previousTask.lifecycle.status) &&
           !(ownsTask && previousTask.lifecycle.status === 'active')) throw Error('Finish or pause the current task.');
       const profile = await ensureProfile();
-      const config = await ensureChecks();
+      const config = await ensureRunnableChecks();
       const visual = payload.automaticRouting === true && state.mode === 'task' &&
         cosmeticCandidate({plan: state.plan, profile, quality: config.quality_revision, checks: config.checks});
       const blockers = (await checkProviders(profile, false, visual ? 'Codex' : undefined)).filter(row => !providerReady(row));
@@ -505,12 +474,16 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         throw Error('The applied workflow changed. Reload the build steps.');
       }
       const base = await commitment(git, state.branch);
+      if (prepareBrowserRecovery && (await store.configuredCheckReadiness(config)).some(row => row.browser)) {
+        const preview = await prepareBrowserRecovery();
+        if (preview.state === 'ready' && preview.revision === base) await verifyBrowserPreview(await store.browserCheckUrl());
+        else if (preview.state !== 'pending') throw Error(preview.message);
+      }
       const baseline = await audit.baseline();
       const groups = groupMembers(state, payload).map(slices => ({slices, pending: [...slices], findings: [], reviews: [], sha: null}));
       const build = {id: id(), revision: state.revision, index: 0, branch: state.branch, plan: state.plan, roadmap: state.roadmap,
         attachments: {...state.attachments}, base, decisions: restart ? previous.decisions : payload.decisions ?? {}, status: 'ready', attempts: [],
         profile: jsonHash(profile), groups, ...baseline, ...(state.mode === 'task' ? {mode: 'task', title: state.title} : {})};
-      applyBuildBudget(build, payload);
       if (payload.automaticRouting === true && state.mode === 'task') build.automaticRouting = true;
       if (restart) {
         if (ownsTask && previousTask.lifecycle.status === 'active') await store.pause(previousTask.id, 'Build restarted.');
@@ -522,7 +495,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return state;
   }
 
-  async function prepareStoppedChecks(build) {
+  async function prepareStoppedChecks(build, recovery) {
     const attempt = build.attempts.at(-1);
     const loop = await files.read(statePath(attempt.task), {});
     const stage = loop.stage === 'evidence_blocked' ? loop.history.at(-1)?.detail?.stage : loop.stage;
@@ -530,14 +503,15 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     await ensureResumeTarget(build, attempt.task, loop);
     const blocker = await resumeBlocker(build);
     if (blocker) throw Error(blocker);
-    let preview;
-    if (['baseline', 'checks'].includes(stage) && prepareBrowserRecovery && await store.needsBrowserPreview(attempt.task)) {
-      preview = await prepareBrowserRecovery();
-      await verifyBrowserPreview(await store.browserCheckUrl()).catch(error => {
-        throw Error(error.message + ' ' + preview);
-      });
-    }
     const output = stage === 'baseline' && await store.restoreBrowserBaseline(attempt.task);
+    let preview;
+    const rerunSetup = recovery?.action === 'rerun-declared-setup';
+    if (prepareBrowserRecovery && (rerunSetup || await store.needsBrowserPreview(attempt.task))) {
+      preview = await prepareBrowserRecovery({rerunSetup, taskId: attempt.task});
+      if (preview.state === 'ready') await verifyBrowserPreview(await store.browserCheckUrl());
+      else if (preview.state !== 'pending') throw Error(preview.message);
+      preview = preview.message;
+    }
     if (loop.stage === 'evidence_blocked' && loop.checked_source &&
         (await store.snapshot(attempt.task, {record: false})).snapshot_sha256 !== loop.checked_source) {
       throw Error('The checkout differs from the source recorded for verification.');
@@ -550,8 +524,6 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return (await drive(async state => {
       const build = current(state, payload.build);
       if (!['ready', 'failed', 'cancelled'].includes(build.status)) throw Error('This build is waiting for another action.');
-      applyBuildBudget(build, payload);
-      if (build.status === 'failed' && approved(state, build)) await prepareStoppedChecks(build);
       return build;
     })).state;
   }
@@ -561,12 +533,10 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const stoppedAttempt = stopped.attempts.at(-1);
     if (stopped.status !== 'failed' || !stoppedAttempt) throw Error('Choose the stopped build.');
     const verificationOnly = await verificationAvailable(stopped);
-    let preparation;
-    await drive(async state => {
+    const {preparation} = await drive(async state => {
       const build = current(state, id);
       if (build.status !== 'failed' || !approved(state, build)) throw Error('The stopped build or its approved plan changed.');
       if (build.attempts.at(-1).id !== stoppedAttempt.id) throw Error('The stopped attempt changed.');
-      preparation = await prepareStoppedChecks(build);
       return build;
     }, undefined, verificationOnly, {kind: 'conversation'});
     return [...preparation, 'Resumed the existing build.'].join(' ');
@@ -576,7 +546,6 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return (await drive(state => {
       const build = current(state, payload.build);
       if (build.status !== 'failed') throw Error('Select the stopped build.');
-      applyBuildBudget(build, payload);
       return build;
     }, undefined, true)).state;
   }
@@ -601,23 +570,28 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const ownership = ['source_changed', 'checkout_ownership'].includes(detail?.kind) ||
       /source changed|checkout changed|configured branch changed/i.test(attempt.error ?? '');
     const previous = build.attempts.filter(row => row.task === attempt.task && row.automaticRecovery?.kind === 'supervisor');
-    if (previous.length >= 5) return {reason: 'The Coordinator reached its five-attempt recovery limit.'};
+    const limit = selectedProfile(run.task.profile)?.stages.buildReview.limit;
+    if (Number.isInteger(limit) && previous.length >= limit) return {reason: 'Coordinator reached the configured repair loop limit.'};
     const canVerify = Boolean(verificationCheckpoint(run, loop));
     await audit.activity(attempt.task, loop.stage ?? 'plan', 'Coordinator', 'Reviewing the build failure for recovery.');
     const diagnosis = await supervise({build, attempt, failure: redact(build.error ?? attempt.error ?? ''), evidence: {
-      detail, canVerify, ownership,
+      detail, canVerify, ownership, managedBrowser: Boolean(prepareBrowserRecovery && await store.needsBrowserPreview(attempt.task).catch(() => false)),
       previous: previous.map(row => ({action: row.automaticRecovery.action, reason: row.automaticRecovery.reason, error: redact(row.error ?? '')})),
       checks: run.checks.slice(-8).map(row => ({name: row.check, code: row.exit_code,
         sourceChanged: row.source_changed, inputsChanged: row.inputs_changed,
         output: redact([row.spawn_error, row.stderr_preview, row.stdout_preview].filter(Boolean).join('\n')).slice(0, 1200)}))
     }});
     const reason = typeof diagnosis?.reason === 'string' ? redact(diagnosis.reason).slice(0, 1200) : '';
-    if (ownership || !['retry', 'verify'].includes(diagnosis?.action) ||
+    const prepare = ['prepare-environment', 'rerun-declared-setup'].includes(diagnosis?.action);
+    const stage = detail?.stage ?? loop.stage;
+    if (prepare && (!['baseline', 'checks'].includes(stage) || !prepareBrowserRecovery ||
+        !await store.needsBrowserPreview(attempt.task))) return {reason};
+    if (ownership || !['retry', 'verify', 'prepare-environment', 'rerun-declared-setup'].includes(diagnosis?.action) ||
         (diagnosis.action === 'verify' && !canVerify) ||
         (diagnosis.action === 'retry' && loop.stage === 'evidence_blocked' && !canVerify)) return {reason};
-    const action = canVerify ? 'verify' : 'retry';
+    const action = prepare ? diagnosis.action : canVerify ? 'verify' : 'retry';
     if (previous.some(row => row.automaticRecovery.action === action && row.error === attempt.error)) return {reason};
-    return {kind: 'supervisor', action, reason, source: {
+    return {kind: 'supervisor', action, verificationOnly: canVerify, reason, source: {
       head: source.head, branch: source.branch, index_sha256: source.index_sha256, snapshot_sha256: source.snapshot_sha256
     }};
   }
@@ -660,19 +634,6 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
           recovery = {kind: 'handoff', paths};
           deadline = Date.now();
         }
-      }
-    }
-    if (attempt.errorCode === 'PROVIDER_CALL_TIMEOUT' &&
-        ['plan', 'plan_review', 'build_review', 'final_review'].includes(attempt.step)) {
-      const role = buildStageRoles[attempt.step];
-      const run = await store.getRun(attempt.task);
-      const pinned = selectedProfile(run.task.profile);
-      const saved = selectedProfile(await store.getProfile());
-      if (pinned?.stages[role]?.timeoutSeconds === undefined && saved?.stages[role]?.timeoutSeconds === undefined) {
-        const defaults = WorkbenchProfile.providerLimits(pinned, run.task.profile.active, role);
-        recovery = {kind: 'stageTimeout', role, budgetResetAt: attempt.budgetResetAt ?? null,
-          timeoutSeconds: Math.min(1800, defaults.timeoutSeconds * 2)};
-        deadline = Date.now();
       }
     }
     if (!Number.isFinite(deadline) && prepareBrowserRecovery &&
@@ -720,7 +681,6 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         if (next?.id !== build.id || next.status !== 'failed' || next.attempts.at(-1)?.id !== attempt.id) {
           throw Error('The run has already changed.');
         }
-        if (recovery.kind === 'browserBaseline') await prepareStoppedChecks(next);
         if (recovery.kind === 'supervisor') {
           const source = await store.snapshot(attempt.task, {record: false});
           if (Object.entries(recovery.source).some(([key, value]) => source[key] !== value)) {
@@ -728,7 +688,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
           }
         }
         return next;
-      }, undefined, recovery.kind === 'supervisor' && recovery.action === 'verify', recovery);
+      }, undefined, recovery.kind === 'supervisor' && recovery.verificationOnly, recovery);
     } catch (error) {
       if (error.message === 'This checkout already has an active Workbench operation.') scheduleRecovery(refreshRecovery, 1000);
       else await publishAttention(build, attempt, error.message);
@@ -773,7 +733,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         const {task} = await store.getRun(attempt.task);
         const committed = loop.design_sha || await audit.findPendingCommit(task, latest, loop).catch(() => null);
         if (committed) {
-          start({build: latest, attempt, task, step: 'finish', runtimeProfile: attempt.runtimeProfile}, release);
+          start({build: latest, attempt, task, step: 'finish'}, release);
           handedOff = true;
           return fresh;
         }

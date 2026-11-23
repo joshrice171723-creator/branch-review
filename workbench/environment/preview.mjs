@@ -190,7 +190,7 @@ export class PreviewProcess {
       });
       this.log ??= saved ? JSON.parse(saved).log : '';
     }
-    return {settings, state, owned, url, log: this.log, startedAt: this.startedAt, exitCode: this.exitCode, message: this.failure || ''};
+    return {settings, state, owned, url, revision: owned ? this.launchCommit : undefined, source: owned ? this.launchSource : undefined, log: this.log, startedAt: this.startedAt, exitCode: this.exitCode, message: this.failure || ''};
   }
 
   setup(payload) {
@@ -231,7 +231,7 @@ export class PreviewProcess {
     return item;
   }
 
-  start() {
+  start({source, rerunSetup = false, signal} = {}) {
     return this.edit(async () => {
       const settings = await this.settings();
       if (!settings) throw Error('Save the preview command before starting it.');
@@ -255,23 +255,32 @@ export class PreviewProcess {
       this.failure = '';
       const stamp = stableId([settings, commit, await lstat(cwd).then(info => info.ino)]);
       this.starting = true;
+      this.setupController = new AbortController();
+      const stop = signal ? AbortSignal.any([signal, this.setupController.signal]) : this.setupController.signal;
       this.startedAt = Date.now();
+      this.launchCommit = commit || undefined;
+      this.launchSource = source;
       process.once('exit', this.exitHook);
       try {
         const applied = await boundedText(dir, 'preview-setup.json', 80000).then(JSON.parse, error => {
           if (error.code !== 'ENOENT') throw error;
           return null;
         });
-        if (expanded.setup.length && applied?.stamp !== stamp) {
+        if (expanded.setup.length && (rerunSetup || applied?.stamp !== stamp)) {
           for (const argv of expanded.setup) {
+            stop.throwIfAborted();
             const item = this.launch('setup', await command(argv), cwd, env);
-            const timer = setTimeout(() => killTree(item.child, true), 120000);
-            const {code, failure} = await item.finished.finally(() => clearTimeout(timer));
+            const cancel = () => killTree(item.child, true);
+            stop.addEventListener('abort', cancel, {once: true});
+            if (stop.aborted) cancel();
+            const {code, failure} = await item.finished.finally(() => stop.removeEventListener('abort', cancel));
+            stop.throwIfAborted();
             if (failure || code !== 0) throw failure || Error('A preview setup command failed. See the preview output.');
           }
           await atomicJson(dir, 'preview-setup.json', {stamp});
         }
         for (const service of [...expanded.services, {name: 'preview', args: expanded.start}]) {
+          stop.throwIfAborted();
           const item = this.launch(service.name, await command(service.args), cwd, env);
           item.finished.then(({code, signal, failure}) => {
             if (!this.children.includes(item)) return;
@@ -292,6 +301,7 @@ export class PreviewProcess {
         await this.saveLog();
         throw error;
       } finally {
+        this.setupController = null;
         this.starting = false;
       }
       return this.status();
@@ -324,7 +334,12 @@ export class PreviewProcess {
     } finally { clearTimeout(timer); }
   }
 
+  cancelSetup() {
+    this.setupController?.abort();
+  }
+
   stop() {
+    this.cancelSetup();
     return this.edit(async () => {
       await this.stopChildren();
       await this.saveLog();
@@ -335,6 +350,7 @@ export class PreviewProcess {
   }
 
   close() {
+    this.cancelSetup();
     return this.edit(async () => {
       await this.stopChildren();
       await this.saveLog();

@@ -99,7 +99,7 @@ function contextOf(state) {
 }
 
 export function createDesign({files, store, git, agent, image, projectName, projectEvidence, qualityDraft, validateQuality,
-  buildContext, retryBuildVerification, recoverBuild, prepareBuild, repairApp, saveQualityDraft}) {
+  buildContext, retryBuildVerification, recoverBuild, prepareBuild, repairApp, appIncident, saveQualityDraft}) {
   async function read() {
     const saved = await files.read(workspaceFile);
     if (saved) {
@@ -335,9 +335,12 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       '` as a focused Node test. Exercise a real behavior from this plan against the selected project. ' +
       'Use isolated fixtures and assert an observable outcome. The required check runs after implementation.';
     if (proposal.plan.length > 64000) throw Error('Shorten the plan before sending it.');
-    const check = result.smoke ? 'The build will add and run a focused smoke test.' :
-      'Required checks are configured. ' + result.checks.join(', ') + '.';
-    return [check, result.previewMessage].filter(Boolean).join('\n\n');
+    const checks = result.checks.map(check => check.name + ' — ' +
+      (check.status === 'ready' ? 'command preflight passed' : check.reason ?? 'created during the build'));
+    const check = result.smoke ? 'The build will add and run a focused smoke test.' : checks.join('\n');
+    const preview = result.preview.revision ? result.previewMessage + ' Launch revision ' +
+      result.preview.revision.slice(0, 12) + '.' : result.previewMessage;
+    return {message: [check, preview].filter(Boolean).join('\n\n'), checks: result.checks, preview: result.preview};
   }
 
   async function guide(payload) {
@@ -354,7 +357,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         return edit(async current => {
           revision(current, payload);
           const setup = await prepareProposal(proposal, item.setup);
-          current.messages.push({id: id(), author: 'agent', text: setup || 'Plan ready for review.',
+          current.messages.push({id: id(), author: 'agent', text: setup?.message || 'Plan ready for review.', projectSetup: setup || undefined,
             proposal, ...(item.setup && {setup: item.setup}), projectPrepared: Boolean(setup), time: now()});
         });
       }
@@ -366,27 +369,57 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       const screen = Object.fromEntries(fields.filter(key => typeof payload.context[key] === 'string')
         .map(key => [key, payload.context[key].slice(0, 400)]));
       const build = await buildContext?.(state.builds.at(-1));
-      const command = !payload.preparePlan && !payload.changeScreenshot ?
-        text.trim().toLowerCase().replace(/[?.]+$/, '') : '';
-      async function handleBuildRecovery() {
-        if (build?.state !== 'failed') return 'There is no stopped build to resume.';
-        try { return await recoverBuild(build.id); }
-        catch (error) { return 'I could not resume this build. ' + error.message; }
+      const command = !payload.preparePlan ? text.trim().toLowerCase().replace(/[?.!]+$/, '') : '';
+      const previous = state.messages.findLast(message => message.author === 'agent');
+      const followUp = /^(?:please )?(?:(?:do it[,.]? )?fix it|unblock it|do it|try again|retry|resume|continue)$/.test(command);
+      const binding = previous?.coordinatorAction ??
+        (previous?.buildAttention && {kind: 'build-status', target: previous.buildAttention.buildId ?? build?.id});
+      async function runRecordedAction(kind, target, run) {
+        const messageId = id();
+        await edit(current => {
+          revision(current, payload);
+          current.messages.push({id: id(), author: 'user', text, context: screen, time: now()},
+            {id: messageId, author: 'agent', text: 'Coordinator is working on this request.', context: screen,
+              time: now(), coordinator: true, coordinatorAction: {kind, target, state: 'running'}});
+        });
+        let result, status = 'completed';
+        try { result = await run(); }
+        catch (error) { result = {text: error.message}; status = 'blocked'; }
+        return edit(current => {
+          const message = current.messages.find(row => row.id === messageId);
+          if (message) {
+            message.text = result.text;
+            Object.assign(message.coordinatorAction, {target: result.target ?? target, state: status});
+          }
+        });
       }
-      if (recoverBuild && (command === '/recover-build' ||
-          build?.state === 'failed' && /^(?:(?:build status )?(?:please )?(?:fix it|unblock it|resume (?:it|(?:the )?build))|do it(?:[,.]? fix it)?)$/.test(command))) {
-        const reply = await handleBuildRecovery();
+      const recover = () => runRecordedAction('build-recovery', build?.id, async () => {
+        if (build?.state !== 'failed') throw Error('There is no stopped build to resume.');
+        return {text: await recoverBuild(build.id)};
+      });
+      if (followUp && binding?.kind === 'app-repair') {
+        return runRecordedAction('app-repair', binding.target, async () => {
+          const issue = await appIncident?.(binding.target);
+          return {text: issue?.note || 'Open App Health for the status of this Branch Review repair.'};
+        });
+      }
+      if (followUp && binding?.kind === 'plan') {
         return edit(current => {
           current.messages.push({id: id(), author: 'user', text, context: screen, time: now()},
-            {id: id(), author: 'agent', coordinator: true, text: reply, context: screen, time: now()});
+            {id: id(), author: 'agent', text: 'Use Send to Plan to prepare this proposed project change.',
+              time: now(), coordinatorAction: binding});
         });
+      }
+      const explicitRecovery = /^(?:\/recover-build|(?:build status )?(?:please )?(?:fix it|unblock it|resume (?:it|(?:the )?build))|do it(?:[,.]? fix it)?)$/.test(command);
+      if (recoverBuild && (command === '/recover-build' || build?.state === 'failed' &&
+          (explicitRecovery || followUp && binding?.target === build.id))) {
+        return recover();
       }
       if (['/status', 'build status', 'what is the build status', 'why did the build stop', '/retry-verification',
         'where is the build budget'].includes(command)) {
         let reply = 'There is no current build for this project.';
         if (command === 'where is the build budget') {
-          reply = 'Open Design → Plan → Build budget. You can set token and provider time limits for this build. ' +
-            'Retry gives the build a fresh allowance under those limits.';
+          reply = 'Branch Review uses the configured loop limits. Build calls have no Branch Review token or time budget.';
         } else if (build && command === '/retry-verification') {
           try {
             await retryBuildVerification(build.id);
@@ -405,14 +438,15 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         }
         return edit(current => {
           current.messages.push({id: id(), author: 'user', text, context: screen, time: now()},
-            {id: id(), author: 'agent', coordinator: true, text: reply, context: screen, time: now()});
+            {id: id(), author: 'agent', coordinator: true, text: reply, context: screen, time: now(),
+              ...(build && {coordinatorAction: {kind: 'build-status', target: build.id, state: 'completed'}})});
         });
       }
       const quality = await qualityDraft?.().catch(() => null);
       const taskMode = payload.mode === 'task' || state.mode === 'task';
       const context = {activeProject: projectName, conversationOpen: true, screen, ...contextOf(state),
         mode: taskMode ? 'task' : 'roadmap', approved: state.approved === state.revision,
-        branch: state.branch, preview: state.preview, message: text, build,
+        branch: state.branch, preview: state.preview, message: text, build, boundAction: binding,
         ...(quality ? {quality: quality.definition} : {})};
       if (projectEvidence) {
         const {branch, components, checks, previews, gaps} = await projectEvidence().catch(() => ({}));
@@ -464,7 +498,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       const reply = objectReply(await planner(profile, folder, prompt, images, true));
       let description = sentence(reply.message, 'a coordinator reply');
       const suggestions = choices(reply.choices);
-      let proposal, setup, action, projectPrepared;
+      let proposal, setup, action, projectPrepared, projectSetup;
       if (reply.proposal != null) {
         const value = reply.proposal;
         if (payload.preparePlan && value.kind !== 'plan') {
@@ -477,21 +511,22 @@ export function createDesign({files, store, git, agent, image, projectName, proj
             .map(key => [key, value[key].slice(0, 120)]));
         }
         if (value.kind === 'build-recovery' && !payload.preparePlan && recoverBuild) {
-          action = handleBuildRecovery;
+          return recover();
         } else if (value.kind === 'app-repair') {
           const issue = sentence(value.issue, 'a Branch Review issue', 4000);
-          action = async () => {
-            if (!repairApp) return 'Open Branch Review desktop to repair this issue.';
+          return runRecordedAction('app-repair', 'Branch Review', async () => {
+            if (!repairApp) throw Error('Open Branch Review desktop to repair this issue.');
             const receipt = await repairApp({title, issue, request: text});
-            return receipt.state === 'restart-required' ? 'The repair is ready. See App Health to restart Branch Review.' :
+            const status = receipt.state === 'restart-required' ? 'The repair is ready. See App Health to restart Branch Review.' :
               receipt.state === 'attention' ? 'App Health reached its repair limit for this issue.' :
               'App Health is handling “' + title + '”. You can follow it in Health.';
-          };
+            return {text: status, target: receipt.id};
+          });
         } else if (value.kind === 'project-setup') {
           action = async () => {
-            const receipt = await prepareProposal({plan: ''}, setup);
-            projectPrepared = Boolean(receipt);
-            return receipt || 'Project setup is unavailable in this workspace.';
+            projectSetup = await prepareProposal({plan: ''}, setup);
+            projectPrepared = Boolean(projectSetup);
+            return projectSetup?.message || 'Project setup is unavailable in this workspace.';
           };
         } else if (value.kind === 'plan') {
           const before = {plan: state.plan, ...(state.mode === 'task' ? {mode: 'task', title: state.title} :
@@ -521,24 +556,21 @@ export function createDesign({files, store, git, agent, image, projectName, proj
           throw Error('The proposal does not match this screen.');
         }
       }
-      if (action === handleBuildRecovery) {
-        description = await action();
-        action = null;
-      }
       return edit(async current => {
         revision(current, payload);
         if (action) {
           description = await action(current);
           proposal = undefined;
         } else if (payload.preparePlan === true && proposal?.kind === 'plan') {
-          const receipt = await prepareProposal(proposal, setup);
-          if (receipt) description += '\n\n' + receipt;
-          projectPrepared = Boolean(receipt);
+          projectSetup = await prepareProposal(proposal, setup);
+          if (projectSetup) description += '\n\n' + projectSetup.message;
+          projectPrepared = Boolean(projectSetup);
         }
         current.messages.push({id: id(), author: 'user', text, context: screen, time: now()},
           {id: turn, author: 'agent', text: description, context: screen, time: now(),
-            ...(suggestions.length ? {choices: suggestions} : {}), ...(projectPrepared && {projectPrepared}), ...(action && {coordinator: true}),
-            ...(proposal ? {proposal, ...(setup && {setup})} : {})});
+            ...(suggestions.length ? {choices: suggestions} : {}), ...(projectPrepared && {projectPrepared, projectSetup}), ...(action && {coordinator: true}),
+            ...(proposal ? {proposal, ...(setup && {setup})} : {}),
+            ...(proposal?.kind === 'plan' && {coordinatorAction: {kind: 'plan', target: turn, state: 'completed'}})});
       });
     } finally { await release(); }
   }

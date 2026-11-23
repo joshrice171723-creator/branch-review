@@ -281,11 +281,6 @@ function editStage(key, value, redraw = false) {
   return saved;
 }
 
-function providerLimitField(label, key, value, update) {
-  const [min, max] = WorkbenchProfile.providerBounds[key];
-  return field(label, control("number", value, value => update(Number(value)), {min, max, step: 1, required: true}));
-}
-
 function agentFields(stage) {
   const group = element("div", "design-stack");
   const fields = element("div", "form-grid");
@@ -305,9 +300,6 @@ function agentFields(stage) {
   const effort = select(stage.effort, WorkbenchProfile.efforts.map(name => [name, name]), value => editStage("effort", value));
   fields.append(field("Provider", provider), field("Model", picker), field("Thinking level", effort));
   group.append(fields);
-  const {timeoutSeconds} = WorkbenchProfile.providerLimits(active(), data.active, selected);
-  group.append(providerLimitField("Call time limit (seconds)", "timeoutSeconds", timeoutSeconds,
-    value => editStage("timeoutSeconds", value)));
   const workspaceAccess = selected === "build" ? "Workspace writes allowed." : "Read-only workspace.";
   group.append(element("small", "", workspaceAccess + (stage.provider === "Muse" ? " Shell disabled." : "")));
   group.append(button("Choose stage tools", () => chooseToolSettings(true)));
@@ -326,12 +318,11 @@ function agentFields(stage) {
     const {provider, model, effort} = preset;
     showDialog("Reset agent settings",
       element("p", "", "Use " + provider + " · " + (model || "Provider default") + " · " + effort + " thinking."),
-      element("p", "", "Restore the default call time limit and shell access."),
+      element("p", "", "Restore default shell access."),
       element("div", "actions", button("Cancel", () => dialog.close()),
         button("Reset", () => {
           if (!apply((_, item, stage) => {
             Object.assign(stage, {provider, model, effort});
-            delete stage.timeoutSeconds;
             delete stage.shellTools;
           }, false)) return;
           dialog.close();
@@ -546,8 +537,6 @@ function documentLibrary() {
 }
 
 function rulesPanel() {
-  const limits = WorkbenchProfile.providerLimits(active(), data.active);
-  const setLimit = key => value => apply((_, item) => { item[key] = value; }, false);
   return element("section", "panel", heading(active().name, "Shared rules appear first in each stage instruction preview."),
     element("div", "panel-body",
       field("Profile name", control("text", active().name, value => {
@@ -556,11 +545,6 @@ function rulesPanel() {
         return true;
       }, {maxLength: 80})),
       field("Instructions for all stages", control("textarea", active().rules, value => apply((_, item) => { item.rules = value; }, false), {rows: 5, maxLength: 20000})),
-      element("div", "form-grid",
-        providerLimitField("Task provider time limit (seconds)", "providerTimeSeconds", limits.providerTimeSeconds, setLimit("providerTimeSeconds")),
-        providerLimitField("Task reported token limit", "providerTokenLimit", limits.providerTokenLimit, setLimit("providerTokenLimit"))),
-      element("small", "", "Token checks run before each call. Reported cache reads are excluded. Usage from an active call can exceed the limit."),
-      element("small", "", "Calls without reported usage remain unknown."),
       documentSection(active().sharedDocs, true),
       field("Project checks (JSON)", control("textarea", jsonText(data.checks), value =>
         apply(next => { next.checks = JSON.parse(value); }, false), {rows: 6})),

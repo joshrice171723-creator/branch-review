@@ -219,57 +219,6 @@ function designPanel(initialState) {
   const defaultDecisions = {scope_confirmed: "confirmed", engine_integration: "confirmed",
     code_changes: "allow_scoped", migrations: "deny", dependencies: "deny"};
   const launchForm = {scope: "plan", frequency: "slice", decisions: {}, agreementOpen: true, automaticRouting: true};
-  let budgetDraft;
-  function planBudgetKey(build) {
-    return build && !["closed", "retired"].includes(build.status) ? build.id : "plan-" + state.revision;
-  }
-  function budgetPayload(build = state.builds.at(-1)) {
-    return budgetDraft?.key === planBudgetKey(build) ? budgetDraft.limits : {};
-  }
-  function planBudget() {
-    const current = state.builds.at(-1);
-    const build = current && !["closed", "retired"].includes(current.status) ? current : null;
-    const key = planBudgetKey(build);
-    const defaults = WorkbenchProfile.providerLimits(active(), data.active);
-    const attempt = build?.attempts.at(-1);
-    function limitControl(name, label, divisor, increment) {
-      const draft = () => budgetDraft?.key === key ? budgetDraft.limits : {};
-      const value = (draft()[name] ?? build?.[name] ?? attempt?.runtimeProfile?.[name] ?? defaults[name]) / divisor;
-      const [min, max] = WorkbenchProfile.providerBounds[name].map(bound => bound / divisor);
-      const slider = element("input");
-      const exact = element("input");
-      for (const [input, type] of [[slider, "range"], [exact, "number"]]) {
-        input.type = type;
-        input.min = min;
-        input.max = max;
-        input.step = type === "range" ? increment : divisor === 1 ? 1 : "any";
-        input.value = value;
-        input.disabled = Boolean(build && !["failed", "cancelled"].includes(build.status));
-      }
-      slider.setAttribute("aria-label", label + " slider");
-      exact.setAttribute("aria-label", "Exact " + label.toLowerCase());
-      const setBudget = amount => {
-        const rounded = Math.round(amount * divisor);
-        budgetDraft = {key, limits: {...draft(), [name]: rounded}};
-        slider.value = exact.value = rounded / divisor;
-      };
-      slider.oninput = () => setBudget(slider.valueAsNumber);
-      exact.onchange = () => {
-        if (Number.isFinite(exact.valueAsNumber) && exact.checkValidity()) setBudget(exact.valueAsNumber);
-        else exact.value = draft()[name] === undefined ? value : draft()[name] / divisor;
-      };
-      return element("div", "plan-budget-limit", element("strong", "", label), element("div", "plan-budget-inputs", slider, exact));
-    }
-    const section = element("section", "plan-budget", element("strong", "", "Build budget"),
-      limitControl("providerTokenLimit", "Token limit", 1, 1000),
-      limitControl("providerTimeSeconds", "Provider time limit (minutes)", 60, 1),
-      element("small", "stage-meta", "These limits apply to this build. Cached input does not count toward the token limit."));
-    if (["PROVIDER_USAGE_BUDGET", "PROVIDER_TASK_TIME_BUDGET"].includes(attempt?.errorCode) && build.error) {
-      section.append(element("p", "evidence-warning", build.error));
-      section.append(element("small", "stage-meta", "Use Retry in Current build to apply these limits."));
-    }
-    return section;
-  }
   for (const question of projectState.questions.filter(q => q.required)) {
     const option = defaultDecisions[question.id];
     if (question.options.includes(option)) launchForm.decisions[question.id] = option;
@@ -423,7 +372,6 @@ function designPanel(initialState) {
     }
     const start = button("Start build", async () => {
       if (startingFromPlan || busy) return;
-      const budget = budgetPayload();
       if (settings.branch && settings.branch !== state.branch) {
         showPlanStartStatus("Save the selected build branch first.");
         return;
@@ -453,7 +401,7 @@ function designPanel(initialState) {
         }
         showPlanStartStatus("Starting build…");
         if (await change("build", {stages: active().stages, decisions: launchForm.decisions,
-          automaticRouting: launchForm.automaticRouting, ...budget},
+          automaticRouting: launchForm.automaticRouting},
           {wait: "Starting build…", done: "Build started.", onError})) {
           showPlanStartStatus("");
           goBuild();
@@ -499,7 +447,7 @@ function designPanel(initialState) {
         return true;
       }), element("small", "stage-meta", "Eligible visual changes use one audit. Other work uses the selected workflow."),
       element("p", "", "Start build approves this plan and agreement."),
-      planBranch(), planBudget(), element("div", "actions", save, discard, start), startFeedback);
+      planBranch(), element("div", "actions", save, discard, start), startFeedback);
     if (baseRevision !== state.revision) result.append(
       element("details", "", element("summary", "", "Compare saved plan"), element("pre", "", state.plan)),
       button("Use local draft", () => { localDraft.baseRevision = state.revision; rememberDraft(); draw(); }));
@@ -1203,13 +1151,13 @@ function designPanel(initialState) {
       if (continueBuild && !showContinueByReview) controls.append(continueBuild);
       if (["failed", "cancelled"].includes(build.status) && !state.restartRequired && !state.resumeBlocker) controls.append(
         button("Retry", () =>
-          change("continue", {build: build.id, ...budgetPayload(build)}, {wait: "Retrying the stopped stage…"}), "button primary"));
+          change("continue", {build: build.id}, {wait: "Retrying the stopped stage…"}), "button primary"));
       const canRestart = embedded && state.mode === "task" && state.approved === state.revision &&
         build.revision === state.revision && ["failed", "cancelled"].includes(build.status) &&
         (state.restartRequired || state.resumeBlocker?.startsWith("Agent settings changed"));
       if (state.verificationAvailable) {
         controls.append(element("small", "stage-meta",
-          "Retry keeps your changes and starts fresh allowances. The coordinator verifies the result and repairs confirmed issues in the approved scope."));
+          "Retry keeps your changes. The coordinator verifies the result and repairs confirmed issues in the approved scope."));
       }
       if (canRestart) {
         const restart = button("Restart build", async () => {
@@ -1362,7 +1310,7 @@ function designPanel(initialState) {
         try {
           if (!stateProfileApplied() || byId("apply-profile").textContent === "Apply changes") await saveWorkflowProfile();
           await change("build", {...target, stages: active().stages, decisions: launchForm.decisions,
-            automaticRouting: launchForm.automaticRouting, ...budgetPayload()},
+            automaticRouting: launchForm.automaticRouting},
             {wait: "Starting build…", done: "Build started.", onError: error => { readinessStatus.textContent = error.message; }});
         } catch (error) { readinessStatus.textContent = error.message; }
         finally { updateLaunch(); }

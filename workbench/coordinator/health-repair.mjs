@@ -3,7 +3,7 @@ import path from 'node:path';
 import {copyFile, lstat, mkdir, mkdtemp, readdir, rm} from 'node:fs/promises';
 import {gitRead, plainPath, relativePath} from '../environment/paths.mjs';
 import {objectReply, runProvider} from './provider.mjs';
-import {WorkbenchProfile} from '../profile.mjs';
+import {healthRegression} from './health-regression.mjs';
 
 // Windows packages ship unpacked application source. Snapshot those files without copying runtimes or user data.
 async function packagedSource(root, cwd) {
@@ -74,7 +74,6 @@ export async function repairRuntime({repository, incident, directory, profile, p
   let [base, ref] = packaged ? [] : await Promise.all([head(), branch()]);
   const selected = profile.profiles[profile.active];
   const {provider, model, effort} = selected.stages.build;
-  const {timeoutSeconds} = WorkbenchProfile.providerLimits(selected, profile.active, 'build');
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'branch-review-health-'));
   await mkdir(directory, {recursive: true});
   const patch = path.resolve(directory, 'repair.patch');
@@ -101,16 +100,20 @@ export async function repairRuntime({repository, incident, directory, profile, p
       'Do not push, publish, use external systems, or commit. Run focused checks that exercise the change.',
       'Leave generated files and dependencies out of the patch. If the cause is elsewhere, explain the blocker. Use the results of previous attempts to change the approach.',
       'Return JSON with verified (boolean), summary (string), and checks (string describing the actual checks and results).',
+      'For a runtime regression check, include regression with kind="observation" and the exact Branch Review desktop signal id, or kind="http", path and status=200.',
+      'The only HTTP paths allowed are /api/workspace/design, /api/workspace/profile and /api/workspace/coordinator/health. These checks use GET and cannot execute commands.',
+      'Observation ids identify renderer, responsive, render:/path, load:/path, page:/path or request:GET /path and request:POST /path. Only use a check that establishes the requested repair. If a user interaction has no existing observation, omit regression and explain the interaction in checks.',
       JSON.stringify({check: incident.title, failure: incident.error, evidence: incident.evidence,
         previousAttempts: incident.history, previousRepairFiles: [...owned.keys()]})
     ].join('\n');
     const {text} = await invoke({provider, model, effort, cwd, write: true, stage: 'build', stageLabel: 'Coordinator health repair',
-      prompt, output, signal, providerOptions, timeoutMs: timeoutSeconds * 1000});
+      prompt, output, signal, providerOptions, timeoutMs: null});
     const result = objectReply(text);
     const summary = String(result.summary || '').slice(0, 1000);
     if (result.verified !== true || typeof result.checks !== 'string' || !result.checks.trim()) {
       throw Object.assign(Error(summary || 'The repair agent could not verify a change.'), {checks: result.checks});
     }
+    const regression = healthRegression(result.regression);
     await gitRead(cwd, 'add', '-A');
     const names = (await gitRead(cwd, 'diff', '--cached', '--no-renames', '--name-only', '-z', baseline)).split('\0').filter(Boolean);
     if (!names.length) throw Error(summary || 'The repair produced no changes.');
@@ -142,7 +145,7 @@ export async function repairRuntime({repository, incident, directory, profile, p
     await gitRead(repository, 'apply', ...flags, '--check', patch);
     signal.throwIfAborted();
     await gitRead(repository, 'apply', ...flags, patch);
-    return {summary, files: names, checks: result.checks.slice(0, 1200)};
+    return {summary, files: names, checks: result.checks.slice(0, 1200), regression};
   } finally {
     await rm(scratch, {recursive: true, force: true, maxRetries: 3});
   }

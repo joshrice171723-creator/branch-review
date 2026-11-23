@@ -50,20 +50,23 @@ async function waitForBuild(coordinator, wanted = 'review') {
   assert.fail('Build did not reach ' + wanted);
 }
 
-test('a manual retry gets a fresh allowance under the same token limit', async t => {
+test('ignores saved and payload provider budgets while preserving usage evidence', async t => {
   const {git, store, repository} = await fixture(t);
   const profile = await store.getProfile();
-  profile.profiles[profile.active].providerTokenLimit = 5000;
+  profile.profiles[profile.active].providerTokenLimit = 1000;
+  profile.profiles[profile.active].providerTimeSeconds = 60;
+  profile.profiles[profile.active].stages.plan.timeoutSeconds = 10;
   await store.setProfile(profile);
   const calls = [];
   const coordinator = await createCoordinator({repository, store, git, invoke: async request => {
     calls.push(request.stage);
+    assert.equal(request.timeoutMs, null);
     if (request.stage === 'plan') {
       request.onUsage({input: 2350, output: 100, cached: 1500});
       return {text: JSON.stringify({plan: ['Edit the greeting.']})};
     }
     if (request.stage === 'plan_review') {
-      request.onUsage({input: 40, output: 10});
+      request.onUsage({input: 1500, output: 200});
       return {text: JSON.stringify({verdict: 'pass', reason: 'The plan covers the greeting.'})};
     }
     assert.equal(request.stage, 'build');
@@ -74,23 +77,22 @@ test('a manual retry gets a fresh allowance under the same token limit', async t
   const draft = await action('design/draft', {revision: 0, mode: 'task', title: 'Update greeting',
     plan: 'Edit the greeting.\n\n## Acceptance criteria\n- The greeting is updated.'});
   await action('design/approve', {revision: draft.revision, mode: 'task'});
-  await action('design/build', {revision: draft.revision, mode: 'task', decisions, providerTokenLimit: 1000});
-  const blocked = await waitForBuild(coordinator, 'failed');
-  assert.match(blocked.error, /1000-token limit/);
-  assert.deepEqual(calls, ['plan', 'plan_review']);
-  assert.match(blocked.error, /1500 cached input tokens/);
-  await assert.rejects(action('design/continue', {build: blocked.id, providerTokenLimit: 1}), /Set the build token limit/);
-  await assert.rejects(action('design/continue', {build: blocked.id, providerTimeSeconds: 59}), /Set the build provider time/);
-  await action('design/continue', {build: blocked.id, providerTimeSeconds: 2100});
+  await action('design/build', {revision: draft.revision, mode: 'task', decisions,
+    providerTokenLimit: 1, providerTimeSeconds: 1});
+  const stopped = await waitForBuild(coordinator, 'failed');
+  assert.equal(stopped.error, 'Stopped after confirming dispatch.');
+  assert.deepEqual(calls, ['plan', 'plan_review', 'build']);
+  assert.equal(stopped.providerTokenLimit, undefined);
+  assert.equal(stopped.providerTimeSeconds, undefined);
+  await action('design/continue', {build: stopped.id, providerTokenLimit: 1, providerTimeSeconds: 1});
   const resumed = await waitForBuild(coordinator, 'failed');
   assert.equal(resumed.error, 'Stopped after confirming dispatch.');
-  assert.equal(resumed.attempts.at(-1).task, blocked.attempts.at(-1).task);
-  assert.equal(resumed.providerTokenLimit, 1000);
-  assert.ok(resumed.attempts.at(-1).budgetResetAt);
-  assert.equal(resumed.attempts.at(-1).runtimeProfile.providerTimeSeconds, 2100);
-  assert.equal((await store.getProfile()).profiles[profile.active].providerTokenLimit, 5000);
-  assert.equal((await store.getProfile()).profiles[profile.active].providerTimeSeconds, undefined);
-  assert.deepEqual(calls, ['plan', 'plan_review', 'build']);
+  assert.equal(resumed.attempts.at(-1).task, stopped.attempts.at(-1).task);
+  assert.equal(resumed.attempts.at(-1).runtimeProfile, undefined);
+  assert.equal(calls.at(-1), 'build');
+  const progress = await coordinator.dispatch('design/progress');
+  const planning = progress.run.attempts.find(row => row.role === 'plan');
+  assert.ok(planning.metrics.providers.some(row => row.usage?.input === 2350));
 });
 
 test('restarts a stopped build with saved agent settings and preserves working changes', async t => {

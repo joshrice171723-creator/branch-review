@@ -89,7 +89,7 @@ export async function runProtectedChecks({read, run, report, signal, wait = dela
     'The check changed source again while it was running.'};
 }
 
-export function createAudit({repository, files, git, store, agent}) {
+export function createAudit({repository, files, git, store, agent, prepareBrowserRecovery}) {
   async function gitRaw(args) {
     return (await exec('git', args, {cwd: repository, windowsHide: true, timeout: 90000,
       maxBuffer: 64_000_000, env: {...process.env, GIT_TERMINAL_PROMPT: '0'}})).stdout;
@@ -298,7 +298,7 @@ export function createAudit({repository, files, git, store, agent}) {
   }
 
   async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly, retryRepair,
-    runtimeProfile, recoveredPaths}) {
+    recoveredPaths}) {
     const run = task.id;
     const readSource = () => store.snapshot(run, {record:false});
     const profile = task.profile;
@@ -329,8 +329,8 @@ export function createAudit({repository, files, git, store, agent}) {
       await refresh?.(stage);
     };
     const ask = ({stage, prompt, schema, write = false, images = [], evidenceOnly = false}) =>
-      agent({profile, runtimeProfile, folder, stage, prompt, schema, write, images, evidenceOnly, signal,
-        toolScope: build.plan, budgetResetAt: attempt.budgetResetAt, autoAgent: automaticAgent(stage),
+      agent({profile, folder, stage, prompt, schema, write, images, evidenceOnly, signal,
+        toolScope: build.plan, autoAgent: automaticAgent(stage),
         visit: state.history.length - 1,
         report: (actor, message) => activity(run, stage, actor, message)}).then(reply => reply.text);
     const context = {
@@ -414,6 +414,16 @@ export function createAudit({repository, files, git, store, agent}) {
     async function checkStage(phase) {
       const stage = phase === 'after' ? 'checks' : 'baseline';
       await activity(run, stage, 'Workbench', 'Started configured ' + phase + ' checks');
+      if (prepareBrowserRecovery && await store.needsBrowserPreview(run)) {
+        const preview = await prepareBrowserRecovery({taskId: run, signal, waitForReady: true});
+        signal.throwIfAborted();
+        if (preview.state !== 'ready') {
+          if (phase === 'after') state.checked_source = (await readSource()).snapshot_sha256;
+          return block(stage, preview.message, 'check_environment');
+        }
+        await activity(run, stage, 'Coordinator', preview.message +
+          (preview.revision ? ' Started from ' + preview.revision.slice(0, 12) + '.' : ''));
+      }
       const {result, current, blocked} = await runProtectedChecks({read: readSource,
         run: () => store.runChecks(run, {phase, signal, measure, reusePassing: phase === 'after'}),
         report: message => activity(run, stage, 'Workbench', message), signal});
@@ -646,18 +656,6 @@ export function createAudit({repository, files, git, store, agent}) {
     if (recoveredPaths) {
       state.recoveredPaths = recoveredPaths;
       await checkpoint('finish', 'Recovered verified changes from earlier attempts of this plan.');
-    }
-    if (attempt.budgetResetAt && state.budgetResetAt !== attempt.budgetResetAt) {
-      state.budgetResetAt = attempt.budgetResetAt;
-      state.returns = {};
-      delete state.lastRepairSource;
-      delete state.lastRepairChecks;
-      delete state.lastReturnedPlan;
-      delete state.planEvidenceRetried;
-      delete state.auditCorrection;
-      delete state.auditExpansion;
-      await files.write(statePath(run), state);
-      await activity(run, state.stage, 'Workbench', 'Started a fresh time, token, and repair allowance for this retry.');
     }
     if (verificationOnly || retryRepair) {
       state.verificationOnly = Boolean(verificationOnly);

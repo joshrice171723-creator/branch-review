@@ -3,11 +3,12 @@ import {mkdir, readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {atomicJson} from '../environment/paths.mjs';
 import {redact} from '../../jobs.mjs';
+import {healthRegression} from './health-regression.mjs';
 
 const maxAttempts = 5;
 const clean = value => redact(String(value || '')).slice(0, 2000);
 
-export async function createHealthReviewer({directory, observe, repair, restartRequired, idle, interval = 3000,
+export async function createHealthReviewer({directory, observe, repair, verifyRegression, restartRequired, idle, interval = 3000,
   clock = Date.now, start = true}) {
   await mkdir(directory, {recursive: true});
   const savedRows = await readFile(path.join(directory, 'incidents.json'), 'utf8').then(JSON.parse, error => {
@@ -26,11 +27,14 @@ export async function createHealthReviewer({directory, observe, repair, restartR
     finishAttempt(row, 'failed', detail);
   }
   for (const row of rows) {
+    try { row.regression = healthRegression(row.regression); }
+    catch { row.regression = null; }
     if (row.state === 'repairing') failed(row, 'Branch Review closed before the attempt finished.');
     if (row.state === 'restart-required') {
-      row.state = 'verifying';
+      row.state = row.reported ? 'awaiting-observation' : 'verifying';
       row.observations = 0;
-      row.note = 'Branch Review restarted. Waiting for a fresh runtime check.';
+      row.note = row.reported ? 'The repair loaded. Waiting for its regression check or the affected interaction.' :
+        'Branch Review restarted. Waiting for a fresh runtime check.';
     }
   }
   let timer, running, paused = false, action, attemptController, applying = false, lastError = '', saved, checkedAt;
@@ -51,7 +55,7 @@ export async function createHealthReviewer({directory, observe, repair, restartR
       row = {id: randomUUID(), key, owner: 'host', title: clean(title), error: clean(issue),
         evidence: clean(request), state: 'detected', reported: true, detectedAt: clock(), observations: 1, attempts: 0};
       rows.unshift(row);
-    } else if (row.state === 'verifying') {
+    } else if (['verifying', 'awaiting-observation'].includes(row.state)) {
       failed(row, 'The user reported the issue again after restart. ' + clean(issue));
       row.error = clean(issue);
       row.evidence = clean(request);
@@ -61,7 +65,33 @@ export async function createHealthReviewer({directory, observe, repair, restartR
   }
   async function run() {
     if (paused || controller.signal.aborted) return;
-    const signals = [...await observe(), ...rows.filter(row => row.reported && ['detected', 'retrying'].includes(row.state))
+    const observed = await observe();
+    const verified = [];
+    for (const row of rows.filter(row => row.reported && ['verifying', 'awaiting-observation'].includes(row.state))) {
+      const check = row.regression;
+      if (!check) {
+        row.state = 'awaiting-observation';
+        row.note = 'The repair loaded. The affected interaction has no automatic regression check. App Health is waiting to observe it.';
+        continue;
+      }
+      let result;
+      if (check.kind === 'observation') {
+        const signal = observed.find(item => item.owner === 'host' && item.id === check.id);
+        if (signal) result = {passed: !signal.error, detail: signal.error || 'The affected interaction passed its runtime check.'};
+      } else if (verifyRegression) {
+        try { result = await verifyRegression(check, controller.signal); }
+        catch (error) { result = {passed: false, detail: error.message}; }
+      }
+      if (!result) {
+        row.state = 'awaiting-observation';
+        row.note = 'The repair loaded. Waiting to observe ' + (check.id || check.path) + '.';
+        continue;
+      }
+      row.verification = {probe: check, checkedAt: clock(), passed: result.passed === true, detail: clean(result.detail)};
+      verified.push({owner: 'host', id: row.key.slice(5), title: row.title,
+        error: result.passed === true ? '' : clean(result.detail) || 'The regression check failed.'});
+    }
+    const signals = [...observed, ...verified, ...rows.filter(row => row.reported && ['detected', 'retrying'].includes(row.state))
       .map(row => ({owner: 'host', id: row.key.slice(5), title: row.title, error: row.error, evidence: row.evidence}))];
     checkedAt = clock();
     const seen = new Set();
@@ -90,7 +120,7 @@ export async function createHealthReviewer({directory, observe, repair, restartR
       row.evidence = clean(signal.evidence);
       row.observations = Math.min(10, row.observations + 1);
       if (row.observations < 2 || row.state === 'attention') continue;
-      if (row.state === 'verifying') failed(row, 'The runtime check still fails after restart. ' + error);
+      if (['verifying', 'awaiting-observation'].includes(row.state)) failed(row, 'The runtime check still fails after restart. ' + error);
       if (row.state === 'retrying' && clock() - row.actionAt < interval * 2) continue;
       if (row.attempts >= maxAttempts) row.state = 'attention';
       else if (!next) next = {row, signal};
@@ -140,6 +170,8 @@ export async function createHealthReviewer({directory, observe, repair, restartR
         (row.repairs ||= []).push({files: result.files, time: clock(), artifact});
         row.files = result.files;
         row.checks = attempt.checks = clean(result.checks);
+        row.regression = healthRegression(result.regression);
+        delete row.verification;
       }
       row.state = 'restart-required';
       row.observations = 0;

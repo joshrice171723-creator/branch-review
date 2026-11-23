@@ -166,7 +166,7 @@ async function runCommand(root, spec, signal) {
     for (const name of spec.input_paths ?? []) {
       if (!(await stat(await inside(root, name))).isFile()) throw Error('Expected a check input file: ' + name);
     }
-    Object.assign(result, await capture(checkArgv(spec.argv), {cwd: await inside(root, spec.cwd), signal, timeout: spec.timeout_seconds}));
+    Object.assign(result, await capture(checkArgv(spec.argv), {cwd: await inside(root, spec.cwd), signal, timeout: null}));
   } catch (error) {
     Object.assign(result, {status: 'error', exit_code: null, error: error.message,
       stdout: '', stdout_truncated: false, stderr: '', stderr_truncated: false});

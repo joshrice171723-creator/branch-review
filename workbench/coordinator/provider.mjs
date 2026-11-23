@@ -79,7 +79,7 @@ async function stop(child) {
 export async function runProvider(options) {
   const {stage, stageLabel = stage, provider, cwd, model, effort, prompt, schema, signal, report, output,
     images = [], image = false, providerOptions = {}, onUsage, evidenceOnly = false,
-    timeoutMs = image ? 420_000 : 1_800_000, timeoutCode = 'PROVIDER_CALL_TIMEOUT'} = options;
+    timeoutMs = null, timeoutCode = 'PROVIDER_CALL_TIMEOUT'} = options;
   const write = !evidenceOnly && (options.write ?? false);
   const shellTools = !evidenceOnly && options.shellTools !== false;
   const providerId = Object.hasOwn(providerIds, provider) && providerIds[provider];

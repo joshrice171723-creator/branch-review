@@ -10,6 +10,7 @@ import {modelCatalog, WorkbenchProfile, presetDocuments} from './profile.mjs';
 import {toolDescriptions, workspaceMcp} from './mcp.mjs';
 import discovery from '../desktop/project-discovery.cjs';
 import {observeRuntime} from './coordinator/runtime-probes.mjs';
+import {verifyHostHttpRegression} from './coordinator/health-regression.mjs';
 import {repairRuntime} from './coordinator/health-repair.mjs';
 
 const environmentRoutes = new Set([
@@ -37,6 +38,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
       directory: diagnostics.healthDirectory,
       observe: () => observeRuntime(diagnostics),
+      verifyRegression: (probe, signal) => verifyHostHttpRegression({probe, origin, signal: AbortSignal.any([signal, AbortSignal.timeout(5000)])}),
       idle: canRepair,
       repair: async (incident, directory, signal, mayApply, prior) => repairRuntime({
         repository: diagnostics.repository,

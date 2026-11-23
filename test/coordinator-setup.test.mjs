@@ -34,14 +34,14 @@ async function fixture(t, files, options = {}) {
   });
   const send = data => coordinator.dispatch('design/guide', {revision: 0, mode: 'task',
     context: {view: 'workflow', tab: 'Plan'}, ...data}, {method: 'POST'});
-  return {coordinator, store, send, git};
+  return {coordinator, store, send, git, environment, repository};
 }
 
 const plan = {kind: 'plan', title: 'Update greeting', plan: 'Update the greeting.\n\n## Acceptance criteria\n- Show the new greeting.'};
 
 test('sending a saved proposal prepares its check and starts the detected preview', async t => {
   let calls = 0;
-  const {send, store, coordinator, git} = await fixture(t, {
+  const {send, store, coordinator, git, environment, repository} = await fixture(t, {
     'package.json': JSON.stringify({name: 'fixture', scripts: {test: 'node --test'}}),
     'server.cjs': [
       "const fs = require('node:fs');",
@@ -66,6 +66,15 @@ test('sending a saved proposal prepares its check and starts the detected previe
   const readiness = await coordinator.dispatch('design/readiness');
   assert.equal(readiness.items.find(item => item.id === 'checks').status, 'ready');
   assert.equal(await git('status', '--porcelain'), '');
+  assert.equal(prepared.projectSetup.checks[0].status, 'ready');
+  const launch = prepared.projectSetup.preview;
+  assert.equal(launch.revision, await git('rev-parse', 'HEAD'));
+  await writeFile(path.join(repository, 'greeting.txt'), 'Check modified source');
+  const updated = await environment.prepareBrowserRecovery();
+  assert.equal(updated.state, 'ready');
+  assert.equal(updated.revision, launch.revision);
+  assert.notEqual(updated.source, launch.source);
+  assert.equal(updated.source, (await store.snapshot()).snapshot_sha256);
 });
 
 test('a project without checks receives a required after-build smoke test in the plan', async t => {
@@ -144,6 +153,9 @@ test('a Branch Review repair goes directly to App Health without preparing a pro
   const [issue] = (await coordinator.dispatch('coordinator/health')).incidents;
   assert.equal(issue.owner, 'host');
   assert.equal(issue.state, 'detected');
+  const followUp = await send({message: 'do it'});
+  assert.equal(followUp.messages.at(-1).coordinatorAction.target, issue.id);
+  assert.deepEqual(followUp.builds, []);
 });
 test('a direct recovery instruction resumes the stopped build without drafting a plan', async t => {
   let planCalls = 0;
@@ -166,7 +178,11 @@ test('a direct recovery instruction resumes the stopped build without drafting a
     if ((await coordinator.dispatch('design')).builds.at(-1).status === 'failed') break;
     await delay(100);
   }
-  const resumed = await send({revision, message: 'do it fix it'});
+  await send({revision, message: 'Build status'});
+  const resumed = await send({revision, message: 'try again'});
+  assert.deepEqual(resumed.messages.at(-1).coordinatorAction, {
+    kind: 'build-recovery', target: started.builds[0].id, state: 'completed'
+  });
   assert.match(resumed.messages.at(-1).text, /Resumed the existing build/);
   assert.equal(resumed.builds.length, 1);
   assert.equal(resumed.builds[0].id, started.builds[0].id);
