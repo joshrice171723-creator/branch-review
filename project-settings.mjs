@@ -1,5 +1,5 @@
 import path from 'node:path';
-import {readFile,writeFile,rename} from 'node:fs/promises';
+import {readFile,writeFile,rename,lstat} from 'node:fs/promises';
 
 export function validateRecipe(value){
   if(!value || typeof value!=='object' || Array.isArray(value))throw Error('Enter project settings as an object.');
@@ -22,6 +22,26 @@ export function validateRecipe(value){
 }
 export async function readRecipe(local){
   return readFile(path.join(local,'project-settings.json'),'utf8').then(text=>validateRecipe(JSON.parse(text))).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+}
+export async function declaredReviewRecipe(directory) {
+  const file = path.join(directory, 'workbench-capabilities.json');
+  const entry = await lstat(file).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!entry?.isFile() || entry.size > 384 * 1024) return null;
+  const manifest = JSON.parse(await readFile(file, 'utf8'));
+  if (manifest?.schema_version !== 1 || !Array.isArray(manifest.previews)) return null;
+  const candidates = manifest.previews.filter(preview => preview?.mode === 'web' &&
+    /^http:\/\/(?:127\.0\.0\.1|localhost):\{port\}(?:\/[^\r\n\\]*)?$/.test(preview.url));
+  if (candidates.length !== 1) return null;
+  const preview = candidates[0];
+  const url = new URL(preview.url.replace('{port}', '4000'));
+  return validateRecipe({directory: preview.cwd, start: preview.argv, env: preview.env,
+    readyPath: url.pathname + url.search});
+}
+export async function reviewRecipe(local, directory) {
+  return await readRecipe(local) ?? await declaredReviewRecipe(directory);
 }
 export async function saveRecipe(local,value){
   const recipe=validateRecipe(value),file=path.join(local,'project-settings.json');

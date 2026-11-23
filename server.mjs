@@ -15,7 +15,7 @@ import { readFile, writeFile, access, rename, stat, mkdir, open, unlink } from '
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario, project, webHealthy, defaultBranch } from './adapter.mjs';
+import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario, project, webHealthy, defaultBranch, setReviewPreviewOrigin } from './adapter.mjs';
 import { previewProxy, expiredPreviewCookies } from './proxy.mjs';
 import { ReviewStore, scenarioRecipe, digest } from './reviews.mjs';
 import { loadPlan, candidateComparison, PlanStore, branchUpdate, branchRelationships, retestAdvice, prepareTogether } from './plans.mjs';
@@ -24,7 +24,7 @@ import {publishedAction,publishedComplete} from './published-review.mjs';
 import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
 import {providerId,probeProvider} from './providers.mjs';
-import {readRecipe,saveRecipe} from './project-settings.mjs';
+import {readRecipe,reviewRecipe,saveRecipe} from './project-settings.mjs';
 import {browserQaResult} from './browser-qa.mjs';
 import {readDelivery,saveDelivery,deployProject,createReviewPr} from './project-delivery.mjs';
 import { MuseQa } from './muse-qa.mjs';
@@ -96,7 +96,7 @@ async function readyFix(ref,priorId){
 async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRun=null) {
   delete state.previewVersion;
   if(project.error)throw Error(project.error);
-  if(project.needsSetup && !await readRecipe(local))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
+  if(project.needsSetup && !await reviewRecipe(local,repo))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
   if(!workbenchRun) previousReviewId ||= store.records.findLast(record=>record.identity.ref===ref)?.id;
   const checking=workbenchRun?Promise.resolve(null):readyFix(ref,previousReviewId);
   const sourceCheck=expectedCommit?git('rev-parse',ref).then(sha=>{if(sha!==expectedCommit)throw Error('Choose an unchanged, committed fix job before retesting.');}):Promise.resolve();
@@ -180,7 +180,9 @@ async function activate(previousReviewId) {
     rubric=await workbenchRubric(repo,state.integration.workbenchRun);
     if(rubric.length) manifest=applyWorkbenchRubric(manifest,rubric);
   } else manifest=await manifestFor(state.changed.sha);
-  const record = await store.open({...state, repository:repo, previousReviewId:previousReviewId || state.comparison?.fixReview?.previousId}, manifest, digest(project.kind==='meta-clinic'?await readFile(path.join(root,scenarioRecipe(state.comparison.files)),'utf8'):JSON.stringify({version:'web-preview-v2',recipe:await readRecipe(local)})));
+  const previewRecipe = project.kind === 'meta-clinic' ? await readFile(path.join(root,scenarioRecipe(state.comparison.files)), 'utf8') :
+    JSON.stringify({version: 'web-preview-v2', recipe: await reviewRecipe(local, state.changed.directory ?? repo)});
+  const record = await store.open({...state, repository:repo, previousReviewId:previousReviewId || state.comparison?.fixReview?.previousId}, manifest, digest(previewRecipe));
   state.recordId = record.id; state.manifest = manifest;
   if(state.comparison?.fixReview){const parent=store.get(state.comparison.fixReview.previousId),root=reviewRoot(parent,store.records);record.reviewRootId=root.id;record.reviewTitle=root.title;}
   if (state.integration?.sha === state.changed.sha) {
@@ -208,7 +210,7 @@ async function active(id, checkFresh = false) {
 }
 function json(res,status,data) { res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(data)); }
 async function body(req) { let buffer=''; for await(const chunk of req) { buffer += chunk; if(Buffer.byteLength(buffer)>16_000_000) throw new Error('Request too large'); } return JSON.parse(buffer || '{}'); }
-const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>readRecipe(local),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
+const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>reviewRecipe(local,repo),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
 async function mutate(endpoint, data) {
   if (endpoint === '/api/workbench-export') return exportHandoff(repo,data.runId,git);
   if (endpoint === '/api/workbench-repair') return createRepair(repo,data,git);
@@ -286,7 +288,7 @@ async function mutate(endpoint, data) {
   if(endpoint==='/api/suggest-preview'){
     if(typeof data.description!=='string' || !data.description.trim() || data.description.length>4000)throw Error('Describe your project in a few words.');
     if(jobs.rows.some(job=>job.status==='running') || state.original || state.changed)throw Error('Stop previews and wait for running jobs before changing setup.');
-    if(await readRecipe(local))return {configured:true};
+    if(await reviewRecipe(local,repo))return {configured:true};
     const agent=selectedAgent(),connection=await probeProvider(agent.provider,agent.executable);if(connection.status!=='ready')throw Error(connection.message);
     const {suggestPreviewRecipe}=await import('./desktop/welcome-agent.cjs');
     const recipe=await suggestPreviewRecipe(agent.provider,repo,data.description,agent.executable);
@@ -549,7 +551,7 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
     if (req.method === 'GET' && url.pathname === '/api/workbench-handoff') {
       return json(res, 200, await readHandoff(repo, url.searchParams.get('run')));
     }
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,workspaceBusy:workspace.busy(),qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await readRecipe(local).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,workspaceBusy:workspace.busy(),qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await reviewRecipe(local,repo).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await consolidateFixBranches(groupedBranches(await branches(),jobs.rows,store.records),git));
     if(req.method==='GET' && url.pathname==='/api/qa-review')return json(res,200,store.get(url.searchParams.get('id')));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
@@ -645,6 +647,7 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
     const port = await bindLoopback(server,requestedPort,controllerFallback);
     const host = `127.0.0.1:${port}`;
     const origin = `http://${host}`;
+    setReviewPreviewOrigin(origin);
     workspace = await createWorkspace({repository:repo,local,git,origin,token,selectedAgent,
       providerOptions:()=>Object.fromEntries(Object.entries(agentSettings.executables || {}).map(([provider,executable])=>[provider,{executable}])),
       review:run=>workbenchReview(repo,run,store.records,git),

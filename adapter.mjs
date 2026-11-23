@@ -102,6 +102,7 @@ async function assertOwner() {
   }
 }
 const webPreviews=new WebPreviews({run,progress,local});
+export const setReviewPreviewOrigin = origin => { webPreviews.parentOrigin = origin; };
 export const webHealthy=preview=>webPreviews.healthy(preview.runtime || preview.side,preview.sha);
 export async function defaultBranch(){
   const ref=await git('symbolic-ref','--quiet','refs/remotes/origin/HEAD').catch(()=> '');

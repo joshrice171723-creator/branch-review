@@ -1,5 +1,5 @@
 import {readFile,access,writeFile,mkdir,realpath} from 'node:fs/promises';
-import {readRecipe,expandRecipe,validateRecipe} from './project-settings.mjs';
+import {reviewRecipe,expandRecipe,validateRecipe} from './project-settings.mjs';
 import {spawn,spawnSync} from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
@@ -51,7 +51,7 @@ async function freePort(){
   const port=server.address().port;await new Promise(resolve=>server.close(resolve));return port;
 }
 export class WebPreviews{
-  constructor({run,progress,local}){Object.assign(this,{run,progress,local});this.running=new Map();
+  constructor({run,progress,local,parentOrigin}){Object.assign(this,{run,progress,local,parentOrigin});this.running=new Map();
     process.once('exit',()=>{for(const entry of this.running.values())for(const child of entry.children || [entry.child])if(child.pid && child.exitCode===null){if(process.platform==='win32')spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});else child.kill();}});
   }
   async stop(side){
@@ -70,7 +70,7 @@ export class WebPreviews{
   async prepare(side,sha,cwd,checkout){
     if(await this.healthy(side,sha))return this.running.get(side).preview;
     const running=this.running.get(side);
-    if(running && path.resolve(running.preview.directory)===path.resolve(cwd) && hotReloadable(running.preview.kind,[]) && !await readRecipe(this.local) && await this.healthy(side,running.sha)){
+    if(running && path.resolve(running.preview.directory)===path.resolve(cwd) && hotReloadable(running.preview.kind,[]) && !await reviewRecipe(this.local,cwd) && await this.healthy(side,running.sha)){
       const files=(await this.run('git',['diff','--name-only','-z',running.sha,sha,'--'],{cwd})).split('\0').filter(Boolean);
       if(hotReloadable(running.preview.kind,files)){
         await checkout();
@@ -81,7 +81,7 @@ export class WebPreviews{
     await this.stop(side);await checkout();
     const project=await detectProject(cwd);
     if(project.kind==='meta-clinic')throw Error('This branch changed project type. Reopen the repository.');
-    const recipe=await readRecipe(this.local);
+    const recipe=await reviewRecipe(this.local,cwd);
     if(recipe)return this.custom(side,sha,cwd,recipe);
     if(project.kind==='static')return this.custom(side,sha,cwd,validateRecipe({start:['branch-review-static','{root}','{port}']}));
     if(project.needsSetup)throw Error('Set up this project in More tools → Workspace. Enter its setup and start commands.');
@@ -115,7 +115,8 @@ export class WebPreviews{
     const cwd=await realpath(path.resolve(root,recipe.directory)),base=await realpath(root);
     if(cwd!==base && !cwd.startsWith(base+path.sep))throw Error('Preview directory resolves outside its checkout.');
     const config=expandRecipe(recipe,{port,root,side,commit:sha,data});
-    const env={...process.env,...config.env,ELECTRON_RUN_AS_NODE:'1',PORT:String(port),BRANCH_REVIEW_DATA:data,BRANCH_REVIEW_REVISION:sha,BRANCH_REVIEW_SIDE:side};
+    const env={...process.env,...config.env,ELECTRON_RUN_AS_NODE:'1',PORT:String(port),BRANCH_REVIEW_DATA:data,BRANCH_REVIEW_REVISION:sha,BRANCH_REVIEW_SIDE:side,
+      ...(this.parentOrigin && {BRANCH_REVIEW_PREVIEW_PARENT:this.parentOrigin})};
     const launch=args=>projectCommand(args,env);
     const stamp=JSON.stringify({sha,recipe});
     this[side+'-setup'] ||= await readFile(path.join(this.local,side+'-setup.json'),'utf8').catch(()=>null);
