@@ -15,6 +15,16 @@
 .run-map-steps{list-style:none;margin:12px 0;padding:0}
 .run-map-steps li{display:flex;align-items:center;gap:7px;padding:8px 0;border-bottom:1px solid #d7dfe1}
 .run-map-steps li small{margin-inline-start:auto;color:var(--muted,#58646d)}
+.step-evidence-trigger{display:inline-grid;place-items:center;flex:none;width:32px;min-height:32px;padding:4px}
+.step-evidence-trigger svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.step-evidence section{min-width:0;padding-block:12px;border-block-start:1px solid var(--border)}
+.step-evidence h3,.step-evidence p,.step-evidence pre,.step-evidence dl{margin:0}
+.step-evidence-text,.step-evidence pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.step-evidence pre{padding:8px;background:var(--surface);border:1px solid var(--border);max-height:22rem;overflow:auto}
+.step-evidence-fields{display:grid;grid-template-columns:minmax(100px,max-content) minmax(0,1fr);gap:6px 14px}
+.step-evidence-fields dt{font-weight:600}
+.step-evidence-fields dd{margin:0;overflow-wrap:anywhere}
+.step-evidence details summary{cursor:pointer}
 .run-map .runtime-spinner{display:inline-block;flex:none;width:16px;height:16px;margin:0;border:2px solid #a9c9c4;border-top-color:#09665c;border-radius:50%;animation:workbench-stage-turn .9s linear infinite}
 .run-map-steps .runtime-spinner{width:12px;height:12px}
 .run-map-event{margin:10px 0}

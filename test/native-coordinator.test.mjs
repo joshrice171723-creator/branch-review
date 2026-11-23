@@ -33,7 +33,7 @@ async function fixture(t) {
   await git('add', 'unrelated.txt');
   const store = createStore(repository);
   const check = {name: 'greeting', argv: ['node', '-e',
-    'process.exit(require("node:fs").readFileSync("greeting.txt","utf8")==="Invalid" ? 1 : 0)'],
+    'const value=require("node:fs").readFileSync("greeting.txt","utf8"); console.log(value); process.exit(value==="Invalid" ? 1 : 0)'],
     cwd: '.', phases: ['baseline', 'after'], required: true, benchmark: false};
   await store.setConfig({...await store.config(), checks: [check]});
   await store.setProfile(await store.getProfile());
@@ -116,7 +116,9 @@ test('pins a checked commit, returns a failed check, and repairs the same approv
     assert.equal(provider, 'Muse');
     return {text: JSON.stringify({verdict: 'pass', reason: 'Reviewed the current evidence.', ...(stage === 'final_review' ? {criteria} : {})})};
   };
-  const coordinator = await createCoordinator({repository, store, git, invoke, review: runId => ({runId, ...reviewState})});
+  const pushTarget = 'https://github.com/example/example';
+  const coordinator = await createCoordinator({repository, store, git, invoke, review: runId => ({runId, ...reviewState}),
+    push: async ({commit}) => ({commit, ref: 'refs/heads/change', repository: pushTarget, remote: 'origin'})});
   t.after(() => coordinator.close());
   const action = (name, data) => coordinator.dispatch(name, data, {method: 'POST'});
   const plan = '# Update the greeting\n\n## Acceptance criteria\n- The file contains the requested greeting.';
@@ -137,6 +139,27 @@ test('pins a checked commit, returns a failed check, and repairs the same approv
   assert.equal(handoff.design.base, base);
   assert.match(await git('diff', '--cached', '--name-only'), /^unrelated\.txt$/);
   assert.equal(await readFile(path.join(repository, 'unrelated.txt'), 'utf8'), 'Staged unrelated change');
+
+  const progress = await coordinator.dispatch('design/progress');
+  const inspect = ({role, id}, key, extra) =>
+    coordinator.dispatch('design/step-evidence', {task: attempt.task, visit: id, role, key, ...extra});
+  const audits = progress.run.attempts.filter(row => row.role === 'buildReview');
+  assert.deepEqual(audits.map(row => row.evidence[2]), ['Returned', 'Passed']);
+  const returned = await inspect(audits[0], '2');
+  assert.match(returned.sections.find(row => row.text).text, /required project check failed/i);
+  const checkVisits = progress.run.attempts.filter(row => row.role === 'checks');
+  const failed = (await inspect(checkVisits[0], 'greeting')).sections[0].checks[0];
+  const passed = (await inspect(checkVisits[1], 'greeting')).sections[0].checks[0];
+  assert.equal(failed.exit_code, 1);
+  assert.equal(failed.stdout_preview.trim(), 'Invalid');
+  assert.equal(passed.exit_code, 0);
+  assert.equal(passed.stdout_preview.trim(), 'After');
+  assert.match((await inspect(checkVisits[0], 'greeting', {output: failed.id})).stdout, /Invalid/);
+  await assert.rejects(inspect(checkVisits[0], 'greeting', {output: passed.id}), /Select a recorded check/);
+  const final = await inspect(progress.run.attempts.find(row => row.role === 'finalReview'), '2');
+  assert.deepEqual(final.sections.find(row => row.criteria).criteria, criteria);
+  const verified = await inspect(progress.run.attempts.find(row => row.role === 'verify'), '1');
+  assert.ok(verified.sections[0].fields.some(([key, sha]) => key === 'Commit' && sha === group.sha));
 
   reviewState = {status: 'changes-requested', ref: 'refs/heads/change', commit: group.sha,
     reviewedCommit: group.sha, base, reviewId: 'review-one', slices: [{id: 'task'}],
@@ -161,9 +184,15 @@ test('pins a checked commit, returns a failed check, and repairs the same approv
 
   reviewState = {status: 'approved', ref: 'refs/heads/change', commit: second.sha,
     reviewedCommit: second.sha, base, reviewId: 'review-two', slices: [{id: 'task'}], findings: [],
-    checklist: [{id: 'acceptance-1', status: 'passed'}], approval: {reviewer: 'QA', at: '2026-11-22T00:00:00Z'}};
+    checklist: [{id: 'acceptance-1', title: 'Check the greeting', status: 'passed'}], pushTarget,
+    approval: {reviewer: 'QA', at: '2026-11-22T00:00:00Z'}};
   state = await action('design/review', {build: first.id, sha: second.sha});
   assert.equal(state.builds.at(-1).status, 'closed');
+  const approval = await coordinator.dispatch('design/step-evidence', {task: nextRun, role: 'humanReview', key: '2'});
+  assert.ok(approval.sections[0].fields.some(([key, reviewer]) => key === 'Reviewer' && reviewer === 'QA'));
+  await action('design/push', {build: first.id, sha: second.sha, expectedTarget: pushTarget});
+  const pushed = await coordinator.dispatch('design/step-evidence', {task: nextRun, role: 'push', key: '2'});
+  assert.ok(pushed.sections[0].fields.some(([key, ref]) => key === 'Ref' && ref === 'refs/heads/change'));
   assert.equal((await coordinator.dispatch('design/history')).length, 2);
   const archived = await action('design/archive', {revision: state.revision});
   assert.equal(archived.builds.length, 0);

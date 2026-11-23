@@ -109,6 +109,7 @@ export async function createCoordinator({
         case 'GET design/evidence': return await builds.evidence(data);
         case 'GET design/group': return await builds.group(data);
         case 'GET design/progress': return await builds.progress();
+        case 'GET design/step-evidence': return await builds.step(data);
         case 'GET design/asset':
         case 'GET design/assets': {
           const {bytes} = await design.asset(await design.read(), data.id);

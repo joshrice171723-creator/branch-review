@@ -2,12 +2,11 @@ import {isDeepStrictEqual} from 'node:util';
 import {id, now, runPattern, sentence} from './files.mjs';
 import {checkMode, hash, jsonHash, selectedProfile} from './design.mjs';
 import {commitment, currentGroup, loopPath, markerPath, statePath} from './audit.mjs';
+import {buildStageRoles, buildTrace, gateEvidence, stageEvidence} from './step-evidence.mjs';
 
 const leasePath = '.harness/design/build.owner';
 const pendingStates = ['working', 'cancelling'];
 const closedStates = ['closed', 'retired'];
-const roles = {plan: 'plan', plan_review: 'planReview', baseline: 'baseline', build: 'build', building: 'build',
-  checks: 'checks', build_review: 'buildReview', final_review: 'finalReview', final_skip: 'finalReview', finish: 'verify'};
 const workflowChangedMessage = build => 'Agent settings changed after this run started. ' + (build.mode === 'task'
   ? 'Restart the build to use the saved settings.'
   : 'Retire the run and start a new build to use the saved settings.');
@@ -543,21 +542,16 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const task = await store.getRun(attempt.task);
     const loop = await files.read(statePath(attempt.task), {});
     const checks = (await store.executionConfig(attempt.task)).checks;
-    const attempts = [];
-    for (const step of loop.history ?? []) {
-      let role = roles[step.stage];
-      if (!role) continue;
-      const prior = attempts.at(-1);
-      if (step.stage === 'building' && prior?.role === 'build') {
-        prior.stage = 'building';
-        continue;
-      }
-      if (step.stage === 'build' && ['buildReview', 'finalReview', 'verify'].includes(prior?.role) && typeof step.detail === 'string') role = 'repair';
-      attempts.push({role, stage: step.stage, time: step.time,
-        reason: (typeof step.detail === 'string' ? step.detail : step.detail?.reason ?? '').slice(0, 1200)});
-    }
+    const statuses = evidence => Object.fromEntries(Object.entries(evidence).map(([key, row]) => [key, row.status]));
+    const visits = buildTrace(loop.history);
+    const attempts = visits.map(visit => {
+      const {id, role, stage, time, entry} = visit;
+      return {id, role, stage, time,
+        reason: (typeof entry.detail === 'string' ? entry.detail : entry.detail?.reason ?? '').slice(0, 1200),
+        evidence: statuses(stageEvidence(task, build, visit, visits))};
+    });
     const tail = attempts.at(-1);
-    const failedRole = tail?.role || roles[attempt.step];
+    const failedRole = tail?.role || buildStageRoles[attempt.step];
     let failure = null;
     if (build.status === 'failed' && build.error && failedRole) {
       const saved = await store.getProfile();
@@ -578,7 +572,38 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       stages: selectedProfile(task.task.profile)?.stages ?? {}, checks,
       question: ['question', 'question_retry'].includes(loop.stage) ? loop.question : ''},
       review: {waiting: build.status === 'review', approved: !!group.sha && group.reviews.at(-1)?.sha === group.sha,
-        pushed: !!group.sha && group.pushed?.sha === group.sha}};
+        pushed: !!group.sha && group.pushed?.sha === group.sha,
+        evidence: {humanReview: statuses(gateEvidence('humanReview', build, group)),
+          push: statuses(gateEvidence('push', build, group))}}};
+  }
+
+  async function step({task: id, visit, role, key, output}) {
+    if (!runPattern.test(id ?? '')) throw Error('Select a recorded build step.');
+    const state = await design.read();
+    const build = [...(state.archivedBuilds ?? []), ...state.builds].findLast(row => row.attempts.some(item => item.task === id));
+    if (!build) throw Error('Select a recorded build step.');
+    let evidence;
+    if (['humanReview', 'push'].includes(role)) {
+      const group = build.groups.find(row => row.sha && build.attempts.some(item => item.task === id && item.sha === row.sha));
+      const review = group && role === 'humanReview' ? await reviewed(build, group).catch(() => null) : null;
+      evidence = gateEvidence(role, build, group, review);
+    } else {
+      const trace = buildTrace((await files.read(statePath(id), {})).history);
+      const found = trace.find(row => row.id === visit && row.role === role);
+      if (!found) throw Error('Select a recorded build step.');
+      evidence = stageEvidence(await store.getRun(id), build, found, trace);
+    }
+    const record = Object.hasOwn(evidence, key) ? evidence[key] : null;
+    if (!record) throw Error('This step has no saved evidence.');
+    if (output !== undefined) {
+      const row = record.sections.flatMap(section => section.checks ?? []).find(check => check.id === output);
+      if (!row) throw Error('Select a recorded check.');
+      const read = stream => store.readRunRecord(id, row.evidence_path + '/' + stream + '.log')
+        .then(value => value.toString('utf8'));
+      const [stdout, stderr] = await Promise.all([read('stdout'), read('stderr')]);
+      return {stdout, stderr};
+    }
+    return record;
   }
 
   async function history() {
@@ -622,7 +647,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     })};
   }
 
-  return {launch, advance, cancel, reconnect, decision, readiness, chat, live, history, progress, events, summary, resumeBlocker, busy: () => [...jobs.values()].some(({job}) => ['running', 'cancelling'].includes(job.state)),
+  return {launch, advance, cancel, reconnect, decision, readiness, chat, live, history, progress, step, events, summary, resumeBlocker, busy: () => [...jobs.values()].some(({job}) => ['running', 'cancelling'].includes(job.state)),
     async group(payload) {
       const build = current(await design.read(), payload.build);
       return reviewed(build, groupAt(build, payload.group));
