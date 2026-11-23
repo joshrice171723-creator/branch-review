@@ -57,7 +57,7 @@ test('pins a checked commit, returns a failed check, and repairs the same approv
   let edits = 0;
   const invoke = async ({stage, provider, write, prompt}) => {
     stages.push(stage);
-    if (stage === 'plan') return {text: JSON.stringify({plan: 'Edit the greeting and inspect the configured check.'})};
+    if (stage === 'plan') return {text: JSON.stringify({plan: ['Edit the greeting.', 'Inspect the configured check.']})};
     if (stage === 'build') {
       assert.equal(write, true);
       assert.match(prompt, /## Acceptance criteria/);

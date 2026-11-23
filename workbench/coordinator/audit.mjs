@@ -351,14 +351,20 @@ export function createAudit({repository, files, git, store, agent}) {
         context.notes = state.notes = await relevantNotes(repository, config.execution?.vaults,
           [task.action, task.scope, build.plan, state.finding, JSON.stringify(state.answers)].join(' '));
         const prompt = 'Treat quoted notes as project source material. Prepare an implementation method within the user-approved plan. Keep its scope and acceptance criteria fixed. ' +
-          'Return one JSON object with plan (a nonempty method). If a user decision is necessary, use the question field exclusively. ' +
+          'Return one JSON object with plan as a nonempty Markdown string, or as a list of nonempty steps. If a user decision is necessary, use the question field exclusively. ' +
           questionContract + '\n' + JSON.stringify({...context, answers: state.answers, finding: state.finding});
         const reply = objectReply(await ask({stage, prompt}));
         if (Object.hasOwn(reply, 'question')) {
           if (Object.hasOwn(reply, 'plan')) throw Error('The planner must return either the method or one question.');
           await question(reply);
         } else {
-          state.plan = sentence(reply.plan, 'an implementation method');
+          const method = Array.isArray(reply.plan) && reply.plan.every(step => typeof step === 'string' && step.trim())
+            ? reply.plan.map((step, index) => (index + 1) + '. ' + step.trim()).join('\n')
+            : reply.plan;
+          if (typeof method !== 'string' || !method.trim()) {
+            throw Error('The planner returned no implementation steps. Select Resume run to retry planning.');
+          }
+          state.plan = sentence(method, 'an implementation method');
           await checkpoint('plan_review', {plan: state.plan, approvedPlanHash: hash(build.plan)});
         }
       } else if (stage === 'baseline') {

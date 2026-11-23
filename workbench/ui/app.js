@@ -9,7 +9,7 @@ const content = byId("content");
 const dialog = byId("dialog");
 const dialogContent = byId("dialog-content");
 const titles = {
-  live: ["Live run", "Start a task, answer questions, and follow its progress."],
+  live: ["Build activity", "Follow build stages, decisions, and logs."],
   history: ["History", "Inspect recorded stages and check receipts for this project."],
   workflow: ["Design", embedded ? "Plan a change, build it, and review the result." : "Plan, build, and review project slices."],
   quality: ["Quality", "Prepare checks from project routes. Review drafts and trial evidence."],
@@ -820,7 +820,15 @@ byId("apply-profile").addEventListener("click", async () => {
 await loadProject();
 
 function openView(next) {
-  if (view !== next) panelRoot.querySelector('[data-view="' + next + '"]').click();
+  if (view === next) return;
+  const target = panelRoot.querySelector('[data-view="' + next + '"]');
+  if (target) target.click();
+  else if (next === "live") {
+    view = next;
+    projectConversation?.selectView();
+    layoutSetting("view", view);
+    render();
+  }
 }
 
 function openDesign(tab) {

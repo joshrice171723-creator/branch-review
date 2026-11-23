@@ -3,7 +3,6 @@
     <nav aria-label="Workspace">
       <button data-view="workflow" aria-current="page"><span aria-hidden="true">⌘</span> Design</button>
       <button data-view="quality">Quality</button>
-      <button data-view="live"><span aria-hidden="true">▷</span> Live run</button>
       <button data-view="history"><span aria-hidden="true">◷</span> History</button>
       <button id="open-configure" type="button">Configure</button>
     </nav>
@@ -47,6 +46,7 @@
     </div>
     <ol class="conversation" id="project-conversation-messages" aria-label="Conversation"></ol>
     <div id="project-conversation-pending"></div>
+    <div id="project-conversation-build-decision" aria-live="polite" hidden></div>
     <form id="project-conversation-form">
       <div id="change-screenshot" class="actions" hidden>
         <span id="change-screenshot-label"></span>

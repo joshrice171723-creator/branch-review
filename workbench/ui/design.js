@@ -1119,7 +1119,10 @@ function designPanel(initialState) {
           "The branch changed after this run started. Retire this run, then start a new build from the current commit."));
         if (build.error) info.append(element("details", "", element("summary", "", "Previous attempt error"),
           element("p", "", build.error)));
-      } else if (build.error) info.append(element("p", "evidence-warning", build.error));
+      } else if (build.error) info.append(element("p", "evidence-warning",
+        build.error === "Enter an implementation method."
+          ? "The planner’s implementation steps could not be read. Select Resume run to retry planning."
+          : build.error));
       for (const [i, group] of build.groups.entries()) {
         if (group.sha && (i === latestReview || (build.status === "review" && i === build.index))) {
           info.append(embedded && build.mode === "task"
@@ -1317,7 +1320,7 @@ function designPanel(initialState) {
       checks: ["Configure project checks", () => goQuality("checks")],
       branch: ["Choose a build branch", () => goBuild("branch")],
       review: ["Connect Branch Review", () => goBuild("review-host")],
-      native: ["Open the active run", () => panelRoot.querySelector('[data-view="live"]').click()]
+      native: ["Open the active run", () => openView("live")]
     };
     let next;
     if (activeBuild) {
@@ -1412,6 +1415,7 @@ function designPanel(initialState) {
     }
   }
   function showLiveDecision(task) {
+    if (embedded) projectConversation?.buildDecision(task);
     const key = JSON.stringify([task?.id, task?.question_id, task?.question, task?.suggestions, task?.question_error]);
     if (key !== decisionKey) {
       liveDecision.replaceChildren();
@@ -1422,8 +1426,11 @@ function designPanel(initialState) {
           await refreshLive();
         } catch (error) { status.textContent = error.message; }
       };
-      if (task?.question) liveDecision.append(box("Build decision", planningAnswer(task.question, task.suggestions, answer)));
-      if (task?.question_error) liveDecision.append(box("Build decision", element("p", "", task.question_error),
+      if (embedded && (task?.question || task?.question_error)) liveDecision.append(box("Build decision",
+        element("p", "", task.question ? "The build is waiting for your answer." : "The planner needs to retry its suggested answers."),
+        button("Open Project conversation", () => projectConversation.open(), "button primary")));
+      if (!embedded && task?.question) liveDecision.append(box("Build decision", planningAnswer(task.question, task.suggestions, answer)));
+      if (!embedded && task?.question_error) liveDecision.append(box("Build decision", element("p", "", task.question_error),
         button("Retry suggestions", () => answer("/run"))));
       decisionKey = key;
     }

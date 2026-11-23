@@ -148,6 +148,14 @@
   min-width: 0;
 }
 
+#project-conversation-build-decision {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border-inline-start: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+
 #mockup-reference-controls[hidden],
 #mockup-reference-image[hidden] {
   display: none;

@@ -53,6 +53,7 @@ function connectProjectConversation(initial) {
   const headingContext = byId("project-conversation-context");
   const messages = byId("project-conversation-messages");
   const pending = byId("project-conversation-pending");
+  const buildDecisionCard = byId("project-conversation-build-decision");
   const composer = byId("project-conversation-message");
   const send = byId("send-project-conversation");
   const status = byId("project-conversation-status");
@@ -88,6 +89,7 @@ function connectProjectConversation(initial) {
   let accepted = {};
   try { accepted = JSON.parse(localStorage.getItem(acceptedKey)) || {}; } catch {}
   let state = initial, busy = false, outgoing, previousOpener, quality = {}, slice = {}, review = {}, lastQuestion, fingerprint;
+  let buildQuestionKey = "";
   const visible = () => !drawer.hidden;
   composer.value = stored.message;
 
@@ -110,6 +112,46 @@ function connectProjectConversation(initial) {
     archive.disabled = busy || Boolean(unfinished);
     archive.title = unfinished ? "Finish or retire the current build before archiving." : "";
   }
+  function showBuildDecision(task) {
+    const waiting = task?.question || task?.question_error;
+    const signature = waiting ? JSON.stringify([task.id, task.question_id, task.question, task.suggestions, task.question_error]) : "";
+    if (signature === buildQuestionKey) return;
+    buildQuestionKey = signature;
+    const label = waiting ? "Project conversation · Reply needed" : "Project conversation";
+    launch.textContent = label;
+    buildDecisionCard.replaceChildren();
+    buildDecisionCard.hidden = !waiting;
+    if (!waiting) return;
+    const feedback = element("p", "", "");
+    feedback.setAttribute("role", "status");
+    const answer = async message => {
+      feedback.textContent = "Sending your answer…";
+      try {
+        await api("chat", task.question ? {message, task: task.id, question: task.question,
+          question_id: task.question_id} : {message});
+        showBuildDecision(null);
+        const next = await api("design");
+        update(next, true);
+      } catch (error) { feedback.textContent = error.message; }
+    };
+    buildDecisionCard.append(element("h3", "", "Build needs your answer"),
+      task.question ? planningAnswer(task.question, task.suggestions, answer) :
+        element("div", "", element("p", "", task.question_error),
+          button("Retry suggestions", () => answer("/run"))), feedback);
+  }
+  async function followBuildQuestions() {
+    if (signal.aborted) return;
+    try {
+      const build = state?.builds.at(-1);
+      const offPlan = view !== "workflow" || (layoutSetting("tab") || "Plan") !== "Plan";
+      if (!document.hidden && offPlan && (visible() || ["working", "question", "cancelling"].includes(build?.status))) {
+        const {active_task: task} = await api("live");
+        showBuildDecision(task?.status === "active" ? task : null);
+      }
+    } catch {}
+    finally { setTimeout(followBuildQuestions, 4000); }
+  }
+  setTimeout(followBuildQuestions, 4000);
   function editComposer(value) {
     composer.value = stored.message = value;
     persistDesignDraft(key, stored);
@@ -479,7 +521,7 @@ function connectProjectConversation(initial) {
   const initialSlice = initial?.roadmap?.flatMap(row => row.slices.map(item => [item.id, row.title + " / " + item.title]))
     .find(row => row[0] === stored.slice);
   if (initialSlice) slice = {section: "slice", id: initialSlice[0], label: initialSlice[1]};
-  return {open, update, current: () => state, context: showContext,
+  return {open, update, buildDecision: showBuildDecision, current: () => state, context: showContext,
     setPreview(value) { livePreview = value; showContext(); },
     capturePreview(options) {
       mockupSource.value = "screen";
