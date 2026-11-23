@@ -8,10 +8,12 @@ export function coordinatorHealth(api) {
   button.textContent = 'Health';
   document.querySelector('.main-tools').append(button);
   const dialog = document.createElement('dialog');
-  dialog.setAttribute('aria-label', 'Coordinator health');
-  dialog.innerHTML = '<header class="dialog-heading"><h2>Coordinator health</h2><button type="button">Close</button></header><div></div>';
+  dialog.className = 'health-dialog';
+  dialog.setAttribute('aria-labelledby', 'health-title');
+  dialog.innerHTML = `<header class="dialog-heading health-heading"><div><span class="health-eyebrow">COORDINATOR</span><h2 id="health-title">App health</h2><p>Monitor checks and repair activity.</p></div><button type="button" class="quiet">Close</button></header><div class="health-content"><div class="health-summary" role="status"></div><div class="health-list"></div></div>`;
   document.body.append(dialog);
-  const body = dialog.querySelector('div');
+  const summary = dialog.querySelector('.health-summary');
+  const list = dialog.querySelector('.health-list');
   dialog.querySelector('button').onclick = () => dialog.close();
   async function refresh() {
     try {
@@ -20,28 +22,57 @@ export function coordinatorHealth(api) {
       const count = incidents.filter(row => row.state !== 'recovered').length;
       button.textContent = count ? 'Health (' + count + ')' : 'Health';
       if (!dialog.open) return;
-      body.textContent = error || (checkedAt ? 'Last check ' + new Date(checkedAt).toLocaleTimeString() : 'Waiting for the first check.');
+      summary.replaceChildren();
+      const overview = document.createElement('strong');
+      overview.textContent = error ? 'Health check unavailable' : count ? `${count} active ${count === 1 ? 'issue' : 'issues'}` : 'No active issues';
+      const timestamp = document.createElement('span');
+      timestamp.textContent = error || (checkedAt ? 'Last check ' + new Date(checkedAt).toLocaleTimeString() : 'Waiting for the first check.');
+      summary.append(overview, timestamp);
+      list.replaceChildren();
+      if (!incidents.length) {
+        const empty = document.createElement('p');
+        empty.className = 'health-empty';
+        empty.textContent = 'Health checks will appear here.';
+        list.append(empty);
+      }
       for (const row of incidents.slice(0, 30)) {
         const item = document.createElement('article');
+        item.className = 'health-card';
+        const heading = document.createElement('div');
+        heading.className = 'health-card-heading';
         const title = document.createElement('h3');
         title.textContent = (row.owner === 'host' ? 'Branch Review' : 'Project') + ' · ' + row.title;
-        item.append(title);
-        for (const text of [row.state, row.error, row.note, row.checks, row.verifiedAt && 'Check passed at ' + new Date(row.verifiedAt).toLocaleString()]) {
-          if (text) { const p = document.createElement('p'); p.textContent = text; item.append(p); }
+        const status = document.createElement('span');
+        status.className = 'health-status';
+        status.dataset.state = row.state;
+        status.textContent = row.state;
+        heading.append(title, status);
+        item.append(heading);
+        for (const [label, text] of [['Issue', row.error], ['Activity', row.note], ['Checks', row.checks], ['Verified', row.verifiedAt && new Date(row.verifiedAt).toLocaleString()]]) {
+          if (!text) continue;
+          const detail = document.createElement('div');
+          detail.className = 'health-detail';
+          const name = document.createElement('span');
+          name.textContent = label;
+          const value = document.createElement('p');
+          value.textContent = text;
+          detail.append(name, value);
+          item.append(detail);
         }
         if (row.state === 'attention') {
           const retry = document.createElement('button');
+          retry.className = 'secondary health-retry';
           retry.textContent = 'Retry repair';
           retry.onclick = async () => {
             retry.disabled = true;
             try { await api('/api/workspace/coordinator/health/retry', {id: row.id}); await refresh(); }
-            catch (issue) { body.textContent = issue.message; }
+            catch (issue) { summary.textContent = issue.message; retry.disabled = false; }
           };
           item.append(retry);
         }
-        body.append(item);
+        list.append(item);
       }
-    } catch (error) { body.textContent = error.message; }
+    } catch (error) { summary.textContent = error.message; }
   }
   button.onclick = () => { dialog.showModal(); void refresh(); };
   void refresh();

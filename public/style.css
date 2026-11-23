@@ -1144,3 +1144,35 @@ html[data-theme="dark"] #change-composer{background:#22252a;color:#f1f3f5;border
 #apex-finding-choices label {display:block; margin:6px 0;}
 #apex-review-checks img {display:block; max-width:100%; height:auto; margin:8px 0;}
 @media (max-width:650px) {#apex-panel-status,#workspace-recovery-actions {padding-inline:12px;}}
+
+.health-dialog { width: min(760px, calc(100vw - 32px)); max-width: none; max-height: min(85vh, 850px); padding: 0; border: 1px solid #dce2dc; border-radius: 14px; overflow: auto; }
+.health-dialog .health-heading { position: sticky; top: 0; z-index: 1; align-items: flex-start; padding: 24px 28px 20px; }
+.health-heading h2 { margin: 4px 0; font-size: 23px; }
+.health-heading p { margin: 0; color: #64756d; }
+.health-eyebrow { color: #52756a; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.health-content { padding: 22px 28px 28px; background: #f6f8f6; }
+.health-summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 18px; border: 1px solid #d9e5dc; border-radius: 10px; background: #edf5ef; }
+.health-summary strong { font-size: 14px; }
+.health-summary span { color: #5e7066; font-size: 12px; }
+.health-list { display: grid; gap: 12px; margin-top: 18px; }
+.health-card { padding: 19px 20px; border: 1px solid #dce3dd; border-radius: 10px; background: #fff; }
+.health-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.health-card-heading h3 { margin: 0; font-size: 15px; line-height: 1.4; }
+.health-status { flex: none; padding: 4px 9px; border-radius: 20px; background: #e8eef2; color: #405867; font-size: 11px; font-weight: 700; text-transform: capitalize; }
+.health-status[data-state="recovered"] { background: #e1f3e7; color: #266b43; }
+.health-status[data-state="attention"] { background: #fff0dd; color: #87500c; }
+.health-status[data-state="detected"] { background: #fce8e6; color: #9b3630; }
+.health-detail { margin-top: 16px; }
+.health-detail span { color: #74837a; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.health-detail p { margin: 5px 0 0; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.health-retry { margin-top: 18px; }
+.health-empty { padding: 24px; text-align: center; color: #64756d; }
+html[data-theme="dark"] .health-content { background: #1b1e22; }
+html[data-theme="dark"] .health-summary { background: #26372f; border-color: #425a49; }
+html[data-theme="dark"] .health-summary span, html[data-theme="dark"] .health-detail span, html[data-theme="dark"] .health-eyebrow { color: #b9c9c0; }
+html[data-theme="dark"] .health-card { background: #292d32; border-color: #484d55; }
+html[data-theme="dark"] .health-status { background: #384955; color: #e2eef5; }
+html[data-theme="dark"] .health-status[data-state="recovered"] { background: #31533d; color: #d9f4e1; }
+html[data-theme="dark"] .health-status[data-state="attention"] { background: #60472c; color: #ffe3bc; }
+html[data-theme="dark"] .health-status[data-state="detected"] { background: #643a39; color: #ffe0dc; }
+@media (max-width: 600px) { .health-dialog .health-heading, .health-content { padding: 18px; } .health-summary { align-items: flex-start; flex-direction: column; } }
