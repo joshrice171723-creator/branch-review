@@ -252,12 +252,23 @@ function designPanel(initialState) {
       return state;
     } catch (error) {
       status.textContent = error.message;
+      options.onError?.(error);
       // Keep local edits and the submitted base revision until the user resolves the conflict.
       try { state = await api("design"); redraw(); projectConversation?.update(state); } catch {}
     } finally { busy = false; panel.removeAttribute("aria-busy"); }
   }
   let editPlan = false;
   let planHeight = 340;
+  let planStartStatus = "";
+  let startingFromPlan = false;
+  function showPlanStartStatus(message) {
+    planStartStatus = message;
+    const feedback = panel.querySelector("[data-plan-start-status]");
+    if (feedback) {
+      feedback.textContent = message;
+      feedback.hidden = !message;
+    }
+  }
   function renderPlan(text, target) {
     target.replaceChildren();
     let list, code;
@@ -332,20 +343,47 @@ function designPanel(initialState) {
       ]), value => { launchForm.decisions[question.id] = value; return true; })));
     }
     const start = button("Start build", async () => {
+      if (startingFromPlan) return;
       if (byId("apply-profile").textContent === "Apply changes") {
-        notify("Apply your workflow profile changes before starting a build.");
+        showPlanStartStatus("Apply your workflow profile changes before starting a build.");
         return;
       }
-      if (draftDiffers(editing) && !await change("draft", {...editing, revision: baseRevision}, {reset: true})) return;
-      if (state.approved !== state.revision && !await change("approve", {})) return;
-      const readiness = await api("design/readiness").catch(error => { status.textContent = error.message; });
-      if (!readiness) return;
-      openTab("Build");
-      if (!readiness.ready) return;
-      await change("build", {stages: active().stages, decisions: launchForm.decisions},
-        {wait: "Starting build…", done: "Build started."});
+      startingFromPlan = true;
+      start.disabled = true;
+      showPlanStartStatus("Checking build readiness…");
+      const onError = error => showPlanStartStatus(error.message);
+      try {
+        const preflight = await api("design/readiness");
+        const blockers = preflight.items.filter(item => item.status === "blocked" && !["plan", "review"].includes(item.id));
+        if (blockers.length) {
+          showPlanStartStatus(blockers.map(item => item.message).join(" "));
+          return;
+        }
+        if (draftDiffers(editing) && !await change("draft", {...editing, revision: baseRevision}, {reset: true, onError})) return;
+        if (state.approved !== state.revision && !await change("approve", {}, {onError})) return;
+        const checked = await api("design/readiness");
+        if (!checked.ready) {
+          showPlanStartStatus(checked.items.filter(item => item.status === "blocked").map(item => item.message).join(" "));
+          return;
+        }
+        showPlanStartStatus("Starting build…");
+        if (await change("build", {stages: active().stages, decisions: launchForm.decisions},
+          {wait: "Starting build…", done: "Build started.", onError})) {
+          showPlanStartStatus("");
+          openTab("Build");
+        }
+      } catch (error) { onError(error); }
+      finally {
+        startingFromPlan = false;
+        if (start.isConnected) updateActions();
+        else if (tab === "Plan") draw();
+      }
     }, "button primary");
     start.dataset.designFocus = "plan-approve";
+    const startFeedback = element("p", "design-status", planStartStatus);
+    startFeedback.dataset.planStartStatus = "";
+    startFeedback.setAttribute("role", "status");
+    startFeedback.hidden = !planStartStatus;
     function updateActions() {
       const stale = baseRevision !== state.revision;
       const dirty = draftDiffers(editing);
@@ -355,7 +393,7 @@ function designPanel(initialState) {
       const valid = Boolean(editing.title.trim() && editing.plan.trim());
       save.disabled = stale || !dirty || !valid || Boolean(running);
       discard.hidden = !localDraft.plan;
-      start.disabled = stale || !valid || Boolean(pending || running);
+      start.disabled = startingFromPlan || stale || !valid || Boolean(pending || running);
       summary.textContent = stale ? "Saved plan changed. Compare it before applying this draft."
         : running ? "A build is active for this change."
         : localDraft.plan ? "Unsaved draft" : state.approved === state.revision ? "Approved plan" : "Draft plan";
@@ -371,7 +409,7 @@ function designPanel(initialState) {
       element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
       rendered, draft, summary,
       agreement, element("p", "", "Start build approves this plan and confirms the agreement."),
-      element("div", "actions", save, discard, start));
+      element("div", "actions", save, discard, start), startFeedback);
     if (baseRevision !== state.revision) result.append(
       element("details", "", element("summary", "", "Compare saved plan"), element("pre", "", state.plan)),
       button("Use local draft", () => { localDraft.baseRevision = state.revision; rememberDraft(); draw(); }));
