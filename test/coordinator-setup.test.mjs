@@ -145,3 +145,31 @@ test('a Branch Review repair goes directly to App Health without preparing a pro
   assert.equal(issue.owner, 'host');
   assert.equal(issue.state, 'detected');
 });
+test('a direct recovery instruction resumes the stopped build without drafting a plan', async t => {
+  let planCalls = 0;
+  const {send, store, coordinator} = await fixture(t, {'greeting.txt': 'Before'}, {
+    invoke: async ({stage}) => {
+      assert.equal(stage, 'plan');
+      if (++planCalls === 1) throw Error('Planning interrupted.');
+      throw Error('Confirmed that the same planning stage resumed.');
+    }
+  });
+  const profile = await store.getProfile();
+  await store.setProfile({...profile, checks: [{name: 'fixture', argv: ['node', '-e', 'process.exit(0)'],
+    required: true, benchmark: false, cwd: '.'}]});
+  const post = (route, data) => coordinator.dispatch('design/' + route, data, {method: 'POST'});
+  const {revision} = await post('draft', {...plan, revision: 0, mode: 'task'});
+  await post('approve', {revision, mode: 'task'});
+  const started = await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
+    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+  for (let i = 0; i < 150; i++) {
+    if ((await coordinator.dispatch('design')).builds.at(-1).status === 'failed') break;
+    await delay(100);
+  }
+  const resumed = await send({revision, message: 'do it fix it'});
+  assert.match(resumed.messages.at(-1).text, /Resumed the existing build/);
+  assert.equal(resumed.builds.length, 1);
+  assert.equal(resumed.builds[0].id, started.builds[0].id);
+  assert.equal(resumed.builds[0].attempts.length, 2);
+  assert.equal(resumed.builds[0].attempts[0].task, resumed.builds[0].attempts[1].task);
+});

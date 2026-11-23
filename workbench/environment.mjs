@@ -415,7 +415,12 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     }
   }
 
-  return {inspect, prepare, prepareBuild, cleanupPreview, cleanup, capabilities, exportProfile, importProfile, checkedPreview, dispatch,
+  return {inspect, prepare, prepareBuild,
+    async browserPreview() {
+      const process = await (await getPreview()).status();
+      return {url: process.url || await savedPreview?.()};
+    },
+    prepareBrowserRecovery: () => write(async () => previewForPlan(await capabilities({routes: false}))), cleanupPreview, cleanup, capabilities, exportProfile, importProfile, checkedPreview, dispatch,
     recoverPreview: () => write(async () => {
       const app = await getPreview();
       const state = await app.status();

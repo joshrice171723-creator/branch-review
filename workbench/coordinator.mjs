@@ -14,7 +14,7 @@ import {openStageMcp, selectStageTools, toolDescriptions} from './mcp.mjs';
 const checklist = ['Inspect the commit diff', 'Check the included scope', 'Review the recorded project checks'];
 
 export async function createCoordinator({
-  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe, stageToolCall, prepareBuild, saveQualityDraft, superviseFailures,
+  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe, stageToolCall, prepareBuild, saveQualityDraft, superviseFailures, prepareBrowserRecovery,
   invoke = runProvider, image = generateMockup, runtimeHealth
 }) {
   const root = await realpath(repository);
@@ -129,6 +129,7 @@ export async function createCoordinator({
   const design = createDesign({files, store, git, agent, projectName: path.basename(root), projectEvidence, validateQuality, prepareBuild, saveQualityDraft,
     repairApp: runtimeHealth && (issue => health.report(issue)),
     buildContext: build => builds.conversationContext(build),
+    recoverBuild: build => builds.recoverFromConversation(build),
     retryBuildVerification: build => builds.retryVerification({build}),
     qualityDraft: async () => {
       const quality = await qualityDraft?.();
@@ -147,7 +148,7 @@ export async function createCoordinator({
     return objectReply((await agent({profile, folder: '.harness/loops/' + attempt.task,
       stage: 'plan', prompt, signal: conversation.signal, evidenceOnly: true})).text);
   });
-  const builds = createBuilds({files, git, store, design, audit, review, push, checkProviders, supervise});
+  const builds = createBuilds({files, git, store, design, audit, review, push, checkProviders, supervise, prepareBrowserRecovery});
   const idle = () => !pending && !builds.busy() && runtimeHealth.idle();
   const health = runtimeHealth && await createHealthReviewer({...runtimeHealth, idle});
   async function readDesign() {

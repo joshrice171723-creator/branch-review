@@ -1,3 +1,4 @@
+import {verifyBrowserPreview} from '../playwright-check.mjs';
 import {redact} from '../../jobs.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {assetPattern, id, now, runPattern, sentence} from './files.mjs';
@@ -82,7 +83,7 @@ function groupMembers(state, payload) {
   return frequency === 'plan' ? [selected.flat()] : selected;
 }
 
-export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => [], supervise}) {
+export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => [], supervise, prepareBrowserRecovery}) {
   const jobs = new Map();
   let recoveryTimer;
   let recoverySuspended = false;
@@ -528,6 +529,40 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       applyBuildBudget(build, payload);
       return build;
     })).state;
+  }
+
+  async function recoverFromConversation(id) {
+    const stopped = current(await design.read(), id);
+    const stoppedAttempt = stopped.attempts.at(-1);
+    if (stopped.status !== 'failed' || !stoppedAttempt) throw Error('Choose the stopped build.');
+    const verificationOnly = await verificationAvailable(stopped);
+    let output;
+    let preview;
+    await drive(async state => {
+      const build = current(state, id);
+      if (build.status !== 'failed' || !approved(state, build)) throw Error('The stopped build or its approved plan changed.');
+      const attempt = build.attempts.at(-1);
+      if (attempt.id !== stoppedAttempt.id) throw Error('The stopped attempt changed.');
+      const loop = await files.read(statePath(attempt.task), {});
+      const stage = loop.stage === 'evidence_blocked' ? loop.history.at(-1)?.detail?.stage : loop.stage;
+      await ensureResumeTarget(build, attempt.task, loop);
+      const blocker = await resumeBlocker(build);
+      if (blocker) throw Error(blocker);
+      if (['baseline', 'checks'].includes(stage) && prepareBrowserRecovery && await store.needsBrowserPreview(attempt.task)) {
+        preview = await prepareBrowserRecovery();
+        await verifyBrowserPreview(await store.browserCheckUrl()).catch(error => {
+          throw Error(error.message + ' ' + preview);
+        });
+      }
+      if (stage === 'baseline') output = await store.restoreBrowserBaseline(attempt.task);
+      else if (loop.stage === 'evidence_blocked' && loop.checked_source &&
+        (await store.snapshot(attempt.task, {record: false})).snapshot_sha256 !== loop.checked_source) {
+        throw Error('The checkout differs from the source recorded for verification.');
+      }
+      return build;
+    }, undefined, verificationOnly, {kind: 'conversation'});
+    return [output && 'Moved the recorded browser output outside the checkout.', preview,
+      'Resumed the existing build.'].filter(Boolean).join(' ');
   }
 
   async function retryVerification(payload) {
@@ -1092,7 +1127,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
 
   const busy = () => operations > 0 || [...jobs.values()].some(entry => entry.active);
   void refreshRecovery(true).catch(() => {});
-  return {launch, advance, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, archive, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
+  return {launch, advance, recoverFromConversation, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, archive, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
     suspendRecovery() {
       if (busy() || closing || recoverySuspended) throw Error('Finish or cancel the active build before leaving this project.');
       recoverySuspended = true;

@@ -99,7 +99,7 @@ function contextOf(state) {
 }
 
 export function createDesign({files, store, git, agent, image, projectName, projectEvidence, qualityDraft, validateQuality,
-  buildContext, retryBuildVerification, prepareBuild, repairApp, saveQualityDraft}) {
+  buildContext, retryBuildVerification, recoverBuild, prepareBuild, repairApp, saveQualityDraft}) {
   async function read() {
     const saved = await files.read(workspaceFile);
     if (saved) {
@@ -368,6 +368,19 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       const build = await buildContext?.(state.builds.at(-1));
       const command = !payload.preparePlan && !payload.changeScreenshot ?
         text.trim().toLowerCase().replace(/[?.]+$/, '') : '';
+      async function handleBuildRecovery() {
+        if (build?.state !== 'failed') return 'There is no stopped build to resume.';
+        try { return await recoverBuild(build.id); }
+        catch (error) { return 'I could not resume this build. ' + error.message; }
+      }
+      if (recoverBuild && (command === '/recover-build' ||
+          build?.state === 'failed' && /^(?:(?:build status )?(?:please )?(?:fix it|unblock it|resume (?:it|(?:the )?build))|do it(?:[,.]? fix it)?)$/.test(command))) {
+        const reply = await handleBuildRecovery();
+        return edit(current => {
+          current.messages.push({id: id(), author: 'user', text, context: screen, time: now()},
+            {id: id(), author: 'agent', coordinator: true, text: reply, context: screen, time: now()});
+        });
+      }
       if (['/status', 'build status', 'what is the build status', 'why did the build stop', '/retry-verification',
         'where is the build budget'].includes(command)) {
         let reply = 'There is no current build for this project.';
@@ -433,7 +446,9 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         'Never infer a completed action. Do not edit project source during chat or planning. ' +
         'For a clear request to fix or change Branch Review itself, return proposal {kind:"app-repair",title,issue} with the observed failure and desired behavior. ' +
         'Use app-repair only for a user-requested Branch Review source change. Do not use it for project source changes or to change a workspace setting. ' +
-        'A project change returns a plan proposal with kind=plan, title, and complete plan with observable acceptance bullets. ' +
+        'When the user asks to fix, unblock, or resume the stopped build, return proposal {kind:"build-recovery",title}. ' +
+        'Carry out the recovery on the existing build instead of asking the user to start another build. ' +
+        'An unrelated project change returns a plan proposal with kind=plan, title, and complete plan with observable acceptance bullets. ' +
         'Include a roadmap only for an existing roadmap workflow. Start Build implements the plan in the selected project. ' +
         'For an explicit request to prepare the workspace or its preview and required checks, return proposal {kind:"project-setup",title}. ' +
         'For a plan or project-setup you can include checkId and previewId from projectEvidence in the proposal. ' +
@@ -452,13 +467,18 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       let proposal, setup, action, projectPrepared;
       if (reply.proposal != null) {
         const value = reply.proposal;
+        if (payload.preparePlan && value.kind !== 'plan') {
+          throw Error('Use Send for a direct Coordinator action. Send to Plan prepares a project change.');
+        }
         const title = sentence(value.title, 'a proposal title', 240);
         const base = {kind: value.kind, title, revision: state.revision};
         if (['plan', 'project-setup'].includes(value.kind)) {
           setup = Object.fromEntries(['checkId', 'previewId'].filter(key => typeof value[key] === 'string')
             .map(key => [key, value[key].slice(0, 120)]));
         }
-        if (value.kind === 'app-repair') {
+        if (value.kind === 'build-recovery' && !payload.preparePlan && recoverBuild) {
+          action = handleBuildRecovery;
+        } else if (value.kind === 'app-repair') {
           const issue = sentence(value.issue, 'a Branch Review issue', 4000);
           action = async () => {
             if (!repairApp) return 'Open Branch Review desktop to repair this issue.';
@@ -500,6 +520,10 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         } else {
           throw Error('The proposal does not match this screen.');
         }
+      }
+      if (action === handleBuildRecovery) {
+        description = await action();
+        action = null;
       }
       return edit(async current => {
         revision(current, payload);

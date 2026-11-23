@@ -3,6 +3,7 @@ import {execFile} from 'node:child_process';
 import {createReadStream} from 'node:fs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
@@ -10,6 +11,7 @@ import {WorkbenchProfile, modelCatalog, presetDocuments} from './profile.mjs';
 import {capture, checkArgv} from './quality/runner.mjs';
 import {checkFile, checkPathInside, resolveCheckCommand} from './check-command.mjs';
 import {cosmeticCandidate, cosmeticDiff} from './automatic-route.mjs';
+import {playwrightCheck, verifyBrowserPreview} from './playwright-check.mjs';
 import {replaceFile} from './coordinator/files.mjs';
 
 const exec = promisify(execFile);
@@ -268,7 +270,7 @@ async function prepareCheck(root, check, {quality, allowFuture} = {}) {
   return {root, cwd, argv, command, inputs, timeout:check.timeout_seconds ?? 300};
 }
 
-async function checkInputFingerprint({root, cwd, command, inputs, timeout}, executableHash) {
+async function checkInputFingerprint({root, cwd, command, inputs, timeout, browser}, executableHash) {
   const files = new Map([command.executable, ...command.entryFiles, ...inputs].map(file => [file.file, file]));
   for (const arg of command.args) {
     const name = arg.replace(/^--[^=]+=/, '');
@@ -282,7 +284,7 @@ async function checkInputFingerprint({root, cwd, command, inputs, timeout}, exec
     file, target, mode,
     sha256:await (file === command.file ? executableHash(target) : fileHash(target))
   })));
-  return fingerprint({cwd, file:command.file, args:command.args, node_mode:command.nodeMode, timeout, files:knownInputs});
+  return fingerprint({cwd, file:command.file, args:command.args, node_mode:command.nodeMode, timeout, files:knownInputs, ...(browser && {browser})});
 }
 
 async function executableSignature(file) {
@@ -296,8 +298,8 @@ function failedCommand(error, signal) {
 
 async function command(prepared, signal) {
   try {
-    const {cwd, argv, command, timeout} = prepared;
-    const result = await capture(argv, {cwd, command, signal, encoding:null, limit:maxRecord, timeout, stopOnLimit:true});
+    const {cwd, argv, command, timeout, env} = prepared;
+    const result = await capture(argv, {cwd, command, env, signal, encoding:null, limit:maxRecord, timeout, stopOnLimit:true});
     return {...result, exit_code:result.exit_code ?? (signal?.aborted ? 128 : 127), spawn_error:result.error ?? null};
   } catch (error) {
     return failedCommand(error, signal);
@@ -454,7 +456,7 @@ async function lock(home, operation) {
   }
 }
 
-export function createStore(repository, {engineRoot = path.join(supportRoot, 'engine'), qualityPin, qualityCheck} = {}) {
+export function createStore(repository, {engineRoot = path.join(supportRoot, 'engine'), qualityPin, qualityCheck, browserPreview, browserArtifacts} = {}) {
   const resolvedRoot = fs.realpath(repository);
   const executables = new Map();
   let qualityService;
@@ -971,6 +973,11 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
 
   async function checkInputs(run, check) {
     const prepared = await prepareCheck(await resolvedRoot, check, {quality:run.task.quality});
+    if (!run.task.quality && !check.benchmark && browserPreview) {
+      const browser = await playwrightCheck(prepared.argv, prepared.cwd);
+      if (browser) prepared.browser = {...browser,
+        ...(browser.managedUrl && {url: (await browserPreview()).url || ''})};
+    }
     return {prepared, sha256:await checkInputFingerprint(prepared, executableHash)};
   }
 
@@ -1020,6 +1027,15 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     assert(fingerprint(filtered) === run.task.initial_snapshot.snapshot_sha256, 'Application source changed before baseline verification.');
   }
 
+  async function browserArtifactDirectory(root, prefix) {
+    let parent = browserArtifacts ? path.resolve(browserArtifacts) : os.tmpdir();
+    if (checkPathInside(root, parent)) parent = os.tmpdir();
+    await fs.mkdir(parent, {recursive: true});
+    parent = await fs.realpath(parent);
+    if (checkPathInside(root, parent)) throw Error('Choose a browser output directory outside the project checkout.');
+    return fs.mkdtemp(path.join(parent, prefix + '-'));
+  }
+
   async function runPinnedCheck(run, check, phase, contract, signal) {
     const root = await resolvedRoot;
     const selected = check.phases ?? phases;
@@ -1053,7 +1069,17 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
           timed_out:measurement.timed_out || measurement.samples?.some(row => row.command?.timed_out || row.reset?.timed_out),
           stdout_truncated:measurement.stdout_truncated, stderr_truncated:measurement.stderr_truncated};
       } else {
-        result = await command(inputs.prepared, signal);
+        const prepared = inputs.prepared;
+        if (prepared.browser) {
+          const {npm, managedUrl, url} = prepared.browser;
+          const baseUrl = managedUrl ? await verifyBrowserPreview(url, signal) : undefined;
+          const output = await browserArtifactDirectory(root, 'branch-review-browser-' + id);
+          const env = {...process.env, ...(baseUrl && {BASE_URL: baseUrl}),
+            PLAYWRIGHT_HTML_OUTPUT_DIR: path.join(output, 'html')};
+          const args = [...prepared.command.args, ...(npm ? ['--'] : []), '--output', path.join(output, 'results')];
+          result = await command({...prepared, env, command: {...prepared.command, args}}, signal);
+          result.browser = {base_url: baseUrl, output};
+        } else result = await command(prepared, signal);
       }
     } catch (error) {
       result = failedCommand(error, signal);
@@ -1070,7 +1096,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       check_inputs_sha256:inputs?.sha256 ?? null, inputs_changed,
       exit_code:result.exit_code, spawn_error:result.spawn_error, started_at, duration_seconds, stdout_sha256:hash(result.stdout),
       stderr_sha256:hash(result.stderr), stdout_truncated:Boolean(result.stdout_truncated), stderr_truncated:Boolean(result.stderr_truncated),
-      ...(result.timed_out && {timed_out:true}),
+      ...(result.timed_out && {timed_out:true}), ...(result.browser && {browser:result.browser}),
       benchmark_contract_sha256:contract && check.benchmark ? fingerprint(contract) : null,
       diff_sha256:changeFingerprint(run.task.initial_snapshot.files, after.files)};
     if (quality) receipt.quality_revision = quality.revision;
@@ -1126,6 +1152,61 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       }
       const gating = results.filter(row => configured.some(check => check.name === row.check && (check.required || check.benchmark)));
       return {checks:results, verdict:gating.every(passing) ? 'pass' : 'revise'};
+    });
+  }
+
+  async function needsBrowserPreview(id) {
+    if (!browserPreview) return false;
+    const run = await selected(id);
+    if (run.task.quality) return false;
+    const root = await resolvedRoot;
+    for (const check of (await configurationFor(run)).checks) {
+      if (check.benchmark) continue;
+      const cwd = await projectCwd(root, check.cwd, true);
+      if ((await playwrightCheck(check.argv, cwd))?.managedUrl) return true;
+    }
+    return false;
+  }
+
+  async function restoreBrowserBaseline(id) {
+    return mutate(async home => {
+      const run = await selected(id, home);
+      const root = await resolvedRoot;
+      const expected = run.task.initial_snapshot;
+      const current = await sourceSnapshot(root, run.task);
+      const identity = ['head', 'branch', 'index_sha256'];
+      if (identity.some(key => current[key] !== expected[key])) throw Error('The branch, commit, or staged changes differ from the approved baseline.');
+      if (current.snapshot_sha256 === expected.snapshot_sha256) return;
+      const changes = [...new Set([...Object.keys(expected.files), ...Object.keys(current.files)])]
+        .filter(name => current.files[name] !== expected.files[name]);
+      const config = await configurationFor(run);
+      for (const check of config.checks) {
+        if (check.benchmark || run.task.quality) continue;
+        const cwd = await projectCwd(root, check.cwd);
+        if (!await playwrightCheck(check.argv, cwd)) continue;
+        const directory = path.relative(root, path.join(cwd, 'test-results')).replaceAll(path.sep, '/');
+        const prefix = directory + '/';
+        if (!changes.length || !changes.every(name => name.startsWith(prefix)) ||
+            Object.keys(expected.files).some(name => name.startsWith(prefix))) continue;
+        const receipts = await checkResults(run, check.name, 'baseline');
+        if (!receipts.some(row => row.source_changed && row.source_after_sha256 === current.snapshot_sha256)) continue;
+        const tracked = await git(root, 'ls-files', '--', directory);
+        const source = safePath(root, directory);
+        const info = await fs.lstat(source);
+        if (tracked || !info.isDirectory() || info.isSymbolicLink() || await fs.realpath(source) !== source) continue;
+        const retained = await browserArtifactDirectory(root, 'branch-review-recovery-' + run.id);
+        const destination = path.join(retained, 'test-results');
+        await fs.rename(source, destination);
+        const restored = await sourceSnapshot(root, run.task);
+        if (restored.snapshot_sha256 !== expected.snapshot_sha256 || identity.some(key => restored[key] !== expected[key])) {
+          await fs.rename(destination, source);
+          throw Error('The checkout changed while moving the recorded browser output.');
+        }
+        return destination;
+      }
+      throw Error('The baseline differs in ' + changes.slice(0, 8).join(', ') +
+        (changes.length > 8 ? ' and ' + (changes.length - 8) + ' more files' : '') +
+        '. Coordinator could not attribute all changes to a recorded check.');
     });
   }
 
@@ -1494,7 +1575,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
   }
 
   return {initialize:() => mutate(install), config, setConfig, effectiveConfig, getProfile, setProfile, profileApplied, discover, startTask, questions, answer,
-    freeze, prompt, executionConfig, snapshot, cosmeticSource, runCheck, runChecks:runConfigured,
+    freeze, prompt, executionConfig, snapshot, cosmeticSource, runCheck, runChecks:runConfigured, needsBrowserPreview, browserCheckUrl: async () => (await browserPreview?.())?.url, restoreBrowserBaseline,
     preflightChecks, checkReceiptStatus,
     benchmark:(id, options) => runConfigured(id, {...options, benchmarks:true}), record, readRunRecord, getRun, listRuns,
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),

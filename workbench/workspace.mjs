@@ -1,3 +1,4 @@
+import path from 'node:path';
 
 import {createStore} from './store.mjs';
 import {createCoordinator} from './coordinator.mjs';
@@ -20,7 +21,8 @@ const environmentRoutes = new Set([
 
 export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair}) {
   const quality = await createQuality({repository});
-  const tasks = await createStore(repository,{qualityPin:quality.pin,qualityCheck:quality.taskCheck});
+  const tasks = await createStore(repository,{qualityPin:quality.pin,qualityCheck:quality.taskCheck,
+    browserPreview: () => environment.browserPreview(), browserArtifacts: local && path.join(local, 'browser-checks')});
   let coordinator;
   const environment = await createEnvironment({repository,store:tasks,git,local,origin,
     defaultProfile:()=>WorkbenchProfile.initial(presetDocuments),
@@ -31,7 +33,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   const readEnvironment = (route,params=new URLSearchParams()) => environment.dispatch('GET',route,{},params);
   coordinator = await createCoordinator({
     repository,store:tasks,git,review,push,providerOptions,
-    stageToolCall:call, superviseFailures:true, prepareBuild: environment.prepareBuild,
+    stageToolCall:call, superviseFailures:true, prepareBuild: environment.prepareBuild, prepareBrowserRecovery: environment.prepareBrowserRecovery,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
       directory: diagnostics.healthDirectory,
       observe: () => observeRuntime(diagnostics),
