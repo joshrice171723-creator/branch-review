@@ -116,6 +116,11 @@ test('pins a checked commit, returns a failed check, and repairs the same approv
   state = await action('design/review', {build: first.id, sha: second.sha});
   assert.equal(state.builds.at(-1).status, 'closed');
   assert.equal((await coordinator.dispatch('design/history')).length, 2);
+  const archived = await action('design/archive', {revision: state.revision});
+  assert.equal(archived.builds.length, 0);
+  assert.equal(archived.conversations.at(-1).status, 'Completed');
+  assert.equal((await coordinator.dispatch('design/history')).length, 2);
+  assert.equal((await workbenchComparison(repository, nextRun, git)).base, base);
 });
 
 test('keeps a planning question until it has distinct suggestions and applies proposals only through a draft save', async t => {
@@ -169,5 +174,18 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   assert.match(mockupRequest.prompt, /"keep":"Appointment details"/);
   assert.equal(state.assets.at(-1).page, '/appointments');
   assert.equal(state.assets.at(-1).planRevision, mockup.revision);
+  const revision = state.revision;
+  const previous = state.messages;
+  state = await action('design/archive', {revision, draft: {message: 'Unsaved thought'}});
+  assert.equal(state.plan, '');
+  assert.deepEqual(state.messages, []);
+  assert.ok(state.conversationId);
+  await assert.rejects(action('design/archive', {revision}), /draft changed/i);
+  const index = await coordinator.dispatch('design/conversations');
+  const entry = index.archived[0];
+  assert.equal(entry.status, 'Draft plan');
+  const archive = await coordinator.dispatch('design/conversations', {id: entry.id});
+  assert.deepEqual(archive.messages, previous);
+  assert.equal(archive.draft.message, 'Unsaved thought');
 });
 

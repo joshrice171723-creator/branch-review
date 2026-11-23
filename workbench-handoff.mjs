@@ -94,7 +94,8 @@ async function designBaseline(root,{runId,ref,commit}) {
     const loop=await ownedFile(root,path.join(folder,'state.json'));
     if (loop.stage!=='completed' || loop.design_sha!==commit) return null;
     const workspace=await ownedFile(root,path.join('.harness','design','workspace.json'),32_000_000);
-    const build=workspace.builds?.find(item=>item.id===mark.build && item.branch===mark.branch);
+    const build=[...(workspace.builds || []), ...(workspace.archivedBuilds || [])]
+      .find(item=>item.id===mark.build && item.branch===mark.branch);
     const attempt=build?.attempts.findLast(item=>item.task===runId && item.outcome==='completed');
     if (!attempt || !build.groups.some(group=>group.sha===commit && group.pending?.length===0 &&
       group.slices.includes(attempt.slice))) return null;
@@ -252,9 +253,11 @@ async function reviewGroup(repository,handoff,git) {
     if(error.code==='ENOENT') throw staleDesign();
     throw error;
   }
-  const build=workspace.builds?.find(b=>b.id===marker.build);
+  const archived=workspace.conversations?.find(item=>item.buildIds?.includes(marker.build));
+  const build=(archived ? workspace.archivedBuilds : workspace.builds)?.find(b=>b.id===marker.build);
+  const source=archived || workspace;
   if(!build || build.retired || build.status==='retired' || !Number.isSafeInteger(build.revision) ||
-      workspace.approved!==build.revision || workspace.revision!==build.revision ||
+      source.approved!==build.revision || source.revision!==build.revision ||
       marker.branch!==build.branch || handoff.ref!=='refs/heads/'+build.branch) throw staleDesign();
   const attempt=build.attempts.find(a=>a.task===handoff.runId && a.outcome==='completed');
   const group=attempt && build.groups.find(g=>g.slices.includes(attempt.slice));

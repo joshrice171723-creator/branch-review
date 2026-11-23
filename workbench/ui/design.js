@@ -3,6 +3,11 @@
 let layoutWrite = Promise.resolve();
 const designDrafts = new Map();
 
+function designDraftKey(state) {
+  return "workbench.design.draft.v1:" + projectState.project.path +
+    (state?.conversationId ? ":" + state.conversationId : "");
+}
+
 function designDraftFor(key) {
   if (!designDrafts.has(key)) {
     let saved;
@@ -194,8 +199,8 @@ function designPanel(initialState) {
   const names = ["Plan", "Mockups", "Preview", "Build"];
   let tab = !embedded && names.includes(layoutSetting("tab")) ? layoutSetting("tab") : "Plan";
   let state = initialState || projectConversation?.current(), selectedAsset, busy = false;
-  const draftKey = "workbench.design.draft.v1:" + projectState.project.path;
-  const localDraft = designDraftFor(draftKey);
+  let draftKey = designDraftKey(state);
+  let localDraft = designDraftFor(draftKey);
   const defaultDecisions = {scope_confirmed: "confirmed", engine_integration: "confirmed",
     code_changes: "allow_scoped", migrations: "deny", dependencies: "deny"};
   const launchForm = {scope: "plan", frequency: "slice", decisions: {}, agreementOpen: true};
@@ -1222,6 +1227,15 @@ function designPanel(initialState) {
     }
   }
   function draw() {
+    const conversationKey = designDraftKey(state);
+    if (draftKey !== conversationKey) {
+      draftKey = conversationKey;
+      localDraft = designDraftFor(draftKey);
+      selectedAsset = undefined;
+      editPlan = false;
+      readiness = readinessKey = undefined;
+      planStartStatus = "";
+    }
     stageChanged(tab.toLowerCase());
     if (localDraft.plan && !draftDiffers(localDraft.plan)) clearPlanDraft();
     const focused = activeElement();

@@ -535,7 +535,7 @@ export function createBuilds({files, git, store, design, audit, review, push}) {
   async function history() {
     const state = await design.read();
     const rows = [];
-    for (const build of state.builds) {
+    for (const build of [...(state.archivedBuilds || []), ...state.builds]) {
       for (const attempt of build.attempts) {
         const loop = await files.read(statePath(attempt.task), {});
         const start = Date.parse(attempt.started) / 1000;
@@ -559,7 +559,7 @@ export function createBuilds({files, git, store, design, audit, review, push}) {
 
   async function summary() {
     const state = await design.read();
-    return {builds: [...state.builds].reverse().map(build => {
+    return {builds: [...(state.archivedBuilds || []), ...state.builds].reverse().map(build => {
       const groups = build.groups.filter(row => row.sha && row.reviews.at(-1)?.sha === row.sha);
       const findings = build.groups.flatMap(row => row.findings);
       const elapsed = build.attempts.reduce((seconds, attempt) => seconds + (attempt.finished ?

@@ -65,6 +65,7 @@ export async function createCoordinator({
         case 'GET design/layout': return await design.layout();
         case 'GET design/readiness': return await builds.readiness();
         case 'GET design/history': return await builds.history();
+        case 'GET design/conversations': return await design.conversations(data);
         case 'GET design/summary': return await builds.summary();
         case 'GET design/evidence': return await builds.evidence(data);
         case 'GET design/group': return await builds.group(data);
@@ -75,6 +76,10 @@ export async function createCoordinator({
           return {bytes, type: 'image/png'};
         }
         case 'POST design/build': return await builds.launch(data);
+        case 'POST design/archive': {
+          if (builds.busy()) throw Error('Wait for the current run before archiving.');
+          return await design.archive(data);
+        }
         case 'POST design/continue': return await builds.advance(data);
         case 'POST design/cancel': return await builds.cancel(data);
         case 'POST design/reconnect': return await builds.reconnect(data);

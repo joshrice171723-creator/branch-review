@@ -134,10 +134,69 @@ export function createDesign({files, store, git, agent, image, projectName, proj
   }
 
   async function asset(state, key) {
-    if (!assetPattern.test(key ?? '') || !state.assets.some(item => item.id === key)) throw Error('Unknown mockup version.');
+    if (!assetPattern.test(key ?? '') || (!state.assets.some(item => item.id === key) &&
+        !state.conversations?.some(item => item.assetIds?.includes(key)))) throw Error('Unknown mockup version.');
     const file = '.harness/design/assets/' + key + '.png';
     const bytes = await files.bytes(file, 32_000_000);
     return {file, bytes};
+  }
+
+  function conversationSummary(state) {
+    const build = state.builds.at(-1);
+    return {
+      title: state.title || state.messages.find(item => item.author === 'user')?.text.slice(0, 100) || 'Untitled change',
+      status: build ? ({closed: 'Completed', retired: 'Retired', review: 'In review', working: 'Building',
+        cancelling: 'Cancelling', ready: 'Ready to continue', cancelled: 'Cancelled', failed: 'Build failed',
+        question: 'Build needs input'}[build.status] || build.status) :
+        state.question || state.plannerRetry ? 'Planning needs input' :
+        state.plan.trim() ? state.approved === state.revision ? 'Approved plan' : 'Draft plan' :
+        state.messages.length ? 'Conversation' : 'New change',
+      messageCount: state.messages.length
+    };
+  }
+
+  async function conversations(query) {
+    const state = await read();
+    if (query.id !== undefined) {
+      if (!assetPattern.test(query.id) || !state.conversations?.some(item => item.id === query.id))
+        throw Error('Choose an archived conversation.');
+      return files.read('.harness/design/conversations/' + query.id + '.json');
+    }
+    return {active: conversationSummary(state), archived: [...(state.conversations || [])].reverse()};
+  }
+
+  async function archive(payload) {
+    const releases = [];
+    try {
+      for (const name of ['planner', 'guide', 'mockup']) releases.push(await files.acquire('.harness/design/' + name + '.owner'));
+      return await edit(async state => {
+        revision(state, payload);
+        if (state.builds.some(build => !['closed', 'retired'].includes(build.status)))
+          throw Error('Finish or retire the current build before archiving.');
+        const draft = {};
+        for (const field of ['title', 'plan', 'message']) {
+          const value = payload.draft?.[field];
+          if (typeof value === 'string' && value.trim()) {
+            if (value.length > 64000) throw Error('The unsaved draft is too long to archive.');
+            draft[field] = value;
+          }
+        }
+        if (!(state.messages.length || state.plan || state.assets.length || state.builds.length || Object.keys(draft).length))
+          throw Error('There is no conversation or plan to archive.');
+        const entry = {...conversationSummary(state), id: id(), archivedAt: now(), revision: state.revision,
+          approved: state.approved, buildIds: state.builds.map(build => build.id), assetIds: state.assets.map(asset => asset.id)};
+        await files.write('.harness/design/conversations/' + entry.id + '.json', {...entry,
+          plan: state.plan, messages: state.messages, revisions: state.revisions, assets: state.assets,
+          question: state.question, plannerRetry: state.plannerRetry ?? null, draft});
+        state.conversations = [...(state.conversations || []), entry];
+        state.archivedBuilds = [...(state.archivedBuilds || []), ...state.builds];
+        Object.assign(state, {conversationId: id(), revision: state.revision + 1, title: '', plan: '', roadmap: [],
+          approved: null, messages: [], revisions: [], question: null, assets: [], attachments: {}, builds: []});
+        delete state.plannerRetry;
+      });
+    } finally {
+      for (const release of releases.reverse()) await release();
+    }
   }
 
   async function planner(profile, folder, prompt, images) {
@@ -406,5 +465,5 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     });
   }
 
-  return {read, edit, layout, update, asset};
+  return {read, edit, layout, update, asset, archive, conversations};
 }

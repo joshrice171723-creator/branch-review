@@ -558,7 +558,7 @@ function render(design) {
   }
   const panel = view === "workflow" ? designPanel(design) : view === "quality" ? qualityPanel()
     : view === "stages" ? element("div", "layout", canvas(), inspector())
-    : view === "live" ? livePanel() : view === "history" ? element("div", "design-stack", deliveryPanel(), designHistory(), historyPanel())
+    : view === "live" ? livePanel() : view === "history" ? element("div", "design-stack", conversationHistory(), deliveryPanel(), designHistory(), historyPanel())
     : view === "documents" ? documentLibrary() : rulesPanel();
   content.replaceChildren(panel);
   projectConversation?.context();

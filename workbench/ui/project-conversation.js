@@ -2,6 +2,51 @@
 
 let projectConversation;
 
+function conversationHistory() {
+  const body = element("div", "panel-body design-stack");
+  const panel = element("section", "panel", heading("Project conversations"), body);
+  queueMicrotask(async () => {
+    try {
+      const {active, archived} = await api("design/conversations");
+      body.append(element("p", "", element("strong", "", "Current · " + active.status),
+        " · " + active.title + " · " + active.messageCount + " messages"));
+      if (!archived.length) body.append(element("p", "", "No archived conversations."));
+      for (const entry of archived) {
+        const details = element("details", "attempt", element("summary", "",
+          entry.title + " · " + entry.status + " · Archived"));
+        const transcript = element("div", "design-stack",
+          element("small", "", new Date(entry.archivedAt).toLocaleString() + " · " + entry.messageCount + " messages"));
+        let loaded = false;
+        details.addEventListener("toggle", async () => {
+          if (!details.open || loaded) return;
+          loaded = true;
+          try {
+            const record = await api("design/conversations?" + new URLSearchParams({id: entry.id}));
+            if (record.plan) transcript.append(element("details", "", element("summary", "", "Saved plan"),
+              element("pre", "", record.plan)));
+            if (record.draft?.plan) transcript.append(element("details", "", element("summary", "", "Unsaved plan"),
+              element("pre", "", [record.draft.title, record.draft.plan].filter(Boolean).join("\n\n"))));
+            if (record.draft?.message) transcript.append(element("p", "conversation-text", "Unsent message · " + record.draft.message));
+            const messages = element("ol", "conversation");
+            for (const item of record.messages) {
+              const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Project agent"),
+                element("p", "conversation-text", item.text));
+              if (item.asset) row.append(assetImage(item.asset, "Archived mockup"));
+              if (item.proposal?.plan) row.append(element("details", "", element("summary", "", "Proposed plan"),
+                element("pre", "", item.proposal.plan)));
+              messages.append(row);
+            }
+            transcript.append(messages);
+          } catch (error) { transcript.append(element("p", "", error.message)); }
+        });
+        details.append(transcript);
+        body.append(details);
+      }
+    } catch (error) { body.textContent = error.message; }
+  });
+  return panel;
+}
+
 function connectProjectConversation(initial) {
   const drawer = byId("project-conversation");
   const launch = byId("open-project-conversation");
@@ -36,8 +81,9 @@ function connectProjectConversation(initial) {
     [level, level[0].toUpperCase() + level.slice(1)])], () => true);
   byId("conversation-model-controls").append(field("Model", model), field("Thinking level", effort));
   if (embedded) mockupSource.querySelector('option[value="slice"]').remove();
-  const key = "workbench.design.draft.v1:" + projectState.project.path;
-  const stored = designDraftFor(key);
+  let key = designDraftKey(initial);
+  let stored = designDraftFor(key);
+  const archive = byId("archive-project-conversation");
   const acceptedKey = "workbench.conversation.accepted:" + projectState.project.path;
   let accepted = {};
   try { accepted = JSON.parse(localStorage.getItem(acceptedKey)) || {}; } catch {}
@@ -61,6 +107,9 @@ function connectProjectConversation(initial) {
     mockup.hidden = current.view !== "workflow" || Boolean(embedded && current.kind);
     planner.hidden = current.view !== "workflow" || current.tab !== "Plan" || !!current.kind;
     planner.disabled = busy || Boolean(state?.question || state?.plannerRetry);
+    const unfinished = state?.builds?.some(build => !["closed", "retired"].includes(build.status));
+    archive.disabled = busy || Boolean(unfinished);
+    archive.title = unfinished ? "Finish or retire the current build before archiving." : "";
   }
   function editComposer(value) {
     composer.value = stored.message = value;
@@ -87,6 +136,15 @@ function connectProjectConversation(initial) {
   launch.onclick = () => visible() ? close() : open();
   launch.hidden = false;
   byId("close-project-conversation").onclick = () => close();
+  archive.onclick = () => perform("Archiving conversation…", async () => {
+    const next = await api("design/archive", {revision: state.revision,
+      draft: {title: stored.plan?.title, plan: stored.plan?.plan, message: composer.value}});
+    Object.assign(stored, {message: "", mockupMessage: "", plan: null, baseRevision: null, slice: ""});
+    persistDesignDraft(key, stored);
+    update(next, true);
+    notify("Conversation archived in History.");
+    composer.focus();
+  });
   drawer.addEventListener("keydown", event => {
     if (event.key === "Escape") { event.preventDefault(); close(); }
   });
@@ -219,6 +277,16 @@ function connectProjectConversation(initial) {
 
   function update(next, changeDesign = false) {
     if (!next) return;
+    if (key !== designDraftKey(next)) {
+      key = designDraftKey(next);
+      stored = designDraftFor(key);
+      composer.value = stored.message;
+      slice = {};
+      review = {};
+      changeScreenshot = undefined;
+      showChangeScreenshot();
+      mockupTarget.onchange();
+    }
     state = next;
     showContext();
     if (visible()) renderMessages();
