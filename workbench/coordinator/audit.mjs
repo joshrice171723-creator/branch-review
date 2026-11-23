@@ -127,11 +127,57 @@ export function createAudit({repository, files, git, store, agent}) {
     if (await git('rev-parse', head + '^') !== build.base ||
         !message.split(/\r?\n/).includes('Workbench-Operation: ' + state.commitIntent) ||
         (await store.snapshot(task.id)).snapshot_sha256 !== state.final_snapshot) return null;
-    await ensureCleanTarget(build, head);
+    await ensureCleanTarget(withRecoveredPaths(build, state), head);
     return head;
   }
 
+  function withRecoveredPaths(build, state) {
+    const paths = new Set(Object.keys(state.recoveredPaths ?? {}));
+    const without = entries => Object.fromEntries(Object.entries(entries ?? {}).filter(([name]) => !paths.has(name)));
+    return {...build, preserved: without(build.preserved), preserved_index: without(build.preserved_index),
+      preservedHashes: without(build.preservedHashes)};
+  }
+
+  async function recoverHandoff(build, task, state, previous) {
+    if (!previous.length || state.stage !== 'evidence_blocked' ||
+        state.history.at(-1)?.detail?.kind !== 'no_task_changes') return null;
+    const snapshot = await store.snapshot(task.id);
+    if (snapshot.snapshot_sha256 !== state.final_snapshot || await commitment(git, build.branch) !== build.base) return null;
+    const dirty = await changes();
+    const known = new Set();
+    const verified = new Set();
+    for (const {task: priorId, preserved} of previous) {
+      const run = await store.getRun(priorId).catch(() => null);
+      if (run?.ledger?.verdict !== 'pass' || run.task.initial_snapshot.head !== build.base) continue;
+      const hashes = new Set(run.checks.filter(check => check.phase === 'after' && check.exit_code === 0 &&
+        !check.source_changed && !check.inputs_changed && check.source_after_sha256 === check.source_before_sha256)
+        .map(check => check.source_after_sha256));
+      for (const sha of hashes) {
+        const bytes = await store.readRunRecord(priorId, 'snapshots/' + sha.slice(0, 20) + '.json').catch(() => null);
+        if (!bytes) continue;
+        const earlier = JSON.parse(bytes).files;
+        for (const name of Object.keys(dirty)) {
+          if (Object.hasOwn(preserved, name) || earlier[name] === run.task.initial_snapshot.files[name]) continue;
+          known.add(name);
+          if (snapshot.files[name] === earlier[name]) verified.add(name);
+        }
+      }
+    }
+    const reviewed = await files.read(loopPath(task.id) + '/handoff-source-review.json');
+    const explicit = reviewed?.source === snapshot.snapshot_sha256 && reviewed?.base === build.base &&
+      reviewed?.plan === hash(build.plan) ? reviewed.paths ?? {} : {};
+    const paths = Object.create(null);
+    for (const name of known) {
+      if (name === policyFile || Object.hasOwn(snapshot.protected ?? {}, name) ||
+          ![' M', ' D', '??'].includes(dirty[name]) ||
+          (!verified.has(name) && (!Object.hasOwn(explicit, name) || explicit[name] !== (snapshot.files[name] ?? null)))) return null;
+      paths[name] = snapshot.files[name] ?? null;
+    }
+    return Object.keys(paths).length ? paths : null;
+  }
+
   async function commit(task, build, state) {
+    build = withRecoveredPaths(build, state);
     const recorded = state.design_sha;
     if (recorded) {
       await ensureCleanTarget(build, recorded);
@@ -145,7 +191,8 @@ export function createAudit({repository, files, git, store, agent}) {
     if (snapshot.snapshot_sha256 !== state.final_snapshot) throw Error('The checked source changed before the local commit.');
     const paths = Object.keys(dirty).filter(name => !Object.hasOwn(build.preserved, name));
     if (!paths.length) throw Error('No task-owned changes are available for a review commit.');
-    if (paths.some(name => snapshot.files[name] === task.initial_snapshot.files[name])) {
+    if (paths.some(name => Object.hasOwn(state.recoveredPaths ?? {}, name) ?
+      (snapshot.files[name] ?? null) !== state.recoveredPaths[name] : snapshot.files[name] === task.initial_snapshot.files[name])) {
       throw Error('The Git changes include files outside the checked source.');
     }
     const input = paths.join('\0') + '\0';
@@ -218,7 +265,8 @@ export function createAudit({repository, files, git, store, agent}) {
     await files.append(loopPath(run) + '/activity.jsonl', {run, stage, actor, timestamp: now(), activity: String(message).slice(0, 500)});
   }
 
-  async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly, retryRepair, runtimeProfile}) {
+  async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly, retryRepair,
+    runtimeProfile, recoveredPaths}) {
     const run = task.id;
     const profile = task.profile;
     const config = await store.executionConfig(run);
@@ -563,6 +611,10 @@ export function createAudit({repository, files, git, store, agent}) {
     }
 
     if (!pending) await checkpoint('plan');
+    if (recoveredPaths) {
+      state.recoveredPaths = recoveredPaths;
+      await checkpoint('finish', 'Recovered verified changes from earlier attempts of this plan.');
+    }
     if (attempt.budgetResetAt && state.budgetResetAt !== attempt.budgetResetAt) {
       state.budgetResetAt = attempt.budgetResetAt;
       state.returns = {};
@@ -758,7 +810,8 @@ export function createAudit({repository, files, git, store, agent}) {
           return block('finish', messages.filter(Boolean).join('\n') || 'Verification did not pass.', 'completion_gate');
         }
         if (!build.standalone && !state.design_sha &&
-            !Object.keys(await changes()).some(name => !Object.hasOwn(build.preserved, name))) {
+            !Object.keys(await changes()).some(name => !Object.hasOwn(build.preserved, name) ||
+              Object.hasOwn(state.recoveredPaths ?? {}, name))) {
           return block('finish', 'Verification passed. The checkout has no task-owned changes for a Branch Review commit. ' +
             'Review the existing changes before including them in a commit.', 'no_task_changes');
         }
@@ -782,5 +835,5 @@ export function createAudit({repository, files, git, store, agent}) {
     }
   }
 
-  return {baseline, ensureCleanTarget, findPendingCommit, activity, workflow};
+  return {baseline, ensureCleanTarget, findPendingCommit, recoverHandoff, withRecoveredPaths, activity, workflow};
 }

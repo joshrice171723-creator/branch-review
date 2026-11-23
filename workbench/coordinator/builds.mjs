@@ -170,7 +170,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
   async function ensureResumeTarget(build, taskId, checkpoint) {
     if (await commitment(git, build.branch) === build.base) return;
     const loop = checkpoint ?? (taskId && await files.read(statePath(taskId)));
-    if (loop?.design_sha) return audit.ensureCleanTarget(build, loop.design_sha);
+    if (loop?.design_sha) return audit.ensureCleanTarget(audit.withRecoveredPaths(build, loop), loop.design_sha);
     if (loop?.commitIntent && await audit.findPendingCommit(await store.getRun(taskId).then(run => run.task), build, loop)) return;
     throw Error('Restore the exact branch and commit for this task.');
   }
@@ -306,8 +306,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     build.status = 'working';
     delete build.error;
     delete build.attention;
+    const recoveredPaths = automaticRecovery?.kind === 'handoff' ? automaticRecovery.paths : undefined;
     return {build: structuredClone(build), attempt, task, answer, verificationOnly, retryRepair, runtimeProfile: limits,
-      step: verificationOnly || retryRepair ? 'checks' : loop?.stage};
+      recoveredPaths, step: recoveredPaths ? 'finish' : verificationOnly || retryRepair ? 'checks' : loop?.stage};
   }
 
   async function recordResult(buildId, job, loop) {
@@ -564,6 +565,22 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (build.status !== 'failed') return;
     let recovery = await providerLimitFor(attempt);
     let deadline = Date.parse(recovery?.resetAt);
+    if (attempt.step === 'evidence_blocked' && build.mode === 'task' &&
+        !build.attempts.some(row => row.task === attempt.task && row.automaticRecovery?.kind === 'handoff')) {
+      const loop = await files.read(statePath(attempt.task), {});
+      if (loop.history?.at(-1)?.detail?.kind === 'no_task_changes') {
+        const earlier = [...(state.archivedBuilds ?? []), ...state.builds]
+          .filter(item => item.id !== build.id && item.branch === build.branch && item.base === build.base && item.plan === build.plan)
+          .flatMap(item => item.attempts.map(row => ({task: row.task, preserved: item.preserved ?? {}})))
+          .filter(row => row.task !== attempt.task);
+        const run = await store.getRun(attempt.task);
+        const paths = await audit.recoverHandoff(build, run.task, loop, earlier);
+        if (paths) {
+          recovery = {kind: 'handoff', paths};
+          deadline = Date.now();
+        }
+      }
+    }
     if (attempt.errorCode === 'PROVIDER_CALL_TIMEOUT' &&
         ['plan', 'plan_review', 'build_review', 'final_review'].includes(attempt.step)) {
       const role = buildStageRoles[attempt.step];

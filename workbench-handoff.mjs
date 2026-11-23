@@ -115,7 +115,12 @@ async function designBaseline(root,{runId,ref,commit}) {
       if(hash===null) delete files[policyFile];
       else files[policyFile]=hash;
     }
-    return {status:mark.preserved,index:mark.preserved_index,files,policyPinned};
+    const recovered = loop.recoveredPaths ?? {};
+    if (Object.keys(recovered).some(name => !Object.hasOwn(mark.preserved, name) || name === policyFile)) {
+      throw Error('The Design build has an invalid record of recovered files.');
+    }
+    const preserved = entries => Object.fromEntries(Object.entries(entries).filter(([name]) => !Object.hasOwn(recovered, name)));
+    return {status:preserved(mark.preserved),index:preserved(mark.preserved_index),files,policyPinned};
   } catch (error) {
     if (error.code==='ENOENT' || error instanceof SyntaxError) return null;
     throw error;
