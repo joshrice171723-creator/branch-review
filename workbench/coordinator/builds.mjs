@@ -574,7 +574,12 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
           .flatMap(item => item.attempts.map(row => ({task: row.task, preserved: item.preserved ?? {}})))
           .filter(row => row.task !== attempt.task);
         const run = await store.getRun(attempt.task);
-        const paths = await audit.recoverHandoff(build, run.task, loop, earlier);
+        let paths;
+        try { paths = await audit.recoverHandoff(build, run.task, loop, earlier); }
+        catch (error) {
+          await publishAttention(build, attempt, error.message);
+          return;
+        }
         if (paths) {
           recovery = {kind: 'handoff', paths};
           deadline = Date.now();

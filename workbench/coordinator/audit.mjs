@@ -153,9 +153,9 @@ export function createAudit({repository, files, git, store, agent}) {
         !check.source_changed && !check.inputs_changed && check.source_after_sha256 === check.source_before_sha256)
         .map(check => check.source_after_sha256));
       for (const sha of hashes) {
-        const bytes = await store.readRunRecord(priorId, 'snapshots/' + sha.slice(0, 20) + '.json').catch(() => null);
-        if (!bytes) continue;
-        const earlier = JSON.parse(bytes).files;
+        const recorded = await store.readRunRecord(priorId, 'snapshots/' + sha.slice(0, 20) + '.json').catch(() => null);
+        if (!recorded?.files || recorded.snapshot_sha256 !== sha) continue;
+        const earlier = recorded.files;
         for (const name of Object.keys(dirty)) {
           if (Object.hasOwn(preserved, name) || earlier[name] === run.task.initial_snapshot.files[name]) continue;
           known.add(name);
