@@ -79,7 +79,9 @@ export function stageEvidence(run, build, visit, visits) {
     const verdict = run.audits.findLast(row => row.stage === (stage === 'final_skip' ? 'final_review' : stage) &&
       inVisit(visit, row.at));
     const checkVisit = visits.findLast(item => item.role === 'checks' && item.time < visit.time);
-    const receipts = role === 'planReview' ? [] : checkRows(run, checkVisit);
+    const repeated = entry.detail?.checkId && run.checks.find(row => row.id === entry.detail.checkId);
+    const receipts = role === 'planReview' ? [] : checkRows(run, checkVisit).filter(row => row.check !== repeated?.check);
+    if (repeated) receipts.push(repeated);
     const input = result(plan, method, agent, instructions, receipts.length && checks(receipts));
     if (!verdict) return stage === 'final_skip' ? {} : {0: input};
     const status = {pass: 'Passed', repair: 'Returned', replan: 'Returned', needs_evidence: 'Needs evidence', skipped: 'Skipped'}[verdict.verdict];

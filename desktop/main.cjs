@@ -100,7 +100,7 @@ async function launch() {
   process.env.BRANCH_REVIEW_DESKTOP_REPOSITORY=savedConfig.repository;
   settings.projects={...settings.projects,[path.resolve(savedConfig.repository).toLowerCase()]:home};
   const {startServer} = await import(pathToFileURL(path.join(root, 'server.mjs')).href);
-  const {origin, port} = await startServer({allowPortFallback:app.isPackaged, preferredPort:settings.controllerPort});
+  const {origin, port} = await startServer({allowPortFallback:app.isPackaged || hasPortOverride, preferredPort:settings.controllerPort});
   if (app.isPackaged && !hasPortOverride) settings.controllerPort=port;
   await writeFile(settingsPath, JSON.stringify({...settings,home}));
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));

@@ -157,7 +157,8 @@ export async function runProvider(options) {
 
 export function auditSchema(stage, withCriteria) {
   const fields = {
-    verdict: {type: 'string', enum: ['pass', 'replan', 'needs_evidence', ...(stage === 'plan_review' ? [] : ['repair'])]},
+    verdict: {type: 'string', enum: ['pass', 'replan', 'needs_evidence', ...(stage === 'plan_review' ? [] : ['repair', 'run_check'])]},
+    check: {type: ['string', 'null'], description: 'Pinned after-build check name for run_check, or null.'},
     reason: {type: 'string'}
   };
   if (withCriteria) {

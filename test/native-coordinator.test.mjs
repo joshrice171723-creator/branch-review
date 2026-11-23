@@ -99,7 +99,7 @@ test('restarts a stopped build with saved agent settings and preserves working c
   assert.equal(await readFile(path.join(repository, 'greeting.txt'), 'utf8'), 'Edit kept from the stopped build');
 });
 
-test('asks for missing acceptance evidence and resumes only the pending audit', async t => {
+test('asks for plan clarification and runs registered audit checks without user input', async t => {
   const {git, store, repository} = await fixture(t);
   const calls = [];
   const coordinator = await createCoordinator({repository, store, git, async invoke({stage, prompt, schema}) {
@@ -114,9 +114,9 @@ test('asks for missing acceptance evidence and resumes only the pending audit', 
     } else if (stage === 'plan_review' && !prompt.includes('Use the desktop layout check.')) {
       assert.ok(JSON.parse(await readFile(schema, 'utf8')).properties.verdict.enum.includes('needs_evidence'));
       reply = {verdict: 'needs_evidence', reason: 'Name a check for the desktop layout.'};
-    } else if (stage === 'build_review' && !prompt.includes('Desktop layout passed at both sizes.')) {
+    } else if (stage === 'build_review' && calls.filter(item => item === 'build_review').length === 1) {
       assert.doesNotMatch(prompt, /Use the desktop layout check\./);
-      reply = {verdict: 'needs_evidence', reason: 'Supply the desktop layout result for the current source.'};
+      reply = {verdict: 'run_check', check: 'greeting', reason: 'Collect a fresh greeting check result.'};
     } else {
       reply = {verdict: 'pass', reason: 'Reviewed the current evidence.', ...(stage === 'final_review' ? {criteria} : {})};
     }
@@ -141,18 +141,13 @@ test('asks for missing acceptance evidence and resumes only the pending audit', 
   assert.deepEqual(calls, ['plan', 'plan_review']);
   await assert.rejects(post('chat', {message: '/run'}), /pending build decision changed/);
   await post('chat', {...planRequest, message: 'Use the desktop layout check.'});
-  await waitForBuild(coordinator, 'question');
-  const buildRequest = await request('buildReview');
-  assert.equal(buildRequest.task, planRequest.task);
-  assert.notEqual(buildRequest.question_id, planRequest.question_id);
-  await assert.rejects(post('chat', {...planRequest, message: 'Stale evidence.'}), /pending build decision changed/);
-  await post('chat', {...buildRequest, message: 'Desktop layout passed at both sizes.'});
   const finished = await waitForBuild(coordinator);
   assert.equal(finished.id, first.id);
   assert.equal(finished.attempts.at(-1).task, planRequest.task);
   assert.deepEqual(calls, ['plan', 'plan_review', 'plan_review', 'build', 'build_review', 'build_review', 'final_review']);
-  const run = await store.getRun(buildRequest.task);
-  assert.deepEqual(run.audits.map(row => row.verdict), ['needs_evidence', 'pass', 'needs_evidence', 'pass', 'pass']);
+  const run = await store.getRun(planRequest.task);
+  assert.deepEqual(run.audits.map(row => row.verdict), ['needs_evidence', 'pass', 'pass', 'pass']);
+  assert.equal(run.checks.filter(row => row.phase === 'after' && row.check === 'greeting').length, 2);
   assert.equal(run.repair_rounds.length, 0);
 });
 
