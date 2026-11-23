@@ -2,6 +2,7 @@ import {realpath} from 'node:fs/promises';
 import path from 'node:path';
 import {WorkbenchProfile} from './profile.mjs';
 import {createAudit} from './coordinator/audit.mjs';
+import {createHealthReviewer} from './coordinator/health.mjs';
 import {createBuilds} from './coordinator/builds.mjs';
 import {createDesign, selectedProfile, stageKeys} from './coordinator/design.mjs';
 import {id, now, ownedFiles, runPattern} from './coordinator/files.mjs';
@@ -14,7 +15,7 @@ const checklist = ['Inspect the commit diff', 'Check the included scope', 'Revie
 
 export async function createCoordinator({
   repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe, stageToolCall,
-  invoke = runProvider, image = generateMockup
+  invoke = runProvider, image = generateMockup, runtimeHealth
 }) {
   const root = await realpath(repository);
   const files = ownedFiles(root);
@@ -135,6 +136,8 @@ export async function createCoordinator({
     image: async payload => image({...payload, invoke, providerOptions: await options()})});
   const audit = createAudit({repository: root, files, git, store, agent});
   const builds = createBuilds({files, git, store, design, audit, review, push, checkProviders});
+  const idle = () => !pending && !builds.busy() && runtimeHealth.idle();
+  const health = runtimeHealth && await createHealthReviewer({...runtimeHealth, idle});
   async function readDesign() {
     const [state, layout] = await Promise.all([design.read(), design.layout()]);
     const current = state.builds.at(-1);
@@ -152,6 +155,10 @@ export async function createCoordinator({
     if (method === 'POST') pending++;
     try {
       switch (request) {
+        case 'GET coordinator/health': return health?.status() || {disabled: true, incidents: []};
+        case 'POST coordinator/health/retry':
+          if (!health) throw Error('Open the desktop app to retry a health check.');
+          return await health.retry(data.id);
         case 'GET design': return await readDesign();
         case 'GET design/layout': return await design.layout();
         case 'GET design/readiness': return await builds.readiness(data);
@@ -218,10 +225,15 @@ export async function createCoordinator({
       if (method === 'POST') pending--;
     }
   }
-  return {dispatch, busy: () => pending > 0 || builds.busy(), close: () => {
+  return {dispatch, busy: () => pending > 0 || builds.busy() || Boolean(health?.busy()), close: () => {
+    void health?.close();
     conversation.abort(new Error('Branch Review closed.'));
     return builds.close();
   },
-    suspendRecovery: builds.suspendRecovery};
+    suspendRecovery() {
+      const resume = builds.suspendRecovery();
+      const resumeHealth = health?.suspend();
+      return () => { resume(); resumeHealth?.(); };
+    }};
 }
 

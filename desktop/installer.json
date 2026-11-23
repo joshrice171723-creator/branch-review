@@ -12,6 +12,7 @@
     "workbench/**/*",
     "public/**/*",
     "desktop/main.cjs",
+    "desktop/runtime-diagnostics.cjs",
     "desktop/local-origin.cjs",
     "desktop/welcome.html",
     "desktop/welcome.js",

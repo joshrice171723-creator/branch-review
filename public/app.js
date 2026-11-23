@@ -4,7 +4,7 @@ import {describeError} from './error-message.js';
 import {framePool} from './frame-pool.js';
 import {onboarding} from './onboarding.js';
 import {projectSetup} from './project-setup.js';
-import {activity} from './activity.js';
+import {activity, coordinatorHealth} from './activity.js';
 import { workflow } from './workflow.js';
 import { matchesReview, reviewShortcut, refreshedSelection, selectedReviewState } from './shortcuts.js';
 import {workbench} from './workbench.js';
@@ -101,6 +101,7 @@ document.body.append($('change-composer'));
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
+coordinatorHealth(api);
 const projectWorkbench=apexPanel({api, getState:()=>currentState, openBranch, flush:reviewWorkflow.flush, reportError:error});
 const openReviewConversation = async () => {
   if(!await reviewWorkflow.flush()) return;

@@ -100,8 +100,11 @@ async function launch() {
   process.env.BRANCH_REVIEW_DESKTOP_REPOSITORY=savedConfig.repository;
   settings.projects={...settings.projects,[path.resolve(savedConfig.repository).toLowerCase()]:home};
   const {startServer} = await import(pathToFileURL(path.join(root, 'server.mjs')).href);
+  const diagnostics = require('./runtime-diagnostics.cjs').createRuntimeDiagnostics();
+  diagnostics.repository = root;
+  diagnostics.packaged = app.isPackaged;
   const {origin, port, beginDesktopExit} = await startServer({allowPortFallback:app.isPackaged || hasPortOverride,
-    preferredPort:settings.controllerPort, desktop:true});
+    preferredPort:settings.controllerPort, desktop:true, diagnostics});
   if (app.isPackaged && !hasPortOverride) settings.controllerPort=port;
   await writeFile(settingsPath, JSON.stringify({...settings,home}));
   function allowWorkspaceFullscreen(contents, permission, isMainFrame, url) {
@@ -134,6 +137,7 @@ async function launch() {
     });
   }
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  diagnostics.attach(window, origin);
   window.webContents.on('console-message', details => {
     if (details.level === 'error') void appendFile(path.join(home, 'renderer-errors.log'), `${new Date().toISOString()} ${details.message.slice(0,2000)}\n`);
   });
@@ -199,6 +203,27 @@ async function launch() {
     if (qaTask || qaStarting) throw Error('Finish or cancel browser QA before leaving this project.');
     return beginDesktopExit();
   }
+  let hostRestartTimer;
+  diagnostics.activateHost = () => {
+    const retry = () => {
+      clearTimeout(hostRestartTimer);
+      hostRestartTimer = setTimeout(async () => {
+        if (closing || window.isDestroyed()) return;
+        try {
+          if (!window.webContents.isCrashed() && await diagnostics.hasPendingEdits()) return retry();
+          if (window.isFocused() && require('electron').powerMonitor.getSystemIdleTime() < 60) return retry();
+          const resume = protectDesktopExit();
+          try {
+            await writeFile(settingsPath, JSON.stringify({...settings, home, window: {...window.getNormalBounds(), maximized: window.isMaximized()}}));
+            app.relaunch(); closing = true; app.exit(0);
+          }
+          catch (error) { resume(); throw error; }
+        } catch { retry(); }
+      }, 5000);
+      hostRestartTimer.unref();
+    };
+    retry();
+  };
   async function startQa(input){
     if(qaTask || qaStarting)throw Error('A browser run is already active.');
     qaStarting=true;

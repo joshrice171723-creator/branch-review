@@ -899,7 +899,7 @@ function designPanel(initialState) {
     }
     function follow() {
       clearTimeout(timer);
-      if (mount.isConnected && live()) timer = setTimeout(refresh, 2500);
+      if (mount.isConnected && (live() || process?.settings?.mode === "web")) timer = setTimeout(refresh, 2500);
     }
     async function refresh() {
       if (!mount.isConnected || pending) return;

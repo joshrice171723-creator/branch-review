@@ -190,7 +190,7 @@ export class PreviewProcess {
       });
       this.log ??= saved ? JSON.parse(saved).log : '';
     }
-    return {settings, state, owned, url, log: this.log, exitCode: this.exitCode, message: this.failure || ''};
+    return {settings, state, owned, url, log: this.log, startedAt: this.startedAt, exitCode: this.exitCode, message: this.failure || ''};
   }
 
   setup(payload) {
@@ -255,6 +255,7 @@ export class PreviewProcess {
       this.failure = '';
       const stamp = stableId([settings, commit, await lstat(cwd).then(info => info.ino)]);
       this.starting = true;
+      this.startedAt = Date.now();
       process.once('exit', this.exitHook);
       try {
         const applied = await boundedText(dir, 'preview-setup.json', 80000).then(JSON.parse, error => {

@@ -631,7 +631,7 @@ async function bindLoopback(server, port, allowFallback) {
   return server.address().port;
 }
 
-export async function startServer({allowPortFallback=false,preferredPort,desktop=false} = {}) {
+export async function startServer({allowPortFallback=false,preferredPort,desktop=false,diagnostics} = {}) {
   const controllerFallback = allowPortFallback && !localOrigin.hasPortOverride;
   const requestedPort = controllerFallback && localOrigin.isControllerPort(preferredPort) ? preferredPort : localOrigin.port;
   let context, workspace, desktopExiting = false, pendingWrites = 0;
@@ -649,6 +649,8 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
     const origin = `http://${host}`;
     setReviewPreviewOrigin(origin);
     workspace = await createWorkspace({repository:repo,local,git,origin,token,selectedAgent,
+      diagnostics, canRepair:()=>!desktopExiting && !pendingWrites && !busy && !qaRunning() &&
+        !jobs.rows.some(job => job.status === 'running'),
       providerOptions:()=>Object.fromEntries(Object.entries(agentSettings.executables || {}).map(([provider,executable])=>[provider,{executable}])),
       review:run=>workbenchReview(repo,run,store.records,git),
       push:async data=>{

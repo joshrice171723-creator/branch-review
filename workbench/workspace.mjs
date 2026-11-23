@@ -8,6 +8,9 @@ import {probeProvider} from '../providers.mjs';
 import {modelCatalog, WorkbenchProfile, presetDocuments} from './profile.mjs';
 import {toolDescriptions, workspaceMcp} from './mcp.mjs';
 import discovery from '../desktop/project-discovery.cjs';
+import path from 'node:path';
+import {observeRuntime} from './coordinator/runtime-probes.mjs';
+import {repairRuntime} from './coordinator/health-repair.mjs';
 
 const environmentRoutes = new Set([
   'environment','project-capabilities','project-instruction','design/preview',
@@ -16,7 +19,7 @@ const environmentRoutes = new Set([
   'capabilities','preview','preview/setup','preview/start','preview/stop'
 ]);
 
-export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent}) {
+export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair}) {
   const quality = await createQuality({repository});
   const tasks = await createStore(repository,{qualityPin:quality.pin,qualityCheck:quality.taskCheck});
   let coordinator;
@@ -30,6 +33,18 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   coordinator = await createCoordinator({
     repository,store:tasks,git,review,push,providerOptions,
     stageToolCall:call,
+    runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
+      directory: path.join(local, 'coordinator-health'),
+      observe: () => observeRuntime({preview: () => readEnvironment('design/app-process'), origin, desktop: diagnostics}),
+      idle: canRepair,
+      recover: signal => signal.owner === 'host' ? diagnostics.recoverRenderer() : environment.recoverPreview(),
+      repair: async (incident, directory, signal, mayApply) => repairRuntime({
+        repository: (incident.repairOwner || incident.owner) === 'host' ? diagnostics.repository : repository,
+        incident, directory, signal, mayApply, packaged: (incident.repairOwner || incident.owner) === 'host' && diagnostics.packaged,
+        profile: await tasks.getProfile(), providerOptions: await providerOptions()
+      }),
+      activate: row => (row.repairOwner || row.owner) === 'project' ? environment.recoverPreview() : diagnostics.activateHost(row)
+    },
     providerProbe:(provider,override)=>probeProvider(provider,override,{liveMuse:false}),
     projectEvidence:()=>readEnvironment('project-capabilities'),
     qualityDraft:()=>quality.dispatch('GET','quality',{},new URLSearchParams()),

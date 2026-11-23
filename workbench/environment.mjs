@@ -280,6 +280,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     const app = await getPreview();
     const current = await app.status();
     if (process.env.BRANCH_REVIEW_PREVIEW_PARENT) return current;
+    if (input.retry) automaticPreviewStopped = false;
     if (["external", "running", "starting"].includes(current.state)) return current;
     if (automaticPreviewStopped && !input.retry) return current;
     if (current.state === "exited" && !input.retry) return current;
@@ -330,6 +331,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       case 'POST preview/start':
         return write(async () => {
           if (payload.id || payload.candidateId) await setupPreview(payload);
+          automaticPreviewStopped = false;
           return (await getPreview()).start();
         });
       case 'POST design/app-process/stop':
@@ -342,5 +344,13 @@ export function createEnvironment({repository, store, local, projectId, defaultP
   }
 
   return {inspect, prepare, cleanupPreview, cleanup, capabilities, exportProfile, importProfile, checkedPreview, dispatch,
+    recoverPreview: () => write(async () => {
+      const app = await getPreview();
+      const state = await app.status();
+      if (automaticPreviewStopped || state.settings?.mode !== 'web' || state.state === 'external' ||
+          (!state.owned && state.state !== 'exited')) throw Error('The managed preview is no longer active.');
+      await app.stop();
+      return app.start();
+    }),
     close: () => write(() => preview?.close())};
 }

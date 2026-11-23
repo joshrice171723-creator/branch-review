@@ -1,5 +1,52 @@
 import {reviewProgress} from './progress-model.js';
 import {canApprove,isPublished} from './review-model.js';
+export function coordinatorHealth(api) {
+  if (!window.desktop) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'toolbar-icon labeled-tool';
+  button.textContent = 'Health';
+  document.querySelector('.main-tools').append(button);
+  const dialog = document.createElement('dialog');
+  dialog.setAttribute('aria-label', 'Coordinator health');
+  dialog.innerHTML = '<header class="dialog-heading"><h2>Coordinator health</h2><button type="button">Close</button></header><div></div>';
+  document.body.append(dialog);
+  const body = dialog.querySelector('div');
+  dialog.querySelector('button').onclick = () => dialog.close();
+  async function refresh() {
+    try {
+      const {incidents, error, disabled, checkedAt} = await api('/api/workspace/coordinator/health');
+      button.hidden = Boolean(disabled);
+      const count = incidents.filter(row => row.state !== 'recovered').length;
+      button.textContent = count ? 'Health (' + count + ')' : 'Health';
+      if (!dialog.open) return;
+      body.textContent = error || (checkedAt ? 'Last check ' + new Date(checkedAt).toLocaleTimeString() : 'Waiting for the first check.');
+      for (const row of incidents.slice(0, 30)) {
+        const item = document.createElement('article');
+        const title = document.createElement('h3');
+        title.textContent = (row.owner === 'host' ? 'Branch Review' : 'Project') + ' · ' + row.title;
+        item.append(title);
+        for (const text of [row.state, row.error, row.note, row.checks, row.verifiedAt && 'Check passed at ' + new Date(row.verifiedAt).toLocaleString()]) {
+          if (text) { const p = document.createElement('p'); p.textContent = text; item.append(p); }
+        }
+        if (row.state === 'attention') {
+          const retry = document.createElement('button');
+          retry.textContent = 'Retry repair';
+          retry.onclick = async () => {
+            retry.disabled = true;
+            try { await api('/api/workspace/coordinator/health/retry', {id: row.id}); await refresh(); }
+            catch (issue) { body.textContent = issue.message; }
+          };
+          item.append(retry);
+        }
+        body.append(item);
+      }
+    } catch (error) { body.textContent = error.message; }
+  }
+  button.onclick = () => { dialog.showModal(); void refresh(); };
+  void refresh();
+  setInterval(refresh, 15000);
+}
 export function activity({api,getState,navigate,flush,poll}){
   const strip=document.createElement('div');strip.id='work-progress';
   strip.innerHTML='<span class="work-light" aria-hidden="true"></span><div role="status"><strong data-label></strong><span data-detail></span></div>';
