@@ -20,7 +20,7 @@ export async function createHealthReviewer({directory, observe, recover, repair,
       row.note = 'Branch Review restarted. Waiting for a fresh runtime check.';
     }
   }
-  let timer, running, paused = false, action, lastError = '', saved, checkedAt;
+  let timer, running, paused = false, action, attemptController, applying = false, lastError = '', saved, checkedAt;
   let writes = Promise.resolve();
   const session = randomUUID();
   const controller = new AbortController();
@@ -88,20 +88,24 @@ export async function createHealthReviewer({directory, observe, recover, repair,
       .finally(() => { action = null; });
   }
   async function perform(row, signal, quick) {
+    attemptController = new AbortController();
+    const stop = AbortSignal.any([controller.signal, attemptController.signal]);
     try {
       row.state = 'repairing';
       row.attempts++;
       if (!quick) (row.calls ||= []).push(clock());
       await persist();
-      controller.signal.throwIfAborted();
+      stop.throwIfAborted();
       if (quick) {
+        applying = true;
         await recover(signal);
         row.note = 'Restarted the failed process.';
       } else {
         const stillFailing = async () => {
-          if (paused || controller.signal.aborted || !await idle()) return false;
+          if (paused || stop.aborted || !await idle()) return false;
           const latest = (await observe()).find(item => item.owner + '/' + item.id === row.key);
-          return latest && clean(latest.error) === row.error && await idle();
+          applying = Boolean(latest && clean(latest.error) === row.error && await idle() && !paused && !stop.aborted);
+          return applying;
         };
         const owner = row.repairOwner || row.owner;
         const prior = rows.filter(item => (item.repairOwner || item.owner) === owner && item.files)
@@ -109,7 +113,7 @@ export async function createHealthReviewer({directory, observe, recover, repair,
             ...receipt, patch: path.join(directory, item.id, receipt.artifact || '', 'repair.patch')
           }))).sort((a, b) => a.time - b.time);
         const artifact = randomUUID();
-        const result = await repair(row, path.join(directory, row.id, artifact), controller.signal, stillFailing, prior);
+        const result = await repair(row, path.join(directory, row.id, artifact), stop, stillFailing, prior);
         row.note = clean(result.summary);
         if (row.files && !row.repairs) row.repairs = [{files: row.files, time: row.actionAt}];
         (row.repairs ||= []).push({files: result.files, time: clock(), artifact});
@@ -136,7 +140,8 @@ export async function createHealthReviewer({directory, observe, recover, repair,
       row.actionAt = clock();
       row.note = clean(error.message);
     } finally {
-      await persist();
+      try { await persist(); }
+      finally { applying = false; attemptController = null; }
     }
   }
   async function tick(waitForRepair = true) {
@@ -151,7 +156,7 @@ export async function createHealthReviewer({directory, observe, recover, repair,
     timer.unref();
   }
   if (start) schedule();
-  return {tick, busy: () => Boolean(action), status: () => ({error: lastError, checkedAt, incidents: structuredClone(rows)}),
+  return {tick, busy: () => applying, status: () => ({error: lastError, checkedAt, incidents: structuredClone(rows)}),
     async retry(id) {
       const row = rows.find(item => item.id === id && item.state === 'attention');
       if (!row) throw Error('Select an unresolved incident that needs attention.');
@@ -161,6 +166,10 @@ export async function createHealthReviewer({directory, observe, recover, repair,
       await persist();
       return {queued: true};
     },
-    suspend() { paused = true; return () => { paused = false; }; },
+    suspend() {
+      paused = true;
+      attemptController?.abort(Error('The workspace is closing or switching projects.'));
+      return () => { paused = false; };
+    },
     close() { paused = true; clearTimeout(timer); controller.abort(); return Promise.all([running, action]); }};
 }
