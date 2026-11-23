@@ -10,6 +10,7 @@ import {WorkbenchProfile, modelCatalog, presetDocuments} from './profile.mjs';
 import {capture, checkArgv} from './quality/runner.mjs';
 import {checkFile, checkPathInside, resolveCheckCommand} from './check-command.mjs';
 import {cosmeticCandidate, cosmeticDiff} from './automatic-route.mjs';
+import {replaceFile} from './coordinator/files.mjs';
 
 const exec = promisify(execFile);
 const runPattern = /^\d{8}T\d{12}-[a-f0-9]{8}$/;
@@ -107,7 +108,7 @@ async function atomicWrite(target, value) {
   const draft = target + '.tmp-' + randomBytes(8).toString('hex');
   try {
     await fs.writeFile(draft, value, {flag:'wx'});
-    await fs.rename(draft, target);
+    await replaceFile(draft, target);
   } finally {
     await fs.rm(draft, {force:true});
   }
@@ -365,7 +366,7 @@ async function batch(taskDir, artifacts, home) {
       await fs.link(path.join(staging, String(index)), target);
       created.push(target);
     }
-    await fs.rename(nextLedger, safePath(taskDir, 'events.jsonl'));
+    await replaceFile(nextLedger, safePath(taskDir, 'events.jsonl'));
     clearJournal = true;
   } catch (error) {
     for (const target of created) await fs.unlink(target).catch(missing);

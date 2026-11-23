@@ -114,7 +114,7 @@ export async function runProvider(options) {
   const abort = () => { stopping ??= stop(child); };
   signal?.addEventListener('abort', abort, {once: true});
   if (signal?.aborted) abort();
-  const timer = setTimeout(() => { timedOut = true; abort(); }, timeoutMs);
+  const timer = timeoutMs === null ? null : setTimeout(() => { timedOut = true; abort(); }, timeoutMs);
   child.stderr.setEncoding('utf8').on('data', chunk => { stderr = (stderr + chunk).slice(-8000); });
   child.stdin.on('error', () => {});
   child.stdin.end(providerId === 'muse' ? '' : prompt);

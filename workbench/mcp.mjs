@@ -104,7 +104,7 @@ export function selectStageTools(stage, selections, {scope = '', evidenceOnly = 
   return [...selected];
 }
 
-export async function openStageMcp(call, profile, names) {
+export async function openStageMcp(call, profile, names, {coordinatorChat = false} = {}) {
   if (!names.length) return null;
   const token = '/' + randomUUID();
   let calls = 0;
@@ -124,7 +124,7 @@ export async function openStageMcp(call, profile, names) {
       const request = JSON.parse(Buffer.concat(chunks));
       const result = await workspaceMcp(request, {getProfile: () => profile, stageTools: names, verified: false,
         call: async (name, values) => {
-          if (++calls > 8) throw Error('This stage reached its tool call limit.');
+          if (!coordinatorChat && ++calls > 8) throw Error('This stage reached its tool call limit.');
           const data = await call(name, values);
           const serialized = JSON.stringify(data) ?? '';
           return serialized.length > 20000 ? {preview: serialized.slice(0, 20000), truncated: true} : data;

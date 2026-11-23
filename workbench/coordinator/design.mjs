@@ -200,8 +200,8 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     }
   }
 
-  async function planner(profile, folder, prompt, images) {
-    return (await agent({profile, folder, stage: 'plan', prompt, images})).text;
+  async function planner(profile, folder, prompt, images, coordinatorChat = false) {
+    return (await agent({profile, folder, stage: 'plan', prompt, images, coordinatorChat})).text;
   }
 
   async function conversationProfile(settings) {
@@ -417,7 +417,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         'Use literal command arguments and working directories from project evidence. Do not modify files or claim a proposal was applied.\n' +
         JSON.stringify(context);
       const profile = await conversationProfile(payload.conversationModel);
-      const reply = objectReply(await planner(profile, folder, prompt, images));
+      const reply = objectReply(await planner(profile, folder, prompt, images, true));
       const description = sentence(reply.message, 'a project reply');
       const suggestions = choices(reply.choices);
       let proposal;

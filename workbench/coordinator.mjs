@@ -8,7 +8,7 @@ import {id, now, ownedFiles, runPattern} from './coordinator/files.mjs';
 import {generateMockup, runProvider} from './coordinator/provider.mjs';
 import {appendMetric, providerSpend, readMetrics} from './coordinator/build-metrics.mjs';
 import {annotateProviderFailure} from './coordinator/provider-limit.mjs';
-import {openStageMcp, selectStageTools} from './mcp.mjs';
+import {openStageMcp, selectStageTools, toolDescriptions} from './mcp.mjs';
 
 const checklist = ['Inspect the commit diff', 'Check the included scope', 'Review the recorded project checks'];
 
@@ -53,8 +53,11 @@ export async function createCoordinator({
     }));
   }
 
+  const conversation = new AbortController();
+
   async function agent({profile, runtimeProfile, folder, stage, prompt, schema, write, signal, report, images, visit, evidenceOnly,
-    toolScope, budgetResetAt, autoAgent}) {
+    toolScope, budgetResetAt, autoAgent, coordinatorChat = false}) {
+    if (coordinatorChat) signal = conversation.signal;
     const current = selectedProfile(profile);
     const key = stageKeys[stage];
     const configuration = current?.stages?.[key];
@@ -77,17 +80,19 @@ export async function createCoordinator({
         spend.tokens + ' tokens plus ' + spend.cached + ' cached input tokens.' + unknown), {code: 'PROVIDER_USAGE_BUDGET'});
     }
     signal?.throwIfAborted();
-    const timeoutMs = Math.min(limits.timeoutSeconds * 1000, remaining);
+    const timeoutMs = coordinatorChat ? null : Math.min(limits.timeoutSeconds * 1000, remaining);
     const timeoutCode = remaining <= limits.timeoutSeconds * 1000 ? 'PROVIDER_TASK_TIME_BUDGET' : 'PROVIDER_CALL_TIMEOUT';
-    const shellTools = provider === 'Codex' && configuration.shellTools !== false && !evidenceOnly;
+    const shellTools = provider === 'Codex' && (coordinatorChat || configuration.shellTools !== false && !evidenceOnly);
     const stageTools = provider === 'Codex' && stageToolCall ?
-      selectStageTools(stage, configuration.toolHints, {scope: toolScope, evidenceOnly})
+      (coordinatorChat ? toolDescriptions().filter(tool => tool.stageAllowed).map(tool => tool.name) :
+        selectStageTools(stage, configuration.toolHints, {scope: toolScope, evidenceOnly}))
         .filter(name => !name.startsWith('app_') || profile.permittedTools?.includes(name)) : [];
     const sourceAccess = write && !evidenceOnly ? 'workspace-write' : 'read-only';
     const callId = id();
     const path = folder + '/provider-calls/' + callId;
     const output = await files.path(path + '/reply.txt', true);
-    const instructions = WorkbenchProfile.stagePrompt(current, key, profile.documents, profile.permittedTools, stageTools);
+    const instructions = coordinatorChat ? current.rules :
+      WorkbenchProfile.stagePrompt(current, key, profile.documents, profile.permittedTools, stageTools);
     const request = prompt + '\n\n' + instructions;
     await files.write(path + '/request.json', {provider, model, effort, stage, time: now(), prompt: request,
       sourceAccess, shellTools, stageTools, timeoutMs, ...(spend && {budget: {...limits, priorUsage: spend}})});
@@ -102,7 +107,7 @@ export async function createCoordinator({
     let usage, stageMcp;
     let outcome = 'failed';
     try {
-      if (stageTools.length) stageMcp = await openStageMcp(stageToolCall, profile, stageTools);
+      if (stageTools.length) stageMcp = await openStageMcp(stageToolCall, profile, stageTools, {coordinatorChat});
       const result = await invoke({provider, model, effort, stage, stageLabel, cwd: root, write, signal, output, images,
         evidenceOnly, shellTools, timeoutMs, timeoutCode, stageMcp,
         providerOptions: await options(), schema: schema ? await files.path(path + '/reply.schema.json') : undefined,
@@ -216,7 +221,10 @@ export async function createCoordinator({
       if (method === 'POST') pending--;
     }
   }
-  return {dispatch, busy: () => pending > 0 || builds.busy(), close: builds.close,
+  return {dispatch, busy: () => pending > 0 || builds.busy(), close: () => {
+    conversation.abort(new Error('Branch Review closed.'));
+    return builds.close();
+  },
     suspendRecovery: builds.suspendRecovery};
 }
 

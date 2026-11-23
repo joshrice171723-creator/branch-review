@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {appendFile, link, lstat, mkdir, readFile, realpath, rename, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
 
 export const id = () => randomUUID().replaceAll('-', '');
 export const now = () => new Date().toISOString();
@@ -10,6 +11,18 @@ export const sentence = (value, label, max = 64000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw Error('Enter ' + label + '.');
   return value;
 };
+
+export async function replaceFile(from, to) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= 7) throw error;
+      await delay(25 * (attempt + 1) ** 2);
+    }
+  }
+}
 
 export function ownedFiles(root) {
   async function owned(relative, create = false) {
@@ -56,7 +69,7 @@ export function ownedFiles(root) {
       const temp = path.join(path.dirname(file), id() + '.tmp');
       try {
         await writeFile(temp, Buffer.isBuffer(value) ? value : JSON.stringify(value, null, 2), {flag: 'wx'});
-        await rename(temp, file);
+        await replaceFile(temp, file);
       } finally {
         await rm(temp, {force: true});
       }
