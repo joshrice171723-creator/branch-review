@@ -8,7 +8,9 @@ const pendingStates = ['working', 'cancelling'];
 const closedStates = ['closed', 'retired'];
 const roles = {plan: 'plan', plan_review: 'planReview', baseline: 'baseline', build: 'build', building: 'build',
   checks: 'checks', build_review: 'buildReview', final_review: 'finalReview', final_skip: 'finalReview', finish: 'verify'};
-const workflowChangedMessage = 'Agent settings changed after this run started. Retire this run and start a new build to use the saved settings.';
+const workflowChangedMessage = build => 'Agent settings changed after this run started. ' + (build.mode === 'task'
+  ? 'Restart the build to use the saved settings.'
+  : 'Retire the run and start a new build to use the saved settings.');
 
 function agentSettings(stage) {
   return stage && {provider: stage.provider, model: stage.model, effort: stage.effort};
@@ -75,7 +77,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const attempt = build?.attempts.at(-1);
     if (!attempt || !['failed', 'cancelled'].includes(build.status)) return '';
     const pinned = run ?? await store.getRun(attempt.task);
-    return changedAgents(pinned.task.profile, await store.getProfile()).length ? workflowChangedMessage : '';
+    return changedAgents(pinned.task.profile, await store.getProfile()).length ? workflowChangedMessage(build) : '';
   }
   async function profileMatches(build, profile) {
     if (build.profile === jsonHash(profile)) return true;
@@ -264,16 +266,22 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     }
   }
 
-  async function launch(payload) {
+  async function launch(payload, restart = false) {
     const {state} = await drive(async state => {
       checkMode(state, payload);
       if (payload.revision !== state.revision || !approved(state, {revision: state.revision}) || !state.plan.trim()) {
         throw Error('Approve the current draft before building.');
       }
       const previous = state.builds.at(-1);
-      if (previous && !closedStates.includes(previous.status)) throw Error('Finish the current build first.');
+      if (restart) {
+        if (state.mode !== 'task' || !previous || previous.id !== payload.build || previous.revision !== state.revision ||
+            !['failed', 'cancelled'].includes(previous.status)) throw Error('Select the stopped build for the current approved plan.');
+        if (previous.branch !== state.branch) throw Error('Restore the stopped build’s branch or retire the build to use a different branch.');
+      } else if (previous && !closedStates.includes(previous.status)) throw Error('Finish the current build first.');
       const previousTask = await active();
-      if (previousTask && ['active', 'unverified'].includes(previousTask.lifecycle.status)) throw Error('Finish or pause the current task.');
+      const ownsTask = restart && previousTask?.id === previous.attempts.at(-1)?.task;
+      if (previousTask && ['active', 'unverified'].includes(previousTask.lifecycle.status) &&
+          !(ownsTask && previousTask.lifecycle.status === 'active')) throw Error('Finish or pause the current task.');
       const profile = await ensureProfile();
       await ensureChecks();
       const blockers = (await checkProviders(profile)).filter(row => !providerReady(row));
@@ -285,8 +293,12 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const baseline = await audit.baseline();
       const groups = groupMembers(state, payload).map(slices => ({slices, pending: [...slices], findings: [], reviews: [], sha: null}));
       const build = {id: id(), revision: state.revision, index: 0, branch: state.branch, plan: state.plan, roadmap: state.roadmap,
-        attachments: {...state.attachments}, base, decisions: payload.decisions ?? {}, status: 'ready', attempts: [],
+        attachments: {...state.attachments}, base, decisions: restart ? previous.decisions : payload.decisions ?? {}, status: 'ready', attempts: [],
         profile: jsonHash(profile), groups, ...baseline, ...(state.mode === 'task' ? {mode: 'task', title: state.title} : {})};
+      if (restart) {
+        if (ownsTask && previousTask.lifecycle.status === 'active') await store.pause(previousTask.id, 'Build restarted.');
+        Object.assign(previous, {status: 'retired', retired: true});
+      }
       state.builds.push(build);
       return build;
     });
@@ -552,7 +564,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const stage = failedRole === 'repair' ? 'build' : failedRole;
       const changed = changedAgents(task.task.profile, saved);
       failure = {role: failedRole, message: build.error.slice(0, 4000),
-        resumeBlocker: changed.length ? workflowChangedMessage : '',
+        resumeBlocker: changed.length ? workflowChangedMessage(build) : '',
         savedAgent: changed.includes(stage) ? agentSettings(selectedProfile(saved).stages[stage]) : null};
     }
     const activity = await files.bytes(loopPath(attempt.task) + '/activity.jsonl', 32_000_000, Buffer.alloc(0));

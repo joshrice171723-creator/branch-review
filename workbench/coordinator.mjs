@@ -115,6 +115,7 @@ export async function createCoordinator({
           return {bytes, type: 'image/png'};
         }
         case 'POST design/build': return await builds.launch(data);
+        case 'POST design/restart': return await builds.launch(data, true);
         case 'POST design/archive': {
           if (builds.busy()) throw Error('Wait for the current run before archiving.');
           return await design.archive(data);

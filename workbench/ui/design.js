@@ -281,6 +281,7 @@ function designPanel(initialState) {
   let planHeight = 340;
   let planStartStatus = "";
   let startingFromPlan = false;
+  let restartError;
   function showPlanStartStatus(message) {
     planStartStatus = message;
     const feedback = panel.querySelector("[data-plan-start-status]");
@@ -370,7 +371,11 @@ function designPanel(initialState) {
       ]), value => { launchForm.decisions[question.id] = value; return true; })));
     }
     const start = button("Start build", async () => {
-      if (startingFromPlan) return;
+      if (startingFromPlan || busy) return;
+      if (settings.branch && settings.branch !== state.branch) {
+        showPlanStartStatus("Save the selected build branch first.");
+        return;
+      }
       startingFromPlan = true;
       start.disabled = true;
       showPlanStartStatus("Checking build readiness…");
@@ -436,11 +441,53 @@ function designPanel(initialState) {
       element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
       rendered, draft, summary,
       agreement, element("p", "", "Start build uses the " + active().name + " workflow and approves this plan and agreement."),
-      element("div", "actions", save, discard, start), startFeedback);
+      planBranch(), element("div", "actions", save, discard, start), startFeedback);
     if (baseRevision !== state.revision) result.append(
       element("details", "", element("summary", "", "Compare saved plan"), element("pre", "", state.plan)),
       button("Use local draft", () => { localDraft.baseRevision = state.revision; rememberDraft(); draw(); }));
     return result;
+  }
+  function planBranch() {
+    const target = state.branch;
+    const stopped = state.builds.at(-1);
+    const locked = stopped && !["closed", "retired"].includes(stopped.status);
+    const feedback = element("small", "design-status");
+    const selected = locked ? target : settings.branch ?? target;
+    const branches = [...new Set([target, selected])];
+    const picker = select(selected, branches.map(name => [name, name || "Select a branch"]), value => {
+      settings.branch = value === target ? null : value;
+      save.hidden = !value || value === target;
+      return true;
+    });
+    const save = button("Save branch", async () => {
+      const branch = picker.value;
+      if (!branch || busy) return;
+      save.disabled = true;
+      settings.branch = null;
+      const updated = await change("settings", {branch, expected: {branch: target}}, {done: "Build branch saved."});
+      if (!updated) {
+        settings.branch = branch;
+        redraw();
+      } else showPlanStartStatus("");
+      if (save.isConnected) save.disabled = false;
+    });
+    save.hidden = locked || !selected || selected === target;
+    picker.disabled = true;
+    picker.dataset.designFocus = "branch";
+    const fieldset = field("Build branch", picker);
+    fieldset.append(save, feedback);
+    projectCapabilities().then(({git}) => {
+      if (!fieldset.isConnected) return;
+      for (const row of git.refs.filter(row => row.ref?.startsWith("refs/heads/") && !branches.includes(row.name))) {
+        const option = element("option", "", row.name);
+        option.value = row.name;
+        picker.append(option);
+      }
+      picker.disabled = Boolean(locked) || picker.options.length < 2;
+      feedback.textContent = locked ? "This build is tied to its branch." : git.branch !== target ?
+        "Checked out branch: " + (git.branch || "None") + ". Check out the saved build branch before starting." : "";
+    }).catch(() => {});
+    return fieldset;
   }
   function editor() {
     if (embedded) return taskEditor();
@@ -1098,6 +1145,35 @@ function designPanel(initialState) {
       if (continueBuild && !showContinueByReview) controls.append(continueBuild);
       if (["failed", "cancelled"].includes(build.status) && !state.restartRequired && !state.resumeBlocker) controls.append(button("Resume run", () =>
         change("continue", {build: build.id}, {wait: "Resuming the run…"}), "button primary"));
+      const canRestart = embedded && state.mode === "task" && state.approved === state.revision &&
+        build.revision === state.revision && ["failed", "cancelled"].includes(build.status);
+      if (canRestart) {
+        const restart = button("Restart build", async () => {
+          if (busy || startingFromPlan) return;
+          startingFromPlan = true;
+          restart.disabled = true;
+          restartError = null;
+          feedback.textContent = "Checking readiness and restarting…";
+          try {
+            if (!stateProfileApplied() || byId("apply-profile").textContent === "Apply changes") await saveWorkflowProfile();
+            await change("restart", {build: build.id, stages: active().stages}, {
+              wait: "Restarting the build…", done: "New build started.",
+              onError: error => { restartError = {build: build.id, message: error.message}; }
+            });
+          } catch (error) {
+            restartError = {build: build.id, message: error.message};
+          } finally {
+            startingFromPlan = false;
+            if (restart.isConnected) {
+              restart.disabled = false;
+              feedback.textContent = restartError?.message || "";
+            }
+          }
+        }, state.resumeBlocker || state.restartRequired ? "button primary" : "button");
+        const feedback = element("small", "design-status", restartError?.build === build.id ? restartError.message : "");
+        feedback.setAttribute("role", "status");
+        controls.append(restart, feedback);
+      }
       if (["working", "cancelling"].includes(build.status)) {
         const cancel = button("Cancel run", () => change("cancel", {build: build.id},
           {wait: "Cancelling the run…", done: "Cancellation requested."}));
@@ -1126,9 +1202,11 @@ function designPanel(initialState) {
       }
       const headingText = element("strong", "", labels[build.status] || build.status);
       const info = box("Current build", element("p", "design-build-status", headingText, " · Revision " + build.revision), controls);
+      if (canRestart) info.append(element("p", "", "Restart uses the saved workflow and approved plan. Existing working changes stay on disk outside the new build’s commit."));
       if (state.restartRequired) {
         info.append(element("p", "evidence-warning",
-          "The branch changed after this run started. Retire this run, then start a new build from the current commit."));
+          canRestart ? "The branch changed after this run started. Restart from the current commit." :
+            "The branch changed after this run started. Retire this run, then start a new build from the current commit."));
         if (build.error) info.append(element("details", "", element("summary", "", "Previous attempt error"),
           element("p", "", build.error)));
       } else if (state.resumeBlocker) {
@@ -1265,6 +1343,9 @@ function designPanel(initialState) {
         box("Start a build", ...(embedded ? [] : [field("Build scope", scope), field("Review frequency", frequency)]),
           steps, agreement, reasons, launch));
     }
+    if (build) result.append(button(embedded ? "Show attempts" : "Show slice attempts", () => showDialog("Build attempts", designHistory())));
+    result.append(progressPanel(null, syncProgress));
+    if (embedded) return result;
     const branch = input(settings.branch ?? state.branch, "Project branch", value => { settings.branch = value; });
     branch.dataset.designFocus = "branch";
     const detectedBranch = element("div");
@@ -1282,12 +1363,10 @@ function designPanel(initialState) {
       .find(item => item.name.toLowerCase() === "branch review")?.url || ""), "Branch Review address", value => { settings.host = value; });
     host.dataset.designFocus = "review-host";
     const buildSettings = box("Build settings", detectedBranch, field("Git branch", branch),
-      ...(embedded ? [] : [field("Branch Review address", host)]),
+      field("Branch Review address", host),
       button("Save build settings", () => change("settings", {branch: branch.value, preview: state.preview,
-        ...(embedded ? {} : {reviewHost: host.value.trim()})})));
-    if (build) result.append(button(embedded ? "Show attempts" : "Show slice attempts", () => showDialog("Build attempts", designHistory())));
-    result.append(progressPanel(null, syncProgress));
-    result.append(embedded ? element("details", "", element("summary", "", "Build settings"), buildSettings) : buildSettings);
+        reviewHost: host.value.trim()})));
+    result.append(buildSettings);
     return result;
   }
   function openTab(name) {
@@ -1307,6 +1386,12 @@ function designPanel(initialState) {
   function goBuild(focus) {
     if (embedded) {
       if (tab !== "Plan") openTab("Plan");
+      if (focus === "branch") {
+        const branch = body.querySelector('[data-design-focus="branch"]');
+        branch?.scrollIntoView({block: "center"});
+        branch?.focus({preventScroll: true});
+        return;
+      }
       const section = body.querySelector(".plan-build-section");
       const target = focus && section?.querySelector('[data-design-focus="' + focus + '"]');
       if (target) {

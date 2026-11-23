@@ -50,15 +50,14 @@ async function waitForBuild(coordinator, wanted = 'review') {
   assert.fail('Build did not reach ' + wanted);
 }
 
-test('shows saved agent settings and blocks retries on the previous provider', async t => {
+test('restarts a stopped build with saved agent settings and preserves working changes', async t => {
   const {git, store, repository} = await fixture(t);
-  let auditCalls = 0;
-  const coordinator = await createCoordinator({repository, store, git, async invoke({stage, provider}) {
+  const audits = [];
+  const coordinator = await createCoordinator({repository, store, git, async invoke({stage, provider, model}) {
     if (stage === 'plan') return {text: JSON.stringify({plan: ['Edit the greeting.']})};
     assert.equal(stage, 'plan_review');
-    assert.equal(provider, 'Muse');
-    auditCalls++;
-    throw Error('API error 429: Subscription quota exhausted.');
+    audits.push({provider, model});
+    throw Error(provider === 'Muse' ? 'API error 429: Subscription quota exhausted.' : 'Test stop on Terra.');
   }});
   t.after(() => coordinator.close());
   const action = (name, data) => coordinator.dispatch(name, data, {method: 'POST'});
@@ -79,8 +78,25 @@ test('shows saved agent settings and blocks retries on the previous provider', a
   assert.deepEqual(run.failure.savedAgent, agent);
   assert.match((await coordinator.dispatch('design')).resumeBlocker, /Agent settings changed/);
   await assert.rejects(action('design/continue', {build: build.id}), /Agent settings changed/);
-  assert.equal(auditCalls, 1);
+  assert.equal(audits.length, 1);
   assert.equal((await coordinator.dispatch('design')).builds.at(-1).attempts.length, 1);
+
+  const restart = {build: build.id, mode: 'task', revision: draft.revision};
+  await assert.rejects(action('design/restart', {...restart, stages: {}}), /applied workflow changed/);
+  assert.equal((await coordinator.dispatch('design')).builds.at(-1).status, 'failed');
+  await writeFile(path.join(repository, 'greeting.txt'), 'Edit kept from the stopped build');
+  const before = await git('status', '--short');
+  const restarted = await action('design/restart', restart);
+  assert.equal(restarted.builds.at(-2).status, 'retired');
+  const fresh = await waitForBuild(coordinator, 'failed');
+  assert.notEqual(fresh.id, build.id);
+  assert.notEqual(fresh.attempts[0].task, build.attempts[0].task);
+  assert.equal(fresh.plan, build.plan);
+  assert.deepEqual(fresh.decisions, build.decisions);
+  assert.equal(fresh.error, 'Test stop on Terra.');
+  assert.deepEqual(audits.at(-1), {provider: 'Codex', model: agent.model});
+  assert.equal(await git('status', '--short'), before);
+  assert.equal(await readFile(path.join(repository, 'greeting.txt'), 'utf8'), 'Edit kept from the stopped build');
 });
 
 test('pins a checked commit, returns a failed check, and repairs the same approved task against its original base', async t => {
