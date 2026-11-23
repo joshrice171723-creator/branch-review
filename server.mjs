@@ -212,7 +212,6 @@ function json(res,status,data) { res.writeHead(status,{'Content-Type':'applicati
 async function body(req) { let buffer=''; for await(const chunk of req) { buffer += chunk; if(Buffer.byteLength(buffer)>16_000_000) throw new Error('Request too large'); } return JSON.parse(buffer || '{}'); }
 const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>reviewRecipe(local,repo),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
 async function mutate(endpoint, data) {
-  if (endpoint === '/api/workbench-export') return workspace.exportHandoff(data.runId);
   if (endpoint === '/api/workbench-repair') return createRepair(repo,data,git);
   if (endpoint === '/api/workbench-push') {
     const receipt=await pushWorkbenchReview(repo,data.runId,data.commit,store.records,git,data.expectedTarget);
@@ -603,7 +602,16 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
       busy=true;
       let data; try { data=await body(req); } catch(error) { busy=false; throw error; }
       state.error=null;
-      const operation=async()=>{try {return await mutate(url.pathname,data);}catch(error){state.error=error.message;if(['preparing','stopping','preview-ready'].includes(state.status)) state.status='error';throw error;}finally{busy=false;}};
+      const operation=async()=>{
+        try {
+          if (url.pathname==='/api/workbench-export') return await workspace.exportHandoff(data.runId);
+          return await mutate(url.pathname,data);
+        } catch(error) {
+          state.error=error.message;
+          if(['preparing','stopping','preview-ready'].includes(state.status)) state.status='error';
+          throw error;
+        } finally {busy=false;}
+      };
       if(longActions.has(url.pathname)){ operation().catch(()=>{}); return json(res,202,{accepted:true}); }
       return json(res,200,{result:await operation()});
     }

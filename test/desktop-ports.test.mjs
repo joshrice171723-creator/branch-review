@@ -80,6 +80,12 @@ test('packaged mode binds available loopback ports and keeps an explicit control
   const opened = await openWorkbench();
   assert.equal(opened.status,200);
   await opened.json();
+  const handoff = await fetch(origin+'/api/workbench-export',{
+    method:'POST',headers:{Origin:origin,'X-Review-Token':state.token,'Content-Type':'application/json'},
+    body:JSON.stringify({runId:'invalid'})
+  });
+  assert.equal(handoff.status,400);
+  assert.deepEqual(await handoff.json(),{error:'Choose a completed Workbench run.'});
   for (const previewPort of previewPorts) {
     const preview = await fetch(originFor(previewPort));
     assert.equal(preview.status,503);
