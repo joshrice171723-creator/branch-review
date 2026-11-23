@@ -9,6 +9,7 @@ import {promisify} from 'node:util';
 import {WorkbenchProfile, modelCatalog, presetDocuments} from './profile.mjs';
 import {capture, checkArgv} from './quality/runner.mjs';
 import {checkFile, checkPathInside, resolveCheckCommand} from './check-command.mjs';
+import {cosmeticCandidate, cosmeticDiff} from './automatic-route.mjs';
 
 const exec = promisify(execFile);
 const runPattern = /^\d{8}T\d{12}-[a-f0-9]{8}$/;
@@ -729,7 +730,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return {question, option, source, recorded_at:now()};
   }
 
-  async function startTask({mode = 'build', action, scope, decisions = {}, channel = 'form'} = {}) {
+  async function startTask({mode = 'build', action, scope, decisions = {}, channel = 'form', automaticPlan} = {}) {
     assert(modes.includes(mode), 'Choose audit, refactor, feature, or build.');
     assert(filled(action) && action.length <= 4_000 && filled(scope) && scope.length <= 16_000, 'Enter the task action and scope.');
     assert(object(decisions), 'Task answers must be an object.');
@@ -765,6 +766,10 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
         questions_sha256:hash((await questionsDefinition()).raw)};
       if (profile) Object.assign(task, {profile, profile_sha256:fingerprint(profile)});
       if (quality) task.quality = quality;
+      if (mode === 'build' && typeof automaticPlan === 'string' && automaticPlan.length <= 64000) {
+        const check = cosmeticCandidate({plan:automaticPlan, profile, quality, checks});
+        if (check) task.cosmetic_route = {check, approved_plan_sha256:hash(automaticPlan)};
+      }
       const artifacts = [['task.json', json(task)], ['snapshots/' + snapshot.snapshot_sha256.slice(0, 20) + '.json', json(snapshot)]];
       for (const [question, choice] of Object.entries(decisions)) {
         const answer = await validateAnswer(task, question, object(choice) ? choice.option : choice, choice?.source, channel);
@@ -1119,6 +1124,22 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return task.profile?.active === 'fast' && task.profile.profiles.fast.stages.finalReview.enabled === false;
   }
 
+  async function checksCosmeticSource(task, current) {
+    if (!task.cosmetic_route || !task.initial_snapshot.head) return false;
+    const initial = task.initial_snapshot.files;
+    const paths = [...new Set([...Object.keys(initial), ...Object.keys(current.files)])]
+      .filter(name => initial[name] !== current.files[name]);
+    if (paths.length !== 1) return false;
+    const patch = await git(await resolvedRoot, '--literal-pathspecs', 'diff', '--no-ext-diff', '-U0',
+      task.initial_snapshot.head, '--', paths[0]);
+    return cosmeticDiff(paths, patch);
+  }
+
+  async function cosmeticSource(id, current) {
+    const run = await selected(id);
+    return checksCosmeticSource(run.task, current ?? await sourceSnapshot(await resolvedRoot, run.task));
+  }
+
   function policyRubric(task, stage) {
     return task.quality?.definition.rubrics?.find(row => row.actor === 'agent' && row.stage === stage);
   }
@@ -1146,7 +1167,11 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       if (folder === 'audits') {
         const auditStages = ['plan_review', 'build_review', 'final_review'];
         assert(auditStages.includes(data.stage), 'Choose a supported audit stage.');
-        assert(['pass', 'replan', 'repair', 'needs_evidence'].includes(data.verdict) ||
+        const automatic = task.cosmetic_route && data.approved_plan_sha256 === task.cosmetic_route.approved_plan_sha256;
+        const routedSkip = data.verdict === 'skipped' && automatic &&
+          (data.stage === 'plan_review' && snapshot.snapshot_sha256 === task.initial_snapshot.snapshot_sha256 ||
+           data.stage === 'final_review' && await checksCosmeticSource(task, snapshot));
+        assert(['pass', 'replan', 'repair', 'needs_evidence'].includes(data.verdict) || routedSkip ||
           data.verdict === 'skipped' && data.stage === 'final_review' && skipsFinal(task), 'The audit verdict conflicts with the pinned profile.');
         assert(filled(data.reason) && digestPattern.test(data.plan_sha256 ?? ''), 'Record the audit evidence and plan fingerprint.');
         assert(data.snapshot_sha256 === snapshot.snapshot_sha256, 'The audit is for a different source snapshot.');
@@ -1227,8 +1252,11 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       const plan = recent[0];
       const build = recent.findLast(row => row.stage === 'build_review');
       const final = recent.at(-1);
-      const passed = plan?.verdict === 'pass' && build?.verdict === 'pass' && final?.stage === 'final_review' &&
-        (skipsFinal(task) ? final.verdict === 'skipped' && canonical(build.criteria) === canonical(review?.criteria) : final.verdict === 'pass');
+      const automatic = plan?.verdict === 'skipped' && task.cosmetic_route &&
+        [plan, build, final].every(row => row?.approved_plan_sha256 === task.cosmetic_route.approved_plan_sha256) &&
+        await checksCosmeticSource(task, snapshot);
+      const passed = (plan?.verdict === 'pass' || automatic) && build?.verdict === 'pass' && final?.stage === 'final_review' &&
+        (skipsFinal(task) || automatic ? final.verdict === 'skipped' && canonical(build.criteria) === canonical(review?.criteria) : final.verdict === 'pass');
       const source = [build, final].every(row => row?.snapshot_sha256 === snapshot.snapshot_sha256 &&
         (!row.diff_sha256 || row.diff_sha256 === snapshot.diff_sha256));
       const pinned = [plan, build, final].every(row => digestPattern.test(row?.plan_sha256 ?? '') &&
@@ -1452,7 +1480,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
   }
 
   return {initialize:() => mutate(install), config, setConfig, effectiveConfig, getProfile, setProfile, profileApplied, discover, startTask, questions, answer,
-    freeze, prompt, executionConfig, snapshot, runCheck, runChecks:runConfigured,
+    freeze, prompt, executionConfig, snapshot, cosmeticSource, runCheck, runChecks:runConfigured,
     preflightChecks, checkReceiptStatus,
     benchmark:(id, options) => runConfigured(id, {...options, benchmarks:true}), record, readRunRecord, getRun, listRuns,
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),

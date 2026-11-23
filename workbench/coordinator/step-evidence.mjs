@@ -1,4 +1,4 @@
-export const buildStageRoles = {plan: 'plan', plan_review: 'planReview', baseline: 'baseline', build: 'build', building: 'build',
+export const buildStageRoles = {plan: 'plan', plan_review: 'planReview', plan_skip: 'planReview', baseline: 'baseline', build: 'build', building: 'build',
   checks: 'checks', build_review: 'buildReview', final_review: 'finalReview', final_skip: 'finalReview', finish: 'verify'};
 
 export function buildTrace(history = []) {
@@ -51,10 +51,11 @@ export function stageEvidence(run, build, visit, visits) {
     'Thinking level': config.effort});
   const instructions = config?.instructions && text('Stage instructions', config.instructions);
   const plan = text('Approved plan', build.plan);
-  const methodVisit = visits.findLast(item => item.entry.stage === 'plan_review' && item.entry.detail?.plan && item.time <= visit.time);
+  const methodVisit = visits.findLast(item => ['plan_review', 'plan_skip'].includes(item.entry.stage) &&
+    item.entry.detail?.plan && item.time <= visit.time);
   const method = methodVisit?.entry.detail?.plan && text('Implementation steps', methodVisit.entry.detail.plan);
   if (role === 'plan') {
-    const recorded = next?.stage === 'plan_review' ? text('Implementation steps', next.detail?.plan) :
+    const recorded = ['plan_review', 'plan_skip'].includes(next?.stage) ? text('Implementation steps', next.detail?.plan) :
       visit.question?.question ? text('Plan question', visit.question.question) : null;
     return {0: result(plan, agent, instructions, profile?.rules && text('Shared rules', profile.rules)),
       ...(recorded && {1: result(recorded), 2: result(recorded)})};
@@ -76,7 +77,8 @@ export function stageEvidence(run, build, visit, visits) {
     }));
   }
   if (role.endsWith('Review')) {
-    const verdict = run.audits.findLast(row => row.stage === (stage === 'final_skip' ? 'final_review' : stage) &&
+    const auditStage = {plan_skip: 'plan_review', final_skip: 'final_review'}[stage] ?? stage;
+    const verdict = run.audits.findLast(row => row.stage === auditStage &&
       inVisit(visit, row.at));
     const checkVisit = visits.findLast(item => item.role === 'checks' && item.time < visit.time);
     const repeated = entry.detail?.checkId && run.checks.find(row => row.id === entry.detail.checkId);
@@ -90,7 +92,7 @@ export function stageEvidence(run, build, visit, visits) {
       'Source snapshot': verdict.snapshot_sha256, 'Plan fingerprint': verdict.plan_sha256}),
     text('Auditor’s reason', verdict.reason), ...(verdict.criteria?.length ?
       [{title: 'Rubric results', criteria: verdict.criteria}] : []), agent].filter(Boolean)};
-    return {...(stage !== 'final_skip' && {0: input, 1: {...recorded,
+    return {...(!stage.endsWith('_skip') && {0: input, 1: {...recorded,
       sections: [...recorded.sections, ...(receipts.length ? [checks(receipts)] : [])]}}), 2: recorded};
   }
   const report = next?.stage === 'completed' && run.reports.findLast(row => row.snapshot_sha256 === next.detail?.snapshot_sha256);

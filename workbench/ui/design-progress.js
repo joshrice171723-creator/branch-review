@@ -242,7 +242,8 @@ function progressPanel(openBuild, onProgress) {
     mode.hidden=!run;
     log.hidden=!run;
     mode.textContent=previewNext?"Show current run":"Preview next build";
-    taskTitle.textContent=current ? current.title + (current.running ? " · Running" : "") : "Next build";
+    const routeLabel={visual:"Automatic visual route", expanded:"Full audit required by the diff", full:"Full workflow"}[current?.routing];
+    taskTitle.textContent=current ? [current.title, routeLabel, current.running && "Running"].filter(Boolean).join(" · ") : "Next build";
     const currentStage=last && (extra[last.role] || definitions.find(role=>role.id===last.role))?.name;
     const recoveryStatus=current?.events?.findLast(event=>isRecovery(event.text))?.text ||
       (isRecovery(last?.reason) ? last.reason : "");
@@ -265,7 +266,7 @@ function progressPanel(openBuild, onProgress) {
       const failed=failure?.role===key;
       const needsEvidence=current?.evidenceRequest?.role===key;
       const waiting=key==="plan" && current?.stage==="question" || key==="humanReview" && gate?.waiting;
-      const skipped=config?.enabled===false || attempt?.stage==="final_skip";
+      const skipped=config?.enabled===false || ["plan_skip","final_skip"].includes(attempt?.stage);
       const isReturn=next?.reason && ["plan","repair"].includes(next.role);
       const completed=Boolean(attempt && (next || current?.stage==="completed")) || key==="humanReview" && gate?.approved || key==="push" && gate?.pushed;
       const limited=failed && /\b429\b|rate_limit_error|quota exhausted/i.test(failure.message);
@@ -290,7 +291,8 @@ function progressPanel(openBuild, onProgress) {
       grid.append(card);
       if(key!==pick)continue;
       detail.dataset.stageKey=key;
-      detail.replaceChildren(element("h3","",role.name),element("p","stage-meta",config?.provider || (key==="humanReview"?"Human":"Workbench")));
+      const provider = skipped ? "Workbench" : attempt?.metrics?.providers?.at(-1)?.provider || config?.provider;
+      detail.replaceChildren(element("h3","",role.name),element("p","stage-meta",provider || (key==="humanReview"?"Human":"Workbench")));
       if(recovery)detail.append(element("p","stage-meta",recovery));
       if(needsEvidence)detail.append(element("div","run-map-error",element("strong","","Audit needs evidence"),
         formatEvidenceText(current.evidenceRequest.text)));

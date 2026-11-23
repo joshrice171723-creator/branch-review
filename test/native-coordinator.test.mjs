@@ -142,6 +142,50 @@ test('restarts a stopped build with saved agent settings and preserves working c
   assert.equal(await readFile(path.join(repository, 'greeting.txt'), 'utf8'), 'Edit kept from the stopped build');
 });
 
+for (const escalates of [false, true]) {
+  test(escalates ? 'escalates actual behavior changes to the pinned full workflow' :
+    'routes a visual change to one scoped audit and selects its agent settings', async t => {
+    const {git, store, repository} = await fixture(t);
+    await mkdir(path.join(repository, 'public'));
+    const stylesheet = path.join(repository, 'public', 'layout.css');
+    await writeFile(stylesheet, '.conversation {\n  text-align: left;\n}\n');
+    await git('add', '--', 'public/layout.css');
+    await git('commit', '-qm', 'Add layout fixture', '--only', '--', 'public/layout.css');
+    const config = await store.config();
+    await store.setConfig({...config, checks: [{...config.checks[0], name: 'ui_layout'}]});
+    const profile = await store.getProfile();
+    const agents = profile.profiles[profile.active].stages;
+    const calls = [];
+    const coordinator = await createCoordinator({repository, store, git, async invoke({stage, model, effort, provider}) {
+      calls.push({stage, model, effort, provider});
+      if (stage === 'plan') return {text: JSON.stringify({plan: ['Align the conversation and run the UI layout check.']})};
+      if (stage === 'build') {
+        await writeFile(stylesheet, '.conversation {\n  text-align: center;\n}\n');
+        if (escalates) await writeFile(path.join(repository, 'greeting.txt'), 'Behavior changed');
+        return {text: 'Updated conversation alignment.'};
+      }
+      return {text: JSON.stringify({verdict: 'pass', reason: 'Reviewed current layout evidence.', criteria})};
+    }});
+    t.after(() => coordinator.close());
+    const post = (route, data) => coordinator.dispatch(route, data, {method: 'POST'});
+    const draft = await post('design/draft', {revision: 0, mode: 'task', title: 'Center the conversation',
+      plan: 'Center the conversation with a CSS text alignment change.'});
+    await post('design/approve', {revision: draft.revision, mode: 'task'});
+    await post('design/build', {revision: draft.revision, mode: 'task', decisions, automaticRouting: true});
+    const build = await waitForBuild(coordinator);
+    const run = await store.getRun(build.attempts[0].task);
+    assert.equal(run.task.cosmetic_route.check, 'ui_layout');
+    assert.deepEqual(calls.map(row => row.stage), escalates ? ['plan', 'build', 'plan_review', 'build_review', 'final_review'] :
+      ['plan', 'build', 'build_review']);
+    assert.deepEqual(calls.slice(0, 2).map(({provider, model, effort}) => [provider, model, effort]),
+      [['Codex', 'gpt-6.2-sol', 'low'], ['Codex', 'gpt-6.2-sol', 'medium']]);
+    if (escalates) assert.equal(calls.at(-1).provider, agents.finalReview.provider);
+    else assert.deepEqual(run.audits.map(row => [row.stage, row.verdict]),
+      [['plan_review', 'skipped'], ['build_review', 'pass'], ['final_review', 'skipped']]);
+    assert.equal(run.lifecycle.status, 'completed');
+  });
+}
+
 test('retries verification on the blocked source without rebuilding it', async t => {
   const {git, store, repository} = await fixture(t);
   const profile = await store.getProfile();

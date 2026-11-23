@@ -13,7 +13,7 @@ const exec = promisify(execFile);
 const policyFile = 'workbench-quality.json';
 const criteriaIds = ['correctness', 'human_readability', 'maintainability', 'performance', 'failure_handling', 'scope_and_constraints'];
 const stageNames = {
-  plan: 'Plan', plan_review: 'Plan audit', baseline: 'Baseline checks', build: 'Build and repair', checks: 'Project checks',
+  plan: 'Plan', plan_review: 'Plan audit', plan_skip: 'Plan audit', baseline: 'Baseline checks', build: 'Build and repair', checks: 'Project checks',
   build_review: 'Build audit', final_review: 'Final audit', final_skip: 'Final audit', finish: 'Verify evidence'
 };
 
@@ -227,7 +227,10 @@ export function createAudit({repository, files, git, store, agent}) {
     const folder = loopPath(run);
     const selectedGroup = currentGroup(build);
     const scope = await store.prompt(run);
-    const finalEnabled = action('final_review', profile).enabled !== false;
+    const visualRoute = () => Boolean(task.cosmetic_route && !state.fullAudit);
+    const finalEnabled = () => !visualRoute() && action('final_review', profile).enabled !== false;
+    const automaticAgent = stage => visualRoute() && ['plan', 'build', 'build_review'].includes(stage) ?
+      {provider: 'Codex', model: 'gpt-6.2-sol', effort: stage === 'plan' ? 'low' : 'medium'} : undefined;
 
     async function measure(key, work) {
       const span = {id: id(), key, visit: state.history.length - 1, startedAt: Date.now()};
@@ -237,7 +240,7 @@ export function createAudit({repository, files, git, store, agent}) {
     }
 
     const checkpoint = async (stage, detail) => {
-      const actor = action(stage, profile).provider ?? 'Workbench';
+      const actor = automaticAgent(stage)?.provider ?? action(stage, profile).provider ?? 'Workbench';
       state.stage = stage;
       state.history.push({stage, assignedTo: actor, time: Date.now() / 1000, detail});
       await files.write(statePath(run), state);
@@ -246,7 +249,8 @@ export function createAudit({repository, files, git, store, agent}) {
     };
     const ask = ({stage, prompt, schema, write = false, images = [], evidenceOnly = false}) =>
       agent({profile, runtimeProfile, folder, stage, prompt, schema, write, images, evidenceOnly, signal,
-        toolScope: build.plan, budgetResetAt: attempt.budgetResetAt, visit: state.history.length - 1,
+        toolScope: build.plan, budgetResetAt: attempt.budgetResetAt, autoAgent: automaticAgent(stage),
+        visit: state.history.length - 1,
         report: (actor, message) => activity(run, stage, actor, message)}).then(reply => reply.text);
     const context = {
       approvedPlan: build.plan, title: build.title ?? task.action, projectAgreement: scope,
@@ -311,7 +315,10 @@ export function createAudit({repository, files, git, store, agent}) {
         state.lastRepairChecks = checkResults;
         state.returns.repair = (state.returns.repair ?? 0) + 1;
       }
-      if (next === 'plan') state.lastReturnedPlan = state.plan;
+      if (next === 'plan') {
+        state.lastReturnedPlan = state.plan;
+        delete state.escalatedReviewPending;
+      }
       state.returns[bucket] = count + 1;
       await activity(run, stage, provider ?? 'Workbench', 'Finding returned to ' + next);
       await checkpoint(next, reason);
@@ -375,7 +382,7 @@ export function createAudit({repository, files, git, store, agent}) {
         return block(stage, 'Project source changed since checks. Restore the checked files before continuing.', 'source_changed');
       }
       const selectedRubric = rubric(task, stage);
-      const ownsReview = stage === 'final_review' || (stage === 'build_review' && !finalEnabled);
+      const ownsReview = stage === 'final_review' || (stage === 'build_review' && !finalEnabled());
       const required = selectedRubric?.criteria ?? (ownsReview ? criteriaIds.map(id => ({id, required: true})) : null);
       const receiptStatus = await receipts(before);
       if (stage !== 'plan_review' && receiptStatus.some(row => row.required && ['stale', 'missing'].includes(row.status))) {
@@ -518,7 +525,7 @@ export function createAudit({repository, files, git, store, agent}) {
         verdict = 'repair';
         reason = 'A required project check failed. Inspect the recorded check receipts.';
       }
-      const row = {stage, actor: action(stage, profile).provider, verdict, reason,
+      const row = {stage, actor: automaticAgent(stage)?.provider ?? action(stage, profile).provider, verdict, reason,
         snapshot_sha256: before.snapshot_sha256, plan_sha256: hash(state.plan), approved_plan_sha256: hash(build.plan),
         profile_sha256: task.profile_sha256, quality_revision: task.quality?.revision,
         ...(selectedRubric ? {rubric_id: selectedRubric.id} : {}),
@@ -540,7 +547,9 @@ export function createAudit({repository, files, git, store, agent}) {
       } else if (verdict !== 'pass') {
         await returnTo(stage, verdict, reason);
       } else if (stage === 'plan_review') {
-        await checkpoint(state.baseline ? 'build' : 'baseline', row);
+        const next = state.escalatedReviewPending ? 'build_review' : state.baseline ? 'build' : 'baseline';
+        delete state.escalatedReviewPending;
+        await checkpoint(next, row);
       } else if (!ownsReview) {
         state.acceptedBuildAudit = {inputs, row};
         await checkpoint('final_review', row);
@@ -549,7 +558,7 @@ export function createAudit({repository, files, git, store, agent}) {
           stage, criteria: reply.criteria, quality_revision: task.quality?.revision});
         state.final_snapshot = before.snapshot_sha256;
         state.summary = reason;
-        await checkpoint(finalEnabled ? 'finish' : 'final_skip', row);
+        await checkpoint(finalEnabled() ? 'finish' : 'final_skip', row);
       }
     }
 
@@ -620,7 +629,9 @@ export function createAudit({repository, files, git, store, agent}) {
           'Map each acceptance criterion to a configured check or name an automated verification step with an expected result. ' +
           'Return one JSON object with plan as a nonempty Markdown string, or as a list of nonempty steps. If a user decision is necessary, use the question field exclusively. ' +
           questionContract + '\n' + JSON.stringify({...context, answers: state.answers, finding: state.finding});
-        const reply = objectReply(await ask({stage, prompt}));
+        const reply = objectReply(await ask({stage, prompt: visualRoute() ?
+          'This route permits cosmetic declarations in one existing CSS file. The pinned visual check is ' +
+            task.cosmetic_route.check + '.\n' + prompt : prompt, evidenceOnly: visualRoute()}));
         if (Object.hasOwn(reply, 'question')) {
           if (Object.hasOwn(reply, 'plan')) throw Error('The planner must return either the method or one question.');
           await question(reply);
@@ -635,8 +646,17 @@ export function createAudit({repository, files, git, store, agent}) {
           if (state.plan === state.lastReturnedPlan) {
             return block('plan', 'The planner returned the same method. ' + state.finding, 'unchanged_plan');
           }
-          await measure('2', () => checkpoint('plan_review', {plan: state.plan, approvedPlanHash: hash(build.plan)}));
+          await measure('2', () => checkpoint(visualRoute() ? 'plan_skip' : 'plan_review',
+            {plan: state.plan, approvedPlanHash: hash(build.plan)}));
         }
+      } else if (stage === 'plan_skip') {
+        const snapshot = await store.snapshot();
+        const reason = 'Automatic visual route. A focused UI check is configured and the approved scope is cosmetic.';
+        await store.record(run, 'audits', {stage: 'plan_review', actor: 'Workbench', verdict: 'skipped', reason,
+          snapshot_sha256: snapshot.snapshot_sha256, plan_sha256: hash(state.plan),
+          approved_plan_sha256: hash(build.plan), profile_sha256: task.profile_sha256});
+        await activity(run, stage, 'Workbench', reason);
+        await checkpoint('baseline');
       } else if (stage === 'baseline') {
         await store.freeze(run);
         const result = await checkStage('baseline');
@@ -655,6 +675,7 @@ export function createAudit({repository, files, git, store, agent}) {
         const prompt = 'Implement the reviewed method within the approved plan and task agreement. ' +
           'Workbench runs the pinned checks and owns the receipts. Use the supplied failures to focus any repair. ' +
           'Do not repeat the pinned suite or create Git commits. ' +
+          (visualRoute() ? 'Keep this change to cosmetic declarations in one existing CSS file. Changes outside that scope receive the full audit. ' : '') +
           'Keep the published workbench-quality.json and pre-existing changes intact. Report changes and evidence you actually observed.\n' +
           JSON.stringify({...context, method: state.plan, answers: state.answers, finding: state.finding, failedChecks,
             preservedPaths: Object.keys(build.preserved)});
@@ -696,6 +717,12 @@ export function createAudit({repository, files, git, store, agent}) {
         if (state.verificationOnly && !result.passed) return block('checks',
           'Verification failed. Open Project checks to inspect the recorded result.', 'failed_check');
         const snapshot = await store.snapshot();
+        if (visualRoute() && !await store.cosmeticSource(run, snapshot)) {
+          state.fullAudit = true;
+          state.escalatedReviewPending = true;
+          await checkpoint('plan_review', {plan: state.plan, reason: 'Using the full audit workflow because the diff is outside the visual route.'});
+          continue;
+        }
         const input = auditInputs(snapshot, await receipts(snapshot));
         const resume = ['final_review', 'finish'].includes(state.resumeAudit) && state.acceptedBuildAudit?.inputs === input;
         const nextAudit = resume ? state.resumeAudit : 'build_review';
@@ -709,7 +736,9 @@ export function createAudit({repository, files, git, store, agent}) {
           return block('finish', 'Project source changed after review. Restore the checked files before continuing.', 'source_changed');
         }
         await store.record(run, 'audits', {stage: 'final_review', actor: 'Workbench', verdict: 'skipped',
-          reason: 'Disabled in the pinned Fast profile.', snapshot_sha256: state.final_snapshot, plan_sha256: hash(state.plan),
+          reason: visualRoute() ? 'Automatic visual route. The build audit reviewed the scoped diff and UI evidence.' :
+            'Disabled in the pinned Fast profile.', snapshot_sha256: state.final_snapshot, plan_sha256: hash(state.plan),
+          approved_plan_sha256: hash(build.plan),
           profile_sha256: task.profile_sha256, quality_revision: task.quality?.revision});
         await checkpoint('finish');
       } else if (stage === 'finish') {

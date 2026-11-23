@@ -25,14 +25,14 @@ export async function createCoordinator({
     return typeof providerOptions === 'function' ? await providerOptions() : providerOptions;
   }
 
-  async function checkProviders(profile, refresh = false) {
+  async function checkProviders(profile, refresh = false, only) {
     if (!providerProbe) return [];
     const {stages} = selectedProfile(profile);
     const configuration = await options();
     const used = new Map();
     for (const role of WorkbenchProfile.roles) {
       const stage = stages[role.id];
-      if (stage?.enabled && role.kind !== 'Gate') {
+      if (stage?.enabled && role.kind !== 'Gate' && (!only || stage.provider === only)) {
         const roles = used.get(stage.provider) || [];
         used.set(stage.provider, [...roles, role.name]);
       }
@@ -54,12 +54,12 @@ export async function createCoordinator({
   }
 
   async function agent({profile, runtimeProfile, folder, stage, prompt, schema, write, signal, report, images, visit, evidenceOnly,
-    toolScope, budgetResetAt}) {
+    toolScope, budgetResetAt, autoAgent}) {
     const current = selectedProfile(profile);
     const key = stageKeys[stage];
     const configuration = current?.stages?.[key];
     if (!configuration?.provider) throw Error('Apply a profile with a provider for this step.');
-    const {provider, model, effort} = configuration;
+    const {provider, model, effort} = autoAgent ?? configuration;
     const stageLabel = WorkbenchProfile.roles.find(role => role.id === key)?.name ?? stage;
     const override = selectedProfile(runtimeProfile) ?? runtimeProfile;
     const limitProfile = override ? {...current, ...override, stages: {...current.stages, ...override.stages}} : current;
@@ -149,7 +149,7 @@ export async function createCoordinator({
       switch (request) {
         case 'GET design': return await readDesign();
         case 'GET design/layout': return await design.layout();
-        case 'GET design/readiness': return await builds.readiness();
+        case 'GET design/readiness': return await builds.readiness(data);
         case 'GET design/providers': return await checkProviders(await store.getProfile(), data.refresh === '1');
         case 'GET design/history': return await builds.history();
         case 'GET design/attention': return await builds.attention();

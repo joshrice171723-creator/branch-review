@@ -6,6 +6,7 @@ import {buildStageRoles, buildTrace, checkRows, gateEvidence, stageEvidence} fro
 import {legacyProviderMetrics, readMetrics, visitMetrics} from './build-metrics.mjs';
 import {WorkbenchProfile} from '../profile.mjs';
 import {annotateProviderFailure} from './provider-limit.mjs';
+import {cosmeticCandidate} from '../automatic-route.mjs';
 
 const leasePath = '.harness/design/build.owner';
 const pendingStates = ['working', 'cancelling'];
@@ -190,7 +191,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return {providerTimeSeconds, providerTokenLimit, stages};
   }
 
-  async function readiness() {
+  async function readiness({automaticRouting} = {}) {
     const state = await design.read();
     const build = state.builds.at(-1);
     const running = await active();
@@ -201,10 +202,14 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     };
     const plan = state.approved === state.revision && !state.question && !state.plannerRetry;
     const native = (!build || closedStates.includes(build.status)) && (!running || !['active', 'unverified'].includes(running.lifecycle.status));
+    const profile = await store.getProfile();
+    const config = automaticRouting === '1' ? await ensureChecks().catch(() => null) : null;
+    const visual = config && state.mode === 'task' &&
+      cosmeticCandidate({plan: state.plan, profile, quality: config.quality_revision, checks: config.checks});
     const items = [
       check('plan', plan, plan ? 'The current draft is approved.' : 'Resolve planning and approve the current draft.'),
       await test('profile', ensureProfile, 'A workflow profile is applied.'),
-      ...(await checkProviders(await store.getProfile())).map(row =>
+      ...(await checkProviders(profile, false, visual ? 'Codex' : undefined)).map(row =>
         check(row.id, providerReady(row), providerMessage(row))),
       await test('checks', ensureChecks, 'Required project checks are configured.'),
       await test('branch', () => commitment(git, state.branch), 'The configured branch is checked out.'),
@@ -254,6 +259,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const scope = build.mode === 'task' ? 'Implement the approved task plan.' : 'Implement the selected slice.';
       const repair = group.findings.filter(finding => !finding.repaired);
       const result = await store.startTask({action: title, mode: 'build', decisions: build.decisions, channel: 'form',
+        automaticPlan: build.automaticRouting && build.mode === 'task' && !repair.length ? build.plan : undefined,
         scope: (repair.length ? 'Address the selected findings within the approved plan.' : scope) +
           '\n' + JSON.stringify({build: build.id, revision: build.revision, planSha: hash(build.plan),
             ...(repair.length ? {priorRuns: repair.map(finding => finding.runId)} : {})})});
@@ -484,8 +490,10 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       if (previousTask && ['active', 'unverified'].includes(previousTask.lifecycle.status) &&
           !(ownsTask && previousTask.lifecycle.status === 'active')) throw Error('Finish or pause the current task.');
       const profile = await ensureProfile();
-      await ensureChecks();
-      const blockers = (await checkProviders(profile)).filter(row => !providerReady(row));
+      const config = await ensureChecks();
+      const visual = payload.automaticRouting === true && state.mode === 'task' &&
+        cosmeticCandidate({plan: state.plan, profile, quality: config.quality_revision, checks: config.checks});
+      const blockers = (await checkProviders(profile, false, visual ? 'Codex' : undefined)).filter(row => !providerReady(row));
       if (blockers.length) throw Error(blockers.map(providerMessage).join(' '));
       if (payload.stages && !isDeepStrictEqual(payload.stages, selectedProfile(profile).stages)) {
         throw Error('The applied workflow changed. Reload the build steps.');
@@ -497,6 +505,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         attachments: {...state.attachments}, base, decisions: restart ? previous.decisions : payload.decisions ?? {}, status: 'ready', attempts: [],
         profile: jsonHash(profile), groups, ...baseline, ...(state.mode === 'task' ? {mode: 'task', title: state.title} : {})};
       applyBuildBudget(build, payload);
+      if (payload.automaticRouting === true && state.mode === 'task') build.automaticRouting = true;
       if (restart) {
         if (ownsTask && previousTask.lifecycle.status === 'active') await store.pause(previousTask.id, 'Build restarted.');
         Object.assign(previous, {status: 'retired', retired: true});
@@ -890,6 +899,8 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       running: pendingStates.includes(build.status), attempts, events: latest, failure,
       evidenceRequest: loop.stage === 'evidence' ? {role: buildStageRoles[loop.evidenceRequest.stage], text: loop.evidenceRequest.text} : null,
       stages: selectedProfile(task.task.profile)?.stages ?? {}, checks,
+      ...(build.automaticRouting && {routing: task.task.cosmetic_route && !loop.fullAudit ? 'visual' :
+        loop.fullAudit ? 'expanded' : 'full'}),
       question: ['question', 'question_retry'].includes(loop.stage) ? loop.question : ''},
       review: {waiting: build.status === 'review', approved: !!group.sha && group.reviews.at(-1)?.sha === group.sha,
         pushed: !!group.sha && group.pushed?.sha === group.sha,

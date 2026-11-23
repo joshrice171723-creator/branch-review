@@ -218,7 +218,7 @@ function designPanel(initialState) {
   let localDraft = designDraftFor(draftKey);
   const defaultDecisions = {scope_confirmed: "confirmed", engine_integration: "confirmed",
     code_changes: "allow_scoped", migrations: "deny", dependencies: "deny"};
-  const launchForm = {scope: "plan", frequency: "slice", decisions: {}, agreementOpen: true};
+  const launchForm = {scope: "plan", frequency: "slice", decisions: {}, agreementOpen: true, automaticRouting: true};
   let budgetDraft;
   function planBudgetKey(build) {
     return build && !["closed", "retired"].includes(build.status) ? build.id : "plan-" + state.revision;
@@ -437,21 +437,23 @@ function designPanel(initialState) {
           showPlanStartStatus("Preparing the " + active().name + " workflow…");
           await saveWorkflowProfile();
         }
-        const preflight = await api("design/readiness");
+        if (draftDiffers(editing) && !await change("draft", {...editing, revision: baseRevision}, {reset: true, onError})) return;
+        const readinessRoute = launchForm.automaticRouting ? "design/readiness?automaticRouting=1" : "design/readiness";
+        const preflight = await api(readinessRoute);
         const blockers = preflight.items.filter(item => item.status === "blocked" && !["plan", "review"].includes(item.id));
         if (blockers.length) {
           showPlanStartStatus(blockers.map(item => item.message).join(" "));
           return;
         }
-        if (draftDiffers(editing) && !await change("draft", {...editing, revision: baseRevision}, {reset: true, onError})) return;
         if (state.approved !== state.revision && !await change("approve", {}, {onError})) return;
-        const checked = await api("design/readiness");
+        const checked = await api(readinessRoute);
         if (!checked.ready) {
           showPlanStartStatus(checked.items.filter(item => item.status === "blocked").map(item => item.message).join(" "));
           return;
         }
         showPlanStartStatus("Starting build…");
-        if (await change("build", {stages: active().stages, decisions: launchForm.decisions, ...budget},
+        if (await change("build", {stages: active().stages, decisions: launchForm.decisions,
+          automaticRouting: launchForm.automaticRouting, ...budget},
           {wait: "Starting build…", done: "Build started.", onError})) {
           showPlanStartStatus("");
           goBuild();
@@ -492,7 +494,11 @@ function designPanel(initialState) {
     const result = box("Plan", field("Title", title),
       element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
       rendered, draft, summary,
-      agreement, element("p", "", "Start build uses the " + active().name + " workflow and approves this plan and agreement."),
+      agreement, checkbox("Choose workflow, model and thinking level automatically", launchForm.automaticRouting, value => {
+        launchForm.automaticRouting = value;
+        return true;
+      }), element("small", "stage-meta", "Eligible visual changes use one audit. Other work uses the selected workflow."),
+      element("p", "", "Start build approves this plan and agreement."),
       planBranch(), planBudget(), element("div", "actions", save, discard, start), startFeedback);
     if (baseRevision !== state.revision) result.append(
       element("details", "", element("summary", "", "Compare saved plan"), element("pre", "", state.plan)),
@@ -1356,7 +1362,8 @@ function designPanel(initialState) {
         launch.disabled = true;
         try {
           if (!stateProfileApplied() || byId("apply-profile").textContent === "Apply changes") await saveWorkflowProfile();
-          await change("build", {...target, stages: active().stages, decisions: launchForm.decisions, ...budgetPayload()},
+          await change("build", {...target, stages: active().stages, decisions: launchForm.decisions,
+            automaticRouting: launchForm.automaticRouting, ...budgetPayload()},
             {wait: "Starting build…", done: "Build started.", onError: error => { readinessStatus.textContent = error.message; }});
         } catch (error) { readinessStatus.textContent = error.message; }
         finally { updateLaunch(); }
