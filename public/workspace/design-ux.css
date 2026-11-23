@@ -102,9 +102,11 @@
 
 #project-conversation {
   position: fixed;
-  inset: 12px 12px 12px auto;
+  inset: 12px;
+  margin-inline: auto;
   z-index: 12;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(8rem, 1fr) auto auto auto auto;
   gap: 12px;
   width: min(420px, calc(100vw - 24px));
@@ -127,6 +129,12 @@
 
 #project-conversation-context {
   color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+#change-screenshot-label,
+#mockup-reference-status {
+  overflow-wrap: anywhere;
 }
 
 #project-conversation-messages {

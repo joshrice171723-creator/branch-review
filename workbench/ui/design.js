@@ -713,14 +713,13 @@ function designPanel(initialState) {
     const viewport = element("div", "project-viewport");
     const fullStatus = element("span", "");
     fullStatus.setAttribute("role", "status");
-    const sendView = button("Capture and send to change", async () => {
+    const sendView = button("Send to chat", async () => {
       sendView.disabled = true;
-      fullStatus.textContent = "Capturing project view…";
+      fullStatus.textContent = "";
       try {
-        const saved = await projectConversation.capturePreview?.({sendToChange: true, openDrawer: false});
-        if (!saved) { fullStatus.textContent = "Capture unavailable. Choose this tab in Chrome, or upload a screenshot."; return; }
-        if (document.fullscreenElement) await document.exitFullscreen();
-        fullStatus.textContent = "";
+        const saved = await projectConversation.capturePreview({fullscreenViewport: viewport, sendToChange: true, openDrawer: false});
+        if (!saved) { fullStatus.textContent = "Capture unavailable. Try again or upload a screenshot in chat."; return; }
+        if (panelRoot.fullscreenElement === viewport) await document.exitFullscreen();
         projectConversation.open();
       } catch (error) { fullStatus.textContent = error.message; }
       finally { sendView.disabled = false; }

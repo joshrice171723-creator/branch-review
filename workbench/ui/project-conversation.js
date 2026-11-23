@@ -330,11 +330,16 @@ function connectProjectConversation(initial) {
     } catch (error) { referenceStatus.textContent = error.message; }
   };
   capture.hidden = !navigator.mediaDevices?.getDisplayMedia;
-  async function captureReference({sendToChange = false, openDrawer = true} = {}) {
+  async function captureReference({fullscreenViewport, sendToChange = false, openDrawer = true} = {}) {
     const target = mockupTarget.value;
     const project = target === "Project preview";
     const view = livePreview;
-    if (project && (!view?.frame.isConnected || !globalThis.CropTarget?.fromElement)) {
+    const frame = fullscreenViewport ? fullscreenViewport.querySelector("iframe") : view?.frame;
+    const sourceIsCurrent = () => frame?.isConnected && (fullscreenViewport
+      ? panelRoot.fullscreenElement === fullscreenViewport && frame.parentElement === fullscreenViewport
+      : livePreview === view);
+    const desktopCapture = fullscreenViewport && window.desktop?.capture;
+    if (project && (!sourceIsCurrent() || (!desktopCapture && !globalThis.CropTarget?.fromElement))) {
       referenceStatus.textContent = "Load the project preview in Chrome, or upload a screenshot.";
       if (openDrawer) open();
       return false;
@@ -346,20 +351,33 @@ function connectProjectConversation(initial) {
     let stream;
     capture.disabled = true;
     try {
-      if (!navigator.mediaDevices?.getDisplayMedia) throw Error("Screen capture unavailable.");
-      stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: false, preferCurrentTab: true});
-      close(false);
-      const track = stream.getVideoTracks()[0];
-      if (project) {
-        if (livePreview !== view || !view.frame.isConnected || !track?.cropTo) throw Error("Choose this Chrome tab.");
-        await track.cropTo(await CropTarget.fromElement(view.frame));
+      let source;
+      if (desktopCapture) {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (!sourceIsCurrent()) return false;
+        const bounds = frame.getBoundingClientRect();
+        const x = Math.ceil(bounds.left), y = Math.ceil(bounds.top);
+        const rect = {x, y, width: Math.floor(bounds.right) - x, height: Math.floor(bounds.bottom) - y};
+        source = new Image();
+        source.src = await desktopCapture(rect);
+        await source.decode();
+      } else {
+        if (!navigator.mediaDevices?.getDisplayMedia) throw Error("Screen capture unavailable.");
+        stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: false, preferCurrentTab: true});
+        close(false);
+        const track = stream.getVideoTracks()[0];
+        if (project) {
+          if (!sourceIsCurrent() || !track?.cropTo) throw Error("Choose this Chrome tab.");
+          await track.cropTo(await CropTarget.fromElement(frame));
+        }
+        source = document.createElement("video");
+        source.muted = true;
+        source.srcObject = stream;
+        await source.play();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       }
-      const video = document.createElement("video");
-      video.muted = true;
-      video.srcObject = stream;
-      await video.play();
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const saved = setReference(video, target, project ? new URL(view.address).pathname : "");
+      if (project && !sourceIsCurrent()) return false;
+      const saved = setReference(source, target, project ? new URL(frame.src).pathname : "");
       if (saved && sendToChange) {
         changeScreenshot = {image: reference, page: referencePage};
         showChangeScreenshot();

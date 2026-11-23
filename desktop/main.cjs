@@ -104,8 +104,15 @@ async function launch() {
     preferredPort:settings.controllerPort, desktop:true});
   if (app.isPackaged && !hasPortOverride) settings.controllerPort=port;
   await writeFile(settingsPath, JSON.stringify({...settings,home}));
-  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  function allowWorkspaceFullscreen(contents, permission, isMainFrame, url) {
+    return permission === 'fullscreen' && isMainFrame && contents === window?.webContents &&
+      URL.parse(url)?.origin === origin;
+  }
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+    callback(allowWorkspaceFullscreen(contents, permission, details.isMainFrame, details.requestingUrl));
+  });
+  session.defaultSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) =>
+    allowWorkspaceFullscreen(contents, permission, details.isMainFrame, requestingOrigin));
   Menu.setApplicationMenu(null);
   const area=screen.getPrimaryDisplay().workAreaSize;
   const width=Math.min(area.width,Math.max(1000,Number(settings.window?.width)||1600)),height=Math.min(area.height,Math.max(700,Number(settings.window?.height)||1000));
@@ -262,7 +269,21 @@ async function launch() {
   });
   ipcMain.handle('review:capture', async (event,rect) => {
     trusted(event);
-    if(rect){const [width,height]=window.getContentSize();if(!['x','y','width','height'].every(key=>Number.isInteger(rect[key]))||rect.x<0||rect.y<0||rect.width<1||rect.height<1||rect.x+rect.width>width||rect.y+rect.height>height)throw new Error('Capture must stay inside the review window.');}
+    if (rect) {
+      const [width, height] = window.getContentSize();
+      const zoom = window.webContents.getZoomFactor();
+      if (!['x','y','width','height'].every(key => Number.isSafeInteger(rect[key])) ||
+          rect.x < 0 || rect.y < 0 || rect.width < 1 || rect.height < 1 ||
+          rect.x + rect.width > Math.ceil(width / zoom) || rect.y + rect.height > Math.ceil(height / zoom)) {
+        throw new Error('Capture must stay inside the review window.');
+      }
+      // The renderer measures CSS pixels. Electron captures in device-independent pixels.
+      const x = Math.ceil(rect.x * zoom), y = Math.ceil(rect.y * zoom);
+      const right = Math.min(width, Math.floor((rect.x + rect.width) * zoom));
+      const bottom = Math.min(height, Math.floor((rect.y + rect.height) * zoom));
+      if (right <= x || bottom <= y) throw new Error('The capture area is empty.');
+      rect = {x, y, width: right - x, height: bottom - y};
+    }
     const png = await window.webContents.capturePage(rect);
     return png.toDataURL();
   });
