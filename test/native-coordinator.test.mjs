@@ -129,7 +129,8 @@ test('keeps a planning question until it has distinct suggestions and applies pr
     {question: 'Which greeting?', suggestions: ['Hello', 'hello']},
     {question: 'Which greeting?', suggestions: ['Hello', 'Welcome']},
     {plan: '## Acceptance criteria\n- Use Welcome.', message: 'Drafted the greeting.'},
-    {message: 'Here is the proposal.', proposal: {kind: 'plan', title: 'Edit title', plan: 'Revised plan'}}
+    {message: 'Here is the proposal.', proposal: {kind: 'plan', title: 'Edit title', plan: 'Revised plan'}},
+    {message: 'Here is the review plan.', proposal: {kind: 'plan', title: 'Fix finding', plan: 'Plan from review'}}
   ];
   let prompt, requestedModel, requestedEffort, attachedImages;
   let mockupRequest;
@@ -164,6 +165,9 @@ test('keeps a planning question until it has distinct suggestions and applies pr
   assert.match(state.plan, /Use Welcome/);
   assert.equal(state.messages.at(-1).proposal.plan, 'Revised plan');
   assert.equal(state.messages.at(-1).proposal.before.plan, state.plan);
+  state = await action('design/guide', {revision: state.revision, mode: 'task', message: 'Draft a fix.',
+    preparePlan: true, context: {view: 'workflow', tab: 'Preview', kind: 'branch-review'}});
+  assert.equal(state.messages.at(-1).proposal.plan, 'Plan from review');
   const mockup = {revision: state.revision, target: 'Project preview', referencePage: '/appointments',
     message: 'Add a confirmation button.', keep: 'Appointment details'};
   await assert.rejects(action('design/image', mockup), /Attach a screenshot/);

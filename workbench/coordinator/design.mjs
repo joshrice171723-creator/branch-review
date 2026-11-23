@@ -392,8 +392,9 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         const value = reply.proposal;
         const title = sentence(value.title, 'a proposal title', 240);
         const base = {kind: value.kind, title, revision: state.revision};
-        if (value.kind === 'plan' && screen.view === 'workflow' && screen.kind !== 'branch-review' &&
-            (!screen.tab || ['Plan', 'Mockups'].includes(screen.tab))) {
+        if (value.kind === 'plan' && (payload.preparePlan === true ||
+            screen.view === 'workflow' && screen.kind !== 'branch-review' &&
+            (!screen.tab || ['Plan', 'Mockups'].includes(screen.tab)))) {
           const before = {plan: state.plan, ...(state.mode === 'task' ? {mode: 'task', title: state.title} :
             {mode: 'roadmap', roadmap: state.roadmap})};
           proposal = {...base, plan: sentence(value.plan, 'a proposed plan'), before,

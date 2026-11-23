@@ -105,7 +105,6 @@ function connectProjectConversation(initial) {
       current.kind === "branch-review" ? "Review" : titles[current.view][0],
       current.tab || current.section, current.label || current.scenarioTitle].filter(Boolean).join(" / ");
     mockup.hidden = current.view !== "workflow" || Boolean(embedded && current.kind);
-    planner.hidden = current.view !== "workflow" || current.tab !== "Plan" || !!current.kind;
     planner.disabled = busy || Boolean(state?.question || state?.plannerRetry);
     const unfinished = state?.builds?.some(build => !["closed", "retired"].includes(build.status));
     archive.disabled = busy || Boolean(unfinished);
