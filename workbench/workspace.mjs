@@ -38,9 +38,9 @@ export async function createWorkspace({repository,local,git,origin,token,review,
       observe: () => observeRuntime({preview: () => readEnvironment('design/app-process'), origin, desktop: diagnostics}),
       idle: canRepair,
       recover: signal => signal.owner === 'host' ? diagnostics.recoverRenderer() : environment.recoverPreview(),
-      repair: async (incident, directory, signal, mayApply) => repairRuntime({
+      repair: async (incident, directory, signal, mayApply, prior) => repairRuntime({
         repository: (incident.repairOwner || incident.owner) === 'host' ? diagnostics.repository : repository,
-        incident, directory, signal, mayApply, packaged: (incident.repairOwner || incident.owner) === 'host' && diagnostics.packaged,
+        incident, directory, signal, mayApply, prior, packaged: (incident.repairOwner || incident.owner) === 'host' && diagnostics.packaged,
         profile: await tasks.getProfile(), providerOptions: await providerOptions()
       }),
       activate: row => (row.repairOwner || row.owner) === 'project' ? environment.recoverPreview() : diagnostics.activateHost(row)

@@ -97,17 +97,22 @@ test('applies a repair from an isolated checkout and preserves local edits', asy
   await writeFile(file, 'broken\n');
   await gitRead(repository, 'add', '.');
   await gitRead(repository, '-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','fixture');
-  const repair = () => repairRuntime({repository, directory, incident:{owner:'host',error:'fixture error'},
+  const repair = (prior = [], change = 'fixed', receiptDir = directory) => repairRuntime({repository, directory: receiptDir, prior,
+    incident:{owner:'host',error:'fixture error'},
     profile:{active:'fast',profiles:{fast:{stages:{build:{provider:'Codex'}}}}},
     signal:new AbortController().signal, mayApply: () => true, invoke:async ({cwd}) => {
       assert.notEqual(cwd, repository);
-      await writeFile(path.join(cwd, 'service.js'), 'fixed\n');
+      await writeFile(path.join(cwd, 'service.js'), change + '\n');
       return {text: JSON.stringify({verified:true,summary:'Fixed service',checks:'Fixture check passed'})};
     }});
   assert.deepEqual((await repair()).files, ['service.js']);
   assert.equal(await readFile(file,'utf8'), 'fixed\n');
+  const prior = [{patch: path.join(directory,'repair.patch'), files:['service.js']}];
+  const followup = path.join(directory,'followup');
+  await repair(prior, 'verified', followup);
+  assert.equal(await readFile(file,'utf8'), 'verified\n');
   await writeFile(file,'user edit\n');
-  await assert.rejects(repair(), /overlaps local changes/);
+  await assert.rejects(repair(prior, 'verified', followup), /overlaps local changes/);
   assert.equal(await readFile(file,'utf8'), 'user edit\n');
 });
 

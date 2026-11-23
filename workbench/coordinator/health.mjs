@@ -64,7 +64,7 @@ export async function createHealthReviewer({directory, observe, recover, repair,
       row.evidence = clean(signal.evidence);
       row.observations = Math.min(10, row.observations + 1);
       if (row.observations < 2 || row.state === 'attention') continue;
-      if (row.state === 'verifying' && (row.activationSession === session || clock() - row.actionAt < 60000)) continue;
+      if (['verifying', 'retrying'].includes(row.state) && (row.activationSession === session || clock() - row.actionAt < 60000)) continue;
       if (row.attempts >= 2) {
         row.state = 'attention';
         row.note = 'The runtime check still fails after repair.';
@@ -82,7 +82,8 @@ export async function createHealthReviewer({directory, observe, recover, repair,
     if (!next || action || paused || !await idle()) return;
     const {row, signal} = next;
     const quick = signal.restart && !row.attempts;
-    if (!quick && rows.flatMap(item => item.calls || []).filter(time => time > clock() - 3600000).length >= 3) return;
+    if (!quick && rows.filter(item => item.key === row.key).flatMap(item => item.calls || [])
+      .filter(time => time > clock() - 3600000).length >= 3) return;
     action = perform(row, signal, quick).catch(error => { lastError = clean(error.message); })
       .finally(() => { action = null; });
   }
@@ -102,8 +103,16 @@ export async function createHealthReviewer({directory, observe, recover, repair,
           const latest = (await observe()).find(item => item.owner + '/' + item.id === row.key);
           return latest && clean(latest.error) === row.error && await idle();
         };
-        const result = await repair(row, path.join(directory, row.id), controller.signal, stillFailing);
+        const owner = row.repairOwner || row.owner;
+        const prior = rows.filter(item => (item.repairOwner || item.owner) === owner && item.files)
+          .flatMap(item => (item.repairs || [{files: item.files, time: item.actionAt}]).map(receipt => ({
+            ...receipt, patch: path.join(directory, item.id, receipt.artifact || '', 'repair.patch')
+          }))).sort((a, b) => a.time - b.time);
+        const artifact = randomUUID();
+        const result = await repair(row, path.join(directory, row.id, artifact), controller.signal, stillFailing, prior);
         row.note = clean(result.summary);
+        if (row.files && !row.repairs) row.repairs = [{files: row.files, time: row.actionAt}];
+        (row.repairs ||= []).push({files: result.files, time: clock(), artifact});
         row.files = result.files;
         row.checks = clean(result.checks);
         row.state = 'verifying';
@@ -123,7 +132,7 @@ export async function createHealthReviewer({directory, observe, recover, repair,
         row.repairOwner = error.repairOwner;
         row.diagnosis = clean(error.message);
       }
-      row.state = row.attempts < 2 ? 'verifying' : 'attention';
+      row.state = row.attempts < 2 ? 'retrying' : 'attention';
       row.actionAt = clock();
       row.note = clean(error.message);
     } finally {
