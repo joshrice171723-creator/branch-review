@@ -209,13 +209,17 @@ function progressPanel(openBuild, onProgress) {
   const box=element("section","panel run-map");
   const shell=element("div","run-map-body");
   const taskTitle=element("p","run-map-task");
+  const coordinatorStatus=element("span");
+  const coordinatorInfo=element("details","run-map-coordinator",
+    element("summary","",element("strong","","Workbench coordinator"),document.createTextNode(" · "),coordinatorStatus),
+    element("p","stage-meta","Starts stages, runs project checks, and saves where the build can resume. Select a stage to see its agent, checks, and recovery activity."));
   const grid=element("div","run-map-grid");
   const detail=element("section","run-map-detail");
   const mode=button("Preview next build",()=>{previewNext=!previewNext; selectedStage=null; draw();});
   const actions=element("div","actions",mode);
   const log=button("Show log",()=>showDesignLog(run.id,run.running));
   if(openBuild)actions.append(button("Build options",openBuild),log);
-  box.append(heading(active().name,"",actions),taskTitle,shell);
+  box.append(heading(active().name,"",actions),taskTitle,coordinatorInfo,shell);
   shell.append(grid,detail);
   let run, group, previewNext=false, selectedStage=null, previousState;
   const definitions=WorkbenchProfile.roles;
@@ -223,6 +227,7 @@ function progressPanel(openBuild, onProgress) {
     baseline:{name:"Baseline checks",icon:"✓",kind:"Gate"},repair:{name:"Repair",icon:"↺",kind:"Agent"},
     humanReview:{name:"Branch Review",icon:"◇",kind:"Gate"},push:{name:"Push to GitHub",icon:"↑",kind:"Gate"}
   };
+  const isRecovery=text=>/^(Recovering |Reusing current receipt|Checking a specific gap|Retrying |Retry the blocked stage)/.test(text);
   function draw() {
     const focused=activeElement();
     const focus=box.contains(focused)?focused.dataset.stageKey:null;
@@ -238,6 +243,15 @@ function progressPanel(openBuild, onProgress) {
     log.hidden=!run;
     mode.textContent=previewNext?"Show current run":"Preview next build";
     taskTitle.textContent=current ? current.title + (current.running ? " · Running" : "") : "Next build";
+    const currentStage=last && (extra[last.role] || definitions.find(role=>role.id===last.role))?.name;
+    const recoveryStatus=current?.events?.findLast(event=>isRecovery(event.text))?.text ||
+      (isRecovery(last?.reason) ? last.reason : "");
+    const quotaWait=Date.parse(failure?.providerLimit?.resetAt) > Date.now();
+    coordinatorStatus.textContent=current?.running ? (recoveryStatus || "Running " + (currentStage || "build")) :
+      quotaWait ? "Waiting for provider quota to reset" : failure ? "Stopped at " +
+        ((extra[failure.role] || definitions.find(role=>role.id===failure.role))?.name || "current stage") :
+      current?.question || current?.evidenceRequest ? "Waiting for a response" :
+      gate?.waiting ? "Waiting for Branch Review" : current?.stage==="completed" ? "Build complete" : "Waiting to start";
     grid.replaceChildren();
     for(const [key,steps] of Object.entries(designStageSteps)){
       const role=extra[key] || definitions.find(r=>r.id===key);
@@ -255,8 +269,11 @@ function progressPanel(openBuild, onProgress) {
       const isReturn=next?.reason && ["plan","repair"].includes(next.role);
       const completed=Boolean(attempt && (next || current?.stage==="completed")) || key==="humanReview" && gate?.approved || key==="push" && gate?.pushed;
       const limited=failed && /\b429\b|rate_limit_error|quota exhausted/i.test(failure.message);
-      const status=failed?(limited?"Quota reached":failure.repairLimit?"Repair limit reached":"Stopped"):
-        needsEvidence?"Needs evidence":skipped?"Skipped":waiting?"Waiting for you":live?"Running":isReturn?"Returned":
+      const recovery=live && ((current.events || []).findLast(event => isRecovery(event.text))?.text ||
+        (isRecovery(attempt.reason) ? attempt.reason : ""));
+      const budgetStopped=failed && /^PROVIDER_(?:CALL_TIMEOUT|(?:TASK_TIME|USAGE)_BUDGET)$/.test(failure.errorCode || "");
+      const status=failed?(limited?"Quota reached":budgetStopped?"Limit reached":failure.repairLimit?"Repair limit reached":"Stopped"):
+        needsEvidence?"Needs evidence":skipped?"Skipped":waiting?"Waiting for you":live?(recovery?"Recovering":"Running"):isReturn?"Returned":
         completed?"Complete":key==="repair"&&!attempt?"If requested":key==="push"?"On request":attempt?"Paused":"Upcoming";
       const card=button("",()=>{selectedStage=key;draw();},"stage-card run-map-card");
       card.dataset.stageKey=key;card.dataset.status=status;
@@ -274,6 +291,7 @@ function progressPanel(openBuild, onProgress) {
       if(key!==pick)continue;
       detail.dataset.stageKey=key;
       detail.replaceChildren(element("h3","",role.name),element("p","stage-meta",config?.provider || (key==="humanReview"?"Human":"Workbench")));
+      if(recovery)detail.append(element("p","stage-meta",recovery));
       if(needsEvidence)detail.append(element("div","run-map-error",element("strong","","Audit needs evidence"),
         formatEvidenceText(current.evidenceRequest.text)));
       if(metrics.length)detail.append(element("p","step-runtime",element("span","",
@@ -285,7 +303,8 @@ function progressPanel(openBuild, onProgress) {
         const reset = /resets at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(failure.message)?.[1];
         const resetTime = reset && new Date(reset);
         detail.append(element("div","run-map-error",
-          element("strong","",limited?"Provider quota reached":failure.repairLimit?"Repair limit reached":"Stage stopped"),
+          element("strong","",limited?"Provider quota reached":budgetStopped?"Provider limit reached":
+            failure.repairLimit?"Repair limit reached":"Stage stopped"),
           ...(config?.provider ? [element("p","","Stopped attempt · " + agentLabel(config))] : []),
           ...(failure.savedAgent ? [element("p","","Saved agent · " + agentLabel(failure.savedAgent))] : []),
           formatEvidenceText(failure.message.replace(/\s*\[request_id=[^\]]+\]/i,"")),

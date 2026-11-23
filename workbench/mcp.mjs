@@ -46,10 +46,11 @@ function checkValue(value,rule) {
 }
 
 export function toolDescriptions() {
-  return tools.map(({name,description})=>({name,description,app:name.startsWith('app_')}));
+  return tools.map(({name,description,write})=>({name,description,app:name.startsWith('app_'),stageAllowed:!write,
+    access:write?'Project writes':name==='quality_routes'?'Reads or runs project code':'Read only'}));
 }
 
-export async function workspaceMcp(message,{call,getProfile,verified}) {
+export async function workspaceMcp(message,{call,getProfile,verified,stageTools}) {
   const {id,method,params={}} = message || {};
   const error = (code,text) => ({jsonrpc:'2.0',id:id ?? null,error:{code,message:text}});
   if (message?.jsonrpc!=='2.0' || typeof method!=='string' || (id!==undefined && typeof id!=='string' && !Number.isInteger(id)))
@@ -66,7 +67,8 @@ export async function workspaceMcp(message,{call,getProfile,verified}) {
   }
   if (method==='ping') return reply({});
   const allowed = (await getProfile())?.permittedTools || [];
-  const visible = tools.filter(item=>!item.name.startsWith('app_') || allowed.includes(item.name));
+  const visible = tools.filter(item=>(!item.name.startsWith('app_') || allowed.includes(item.name)) &&
+    (!stageTools || !item.write && stageTools.includes(item.name)));
   if (method==='tools/list') return reply({tools:visible.map(({write,...definition})=>definition)});
   if (method!=='tools/call') return error(-32601,'Unknown method.');
   const definition = visible.find(item=>item.name===params.name);
@@ -84,4 +86,60 @@ export async function workspaceMcp(message,{call,getProfile,verified}) {
   } catch (issue) {
     return reply({isError:true,content:[{type:'text',text:issue.message}]});
   }
+}
+import http from 'node:http';
+import {randomUUID} from 'node:crypto';
+
+
+export function selectStageTools(stage, selections, {scope = '', evidenceOnly = false} = {}) {
+  if (Array.isArray(selections)) return tools.filter(item=>!item.write && selections.includes(item.name)).map(item=>item.name);
+  if (evidenceOnly) return [];
+  const selected = new Set();
+  if (stage === 'plan' || stage === 'plan_review') selected.add('project_capabilities');
+  if (/\b(?:route|endpoint|ipc)\b/i.test(scope)) selected.add('quality_routes');
+  if (/\b(?:quality|benchmark|rubric)\b/i.test(scope)) selected.add('quality_status');
+  if (/\b(?:setup|runtime|environment|preview|electron)\b/i.test(scope) && stage !== 'final_review') {
+    selected.add('inspect_environment');
+  }
+  return [...selected];
+}
+
+export async function openStageMcp(call, profile, names) {
+  if (!names.length) return null;
+  const token = '/' + randomUUID();
+  let calls = 0;
+  const listener = http.createServer(async (req, res) => {
+    if (req.url !== token || req.method !== 'POST') {
+      res.writeHead(req.url === token ? 405 : 404).end();
+      return;
+    }
+    try {
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 65536) throw Error('The tool request is too large.');
+        chunks.push(chunk);
+      }
+      const request = JSON.parse(Buffer.concat(chunks));
+      const result = await workspaceMcp(request, {getProfile: () => profile, stageTools: names, verified: false,
+        call: async (name, values) => {
+          if (++calls > 8) throw Error('This stage reached its tool call limit.');
+          const data = await call(name, values);
+          const serialized = JSON.stringify(data) ?? '';
+          return serialized.length > 20000 ? {preview: serialized.slice(0, 20000), truncated: true} : data;
+        }});
+      if (result === null) res.writeHead(202).end();
+      else res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(result));
+    } catch {
+      if (!res.writableEnded) res.writeHead(400).end();
+    }
+  });
+  listener.requestTimeout = 15000;
+  await new Promise((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(0, '127.0.0.1', resolve);
+  });
+  return {url: 'http://127.0.0.1:' + listener.address().port + token, names,
+    close() { listener.close(); listener.closeAllConnections(); }};
 }

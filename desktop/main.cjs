@@ -100,7 +100,8 @@ async function launch() {
   process.env.BRANCH_REVIEW_DESKTOP_REPOSITORY=savedConfig.repository;
   settings.projects={...settings.projects,[path.resolve(savedConfig.repository).toLowerCase()]:home};
   const {startServer} = await import(pathToFileURL(path.join(root, 'server.mjs')).href);
-  const {origin, port} = await startServer({allowPortFallback:app.isPackaged || hasPortOverride, preferredPort:settings.controllerPort});
+  const {origin, port, beginDesktopExit} = await startServer({allowPortFallback:app.isPackaged || hasPortOverride,
+    preferredPort:settings.controllerPort, desktop:true});
   if (app.isPackaged && !hasPortOverride) settings.controllerPort=port;
   await writeFile(settingsPath, JSON.stringify({...settings,home}));
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -187,6 +188,10 @@ async function launch() {
   const {state:runtimeState}=await import(pathToFileURL(path.join(root,'adapter.mjs')).href);
   runtimeState.automaticQa=false;
   let qaWindow,qaCancelled=false,qaTask,qaStarting=false;
+  function protectDesktopExit() {
+    if (qaTask || qaStarting) throw Error('Finish or cancel browser QA before leaving this project.');
+    return beginDesktopExit();
+  }
   async function startQa(input){
     if(qaTask || qaStarting)throw Error('A browser run is already active.');
     qaStarting=true;
@@ -240,8 +245,18 @@ async function launch() {
     await mkdir(newHome, { recursive: true });
     const existing = JSON.parse(await readFile(path.join(newHome, 'config.json'), 'utf8').catch(() => '{}'));
     await writeFile(path.join(newHome, 'config.json'), JSON.stringify({ ...existing, repository, previewRoot: existing.previewRoot || path.join(newHome, 'previews') }, null, 2));
-    const selectedKey=path.resolve(repository).toLowerCase();settings.hiddenProjects=(settings.hiddenProjects || []).filter(key=>key!==selectedKey);settings.recentProjects=[selectedKey,...(settings.recentProjects || []).filter(key=>key!==selectedKey)].slice(0,50);
-    await writeFile(settingsPath, JSON.stringify({...settings,projects:{...settings.projects,[selectedKey]:newHome},home:newHome,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));
+    const selectedKey = path.resolve(repository).toLowerCase();
+    const hiddenProjects = (settings.hiddenProjects || []).filter(key => key !== selectedKey);
+    const recentProjects = [selectedKey, ...(settings.recentProjects || []).filter(key => key !== selectedKey)].slice(0,50);
+    const resume = protectDesktopExit();
+    try {
+      await writeFile(settingsPath, JSON.stringify({...settings, hiddenProjects, recentProjects,
+        projects:{...settings.projects,[selectedKey]:newHome}, home:newHome,
+        window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));
+    } catch (error) {
+      resume();
+      throw error;
+    }
     delete process.env.BRANCH_REVIEW_HOME;
     closing = true; app.relaunch(); app.exit(0);
   });
@@ -271,12 +286,18 @@ async function launch() {
     if (closing) return;
     event.preventDefault();
     const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
-    if (state?.busy || state?.workspaceBusy || state?.jobsRunning || state?.qaRunning) { await dialog.showMessageBox(window, {message:'Finish or cancel active builds, jobs, and browser QA before closing Branch Review.'}); return; }
+    if (state?.busy || state?.workspaceBusy || state?.jobsRunning || state?.qaRunning || qaTask || qaStarting) {
+      await dialog.showMessageBox(window, {message:'Finish or cancel active builds, jobs, and browser QA before closing Branch Review.'});
+      return;
+    }
     const result=await dialog.showMessageBox(window, { type: 'question', buttons: ['Keep working', 'Close app'], defaultId: 0, cancelId: 0,
       message: 'Close Branch Review?', detail: 'Reviews stay saved. Generic preview processes stop when the app closes. Meta Clinic previews remain available until you stop them.' });
     if(result.response===1){
+      let resume;
+      try { resume=protectDesktopExit(); }
+      catch(error){ await dialog.showMessageBox(window,{message:error.message});return; }
       try {await writeFile(settingsPath,JSON.stringify({...settings,home,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));}
-      catch(error){await dialog.showMessageBox(window,{message:'Could not save window settings.',detail:error.message});return;}
+      catch(error){resume();await dialog.showMessageBox(window,{message:'Could not save window settings.',detail:error.message});return;}
       closing=true;app.exit(0);
     }
   });

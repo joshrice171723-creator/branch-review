@@ -2,8 +2,9 @@ import {readdir} from 'node:fs/promises';
 
 const metricPath = folder => folder + '/metrics.jsonl';
 
-export async function readMetrics(files, folder) {
-  const data = await files.bytes(metricPath(folder), 4_000_000, Buffer.alloc(0)).catch(() => Buffer.alloc(0));
+export async function readMetrics(files, folder, strict = false) {
+  const bytes = files.bytes(metricPath(folder), 4_000_000, Buffer.alloc(0));
+  const data = await (strict ? bytes : bytes.catch(() => Buffer.alloc(0)));
   const records = new Map();
   for (const line of data.toString('utf8').split('\n').slice(0, -1)) {
     try {
@@ -14,7 +15,34 @@ export async function readMetrics(files, folder) {
   return [...records.values()];
 }
 
-export const appendMetric = (files, folder, value) => files.append(metricPath(folder), value).catch(() => {});
+export function appendMetric(files, folder, value, strict = false) {
+  const write = files.append(metricPath(folder), value);
+  return strict ? write : write.catch(() => {});
+}
+
+export function providerSpend(metrics) {
+  let tokens = 0;
+  let cached = 0;
+  let unknown = 0;
+  let milliseconds = 0;
+  for (const call of metrics.filter(row => row.provider)) {
+    const {input, output, cached: reads} = call.usage ?? {};
+    if (Number.isSafeInteger(input) && input >= 0 && Number.isSafeInteger(output) && output >= 0) {
+      const cacheReads = Number.isSafeInteger(reads) && reads >= 0 ? Math.min(input, reads) : 0;
+      cached += cacheReads;
+      tokens += input - cacheReads + output;
+    } else {
+      unknown++;
+    }
+    if (Number.isFinite(call.finishedAt) && Number.isFinite(call.startedAt)) {
+      milliseconds += Math.max(0, call.finishedAt - call.startedAt);
+    } else if (Number.isSafeInteger(call.timeoutMs) && call.timeoutMs > 0) {
+      // A lost call can consume its allocation before Workbench reconnects.
+      milliseconds += call.timeoutMs;
+    }
+  }
+  return {tokens, cached, unknown, milliseconds};
+}
 
 export async function legacyProviderMetrics(files, folder, visits) {
   const prefix = folder + '/provider-calls';
@@ -60,7 +88,8 @@ export function visitMetrics(visit, attempts, metrics, receipts) {
     step.milliseconds += duration.milliseconds;
     if (duration.runningSince !== null) step.runningSince = duration.runningSince;
     if (metric.provider) providers.push({provider: metric.provider, model: metric.model, outcome: metric.outcome,
-      time: duration, usage: metric.usage ?? null});
+      time: duration, usage: metric.usage ?? null, sourceAccess: metric.sourceAccess, shellTools: metric.shellTools,
+      timeoutMs: metric.timeoutMs});
   }
   const recordedChecks = new Map();
   for (const receipt of receipts) if (Number.isFinite(receipt.duration_seconds)) {

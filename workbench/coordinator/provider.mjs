@@ -7,6 +7,7 @@ import {promisify} from 'node:util';
 import {inflateSync} from 'node:zlib';
 import {agentArgs, consumeAgentEvent, executable, launchCommand} from '../../providers.mjs';
 import {redact} from '../../jobs.mjs';
+import {annotateProviderFailure} from './provider-limit.mjs';
 
 const exec = promisify(execFile);
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -48,7 +49,7 @@ function environment() {
   return env;
 }
 
-function codexArgs({cwd, write, model, effort, output, schema, images, image}) {
+function codexArgs({cwd, write, model, effort, output, schema, images, image, shellTools, stageMcp}) {
   return [
     'exec', '--json', '--color', 'never', '--ignore-user-config', '--skip-git-repo-check',
     '--sandbox', write ? 'workspace-write' : 'read-only', '-C', cwd,
@@ -57,7 +58,10 @@ function codexArgs({cwd, write, model, effort, output, schema, images, image}) {
     ...(process.platform === 'win32' ? ['-c', 'windows.sandbox="elevated"'] : []),
     ...(model ? ['--model', model] : []), ...(effort ? ['-c', 'model_reasoning_effort=' + JSON.stringify(effort)] : []),
     '--ephemeral', '--output-last-message', output, ...(schema ? ['--output-schema', schema] : []),
-    ...(image ? ['--disable', 'shell_tool', '--enable', 'image_generation'] : []),
+    ...(image || shellTools === false ? ['--disable', 'shell_tool'] : []),
+    ...(stageMcp ? ['-c', 'mcp_servers.workbench_stage.url=' + JSON.stringify(stageMcp.url),
+      '-c', 'mcp_servers.workbench_stage.enabled_tools=' + JSON.stringify(stageMcp.names)] : []),
+    ...(image ? ['--enable', 'image_generation'] : []),
     ...images.flatMap(filename => ['--image', filename]), '-'
   ];
 }
@@ -73,8 +77,11 @@ async function stop(child) {
 }
 
 export async function runProvider(options) {
-  const {stage, provider, cwd, write = false, model, effort, prompt, schema, signal, report, output,
-    images = [], image = false, providerOptions = {}, onUsage} = options;
+  const {stage, stageLabel = stage, provider, cwd, model, effort, prompt, schema, signal, report, output,
+    images = [], image = false, providerOptions = {}, onUsage, evidenceOnly = false,
+    timeoutMs = image ? 420_000 : 1_800_000, timeoutCode = 'PROVIDER_CALL_TIMEOUT'} = options;
+  const write = !evidenceOnly && (options.write ?? false);
+  const shellTools = !evidenceOnly && options.shellTools !== false;
   const providerId = Object.hasOwn(providerIds, provider) && providerIds[provider];
   if (!providerId || (write && providerId !== 'codex')) throw Error('Unsupported provider for ' + stage + '.');
   if (image && providerId !== 'codex') throw Error('This planner provider does not support mockup generation.');
@@ -83,7 +90,7 @@ export async function runProvider(options) {
     (providerOptions.provider === providerId && providerOptions.executable || undefined);
   const file = await executable(providerId, override);
   const args = providerId === 'codex'
-    ? codexArgs({cwd, write, model, effort, output, schema, images, image})
+    ? codexArgs({cwd, write, model, effort, output, schema, images, image, shellTools, stageMcp: options.stageMcp})
     : [
         ...agentArgs(providerId, {kind: 'plan', cwd, output, images}),
         ...(model ? ['--model', model] : []), ...(effort ? ['--reasoning-effort', effort] : []),
@@ -97,15 +104,17 @@ export async function runProvider(options) {
   let timedOut = false;
   let complete = false;
   let answer = '';
+  let limit;
   const state = {provider: providerId};
   const closed = new Promise(resolve => {
     child.once('error', error => resolve({error}));
     child.once('close', code => resolve({code}));
   });
-  const abort = () => void stop(child);
+  let stopping;
+  const abort = () => { stopping ??= stop(child); };
   signal?.addEventListener('abort', abort, {once: true});
   if (signal?.aborted) abort();
-  const timer = setTimeout(() => { timedOut = true; abort(); }, image ? 420000 : 1800000);
+  const timer = setTimeout(() => { timedOut = true; abort(); }, timeoutMs);
   child.stderr.setEncoding('utf8').on('data', chunk => { stderr = (stderr + chunk).slice(-8000); });
   child.stdin.on('error', () => {});
   child.stdin.end(providerId === 'muse' ? '' : prompt);
@@ -120,6 +129,14 @@ export async function runProvider(options) {
       if (usage) onUsage?.(usage);
       if (kind === 'turn.completed') complete = true;
       if (kind === 'error' || kind === 'turn.failed') state.agentError ||= event.message || 'The provider did not complete the turn.';
+      if (kind === 'error' || kind === 'turn.failed' || kind === 'run.terminal.failed' || kind === 'result' && event.is_error) {
+        const detail = event.error ?? event.payload ?? event;
+        const metadata = {message: detail.message ?? detail.reason ?? state.agentError,
+          status: detail.status ?? detail.status_code, code: detail.code ?? detail.type,
+          resetAt: detail.resetAt ?? detail.reset_at ?? detail.resets_at};
+        const reported = annotateProviderFailure(metadata, {provider, model, stage}).providerLimit;
+        if (reported && (!limit?.resetAt || reported.resetAt)) limit = reported;
+      }
       if (kind === 'item.completed' && event.item?.type === 'agent_message') answer = event.item.text;
       if (kind === 'thread.started') await report?.('Session started');
       if (kind === 'run.model.configured' && /^[a-z0-9_.-]{1,100}$/i.test(event.payload?.model_id ?? '')) {
@@ -131,11 +148,19 @@ export async function runProvider(options) {
     }
     const {code, error} = await closed;
     signal?.throwIfAborted();
-    if (timedOut) throw Error(provider + ' timed out during ' + stage + '.');
+    if (timedOut) {
+      const message = timeoutCode === 'PROVIDER_TASK_TIME_BUDGET'
+        ? 'The task used its remaining provider time during ' + stageLabel + '.'
+        : provider + ' reached the ' + Math.ceil(timeoutMs / 1000) + '-second call limit during ' + stageLabel + '.';
+      throw Object.assign(Error(message), {code: timeoutCode});
+    }
     if (error) throw error;
     const finished = providerId === 'codex' ? complete : providerId === 'muse' ? state.agentTerminal === 'completed' : !!state.agentResult;
     if (code !== 0 || state.agentError || !finished) {
-      throw Error(redact(state.agentError || stderr.trim() || provider + ' did not complete ' + stage + '.').slice(-2000));
+      const error = Error(redact(state.agentError || stderr.trim() || provider + ' did not complete ' + stage + '.').slice(-2000));
+      const failure = annotateProviderFailure(error, {provider, model, stage});
+      if (limit && !failure.providerLimit?.resetAt) failure.providerLimit = limit;
+      throw failure;
     }
     if (providerId === 'codex' && !answer) {
       const file = await lstat(output).catch(() => null);
@@ -146,7 +171,8 @@ export async function runProvider(options) {
     if (typeof answer !== 'string' || !answer.trim()) throw Error(provider + ' returned no result for ' + stage + '.');
     return {text: answer, threadId: state.chatId};
   } catch (error) {
-    if (child.exitCode === null && child.signalCode === null) await stop(child);
+    if (child.exitCode === null && child.signalCode === null) abort();
+    await stopping;
     await closed;
     throw error;
   } finally {

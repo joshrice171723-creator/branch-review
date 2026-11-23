@@ -12,19 +12,25 @@ const launch = new URL('data:text/javascript,' + encodeURIComponent(`
   const {slots} = await import(workerData.adapter);
   Object.values(slots).forEach((slot,index)=>{slot.proxy = workerData.occupied[index+1];});
   const {startServer} = await import(workerData.server);
-  const result = await startServer({allowPortFallback:true,preferredPort:workerData.occupied[0]});
-  parentPort.postMessage({...result,previewPorts:Object.values(slots).map(slot=>slot.proxy)});
+  const {origin,port,beginDesktopExit} = await startServer({allowPortFallback:true,preferredPort:workerData.occupied[0],desktop:true});
+  let resume;
+  parentPort.on('message', command => {
+    if (command === 'suspend') resume = beginDesktopExit();
+    if (command === 'resume') resume();
+    parentPort.postMessage(command);
+  });
+  parentPort.postMessage({origin,port,previewPorts:Object.values(slots).map(slot=>slot.proxy)});
 `));
 const originFor = port => `http://127.0.0.1:${port}`;
 
-test('packaged mode binds available loopback ports and keeps an explicit controller port fixed', {timeout:20000}, async t => {
+test('packaged mode binds available loopback ports and keeps an explicit controller port fixed', {timeout:30000}, async t => {
   const home = await mkdtemp(path.join(tmpdir(),'branch-review-startup-'));
   const foreign = [];
   const workers = [];
   t.after(async()=>{
     await Promise.all(workers.map(worker=>worker.terminate()));
     for (const server of foreign) server.close();
-    await rm(home,{recursive:true,force:true});
+    await rm(home,{recursive:true,force:true,maxRetries:3,retryDelay:150});
   });
   for (let index=0; index<4; index++) {
     const server = http.createServer((_req,res)=>res.end('Existing listener'));
@@ -58,6 +64,22 @@ test('packaged mode binds available loopback ports and keeps an explicit control
   await shell.text();
   const state = await fetch(origin+'/api/state').then(response=>response.json());
   assert.equal(state.repository,home);
+  const worker = workers.at(-1);
+  const request = async command => {
+    const reply = once(worker,'message');
+    worker.postMessage(command);
+    assert.deepEqual(await reply,[command]);
+  };
+  const openWorkbench = () => fetch(origin+'/api/workbench-open',{method:'POST',
+    headers:{Origin:origin,'X-Review-Token':state.token}});
+  await request('suspend');
+  const blocked = await openWorkbench();
+  assert.equal(blocked.status,409);
+  assert.match((await blocked.json()).error,/closing or switching projects/);
+  await request('resume');
+  const opened = await openWorkbench();
+  assert.equal(opened.status,200);
+  await opened.json();
   for (const previewPort of previewPorts) {
     const preview = await fetch(originFor(previewPort));
     assert.equal(preview.status,503);

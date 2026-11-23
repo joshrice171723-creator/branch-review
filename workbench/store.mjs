@@ -7,7 +7,8 @@ import {fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import {WorkbenchProfile, modelCatalog, presetDocuments} from './profile.mjs';
-import {capture} from './quality/runner.mjs';
+import {capture, checkArgv} from './quality/runner.mjs';
+import {checkFile, checkPathInside, resolveCheckCommand} from './check-command.mjs';
 
 const exec = promisify(execFile);
 const runPattern = /^\d{8}T\d{12}-[a-f0-9]{8}$/;
@@ -35,7 +36,7 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const now = () => new Date().toISOString();
 const compareKeys = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
 const json = value => JSON.stringify(value, null, 2) + '\n';
-const passing = result => result?.exit_code === 0 && result.source_changed === false;
+const passing = result => result?.exit_code === 0 && result.source_changed === false && result.inputs_changed !== true;
 
 function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(item => canonical(item)).join(',') + ']';
@@ -197,6 +198,12 @@ function checkList(config) {
       row.argv.every(arg => typeof arg === 'string' && arg.length && !arg.includes('\0')),
       'Checks require explicit argv arrays.');
     assert(typeof row.required === 'boolean' && typeof row.benchmark === 'boolean', 'Check flags must be boolean.');
+    assert(row.timeout_seconds === undefined || Number.isInteger(row.timeout_seconds) &&
+      row.timeout_seconds >= 1 && row.timeout_seconds <= 900, 'Set the check timeout from 1 to 900 seconds.');
+    assert(row.input_paths === undefined || Array.isArray(row.input_paths) &&
+      new Set(row.input_paths).size === row.input_paths.length && row.input_paths.every(name =>
+        filled(name) && !/[\\:\x00-\x1f]/.test(name) && name.split('/').every(part => part && part !== '.' && part !== '..')),
+    'Check input_paths must contain unique project-relative file paths.');
     const selected = row.phases ?? phases;
     const both = Array.isArray(selected) && selected.join(',') === 'baseline,after';
     assert(both || Array.isArray(selected) && selected.length === 1 && selected[0] === 'after' && !row.benchmark,
@@ -205,10 +212,13 @@ function checkList(config) {
   return config.checks;
 }
 
-async function projectCwd(root, cwd = '.') {
+async function projectCwd(root, cwd = '.', allowFuture = false) {
   assert(filled(cwd) && !path.isAbsolute(cwd), 'Select a check working directory inside the project.');
-  const directory = await fs.realpath(path.resolve(root, cwd));
-  assert((directory === root || directory.startsWith(root + path.sep)) && (await fs.stat(directory)).isDirectory(),
+  const target = path.resolve(root, cwd);
+  assert(checkPathInside(root, target), 'Select a check working directory inside the project.');
+  const directory = await fs.realpath(target).catch(missing);
+  if (!directory && allowFuture) return target;
+  assert(directory && checkPathInside(root, directory) && (await fs.stat(directory)).isDirectory(),
     'Select a check working directory inside the project.');
   return directory;
 }
@@ -229,13 +239,58 @@ function projectedConfig(config, profile, quality) {
   return config;
 }
 
-async function command(root, check, signal) {
-  const cwd = await projectCwd(root, check.cwd);
+async function prepareCheck(root, check, {quality, allowFuture} = {}) {
+  const cwd = await projectCwd(root, check.cwd, allowFuture);
+  const argv = quality ? checkArgv(check.argv) : check.argv;
+  const command = await resolveCheckCommand(argv, cwd).catch(error => {
+    if (allowFuture && error.input && checkPathInside(root, error.input)) return null;
+    throw error;
+  });
+  const inputs = [];
+  for (const name of check.input_paths ?? []) {
+    const file = await checkFile(safePath(root, name));
+    assert(file || allowFuture, 'Check input file is missing or unreadable: ' + name);
+    if (file) {
+      assert(checkPathInside(root, file.target), 'Check input file must resolve inside the project: ' + name);
+      inputs.push(file);
+    }
+  }
+  return {root, cwd, argv, command, inputs, timeout:check.timeout_seconds ?? 300};
+}
+
+async function checkInputFingerprint({root, cwd, command, inputs, timeout}, executableHash) {
+  const files = new Map([command.executable, ...command.entryFiles, ...inputs].map(file => [file.file, file]));
+  for (const arg of command.args) {
+    const name = arg.replace(/^--[^=]+=/, '');
+    if (name.startsWith('-') || /[\x00-\x1f<>"|*?]/.test(name) || /^(?:[a-z]+:)?[/\\]{2}/i.test(name)) continue;
+    const file = path.resolve(cwd, name);
+    if (files.has(file) || file === path.join(root, localPreviewLog)) continue;
+    const input = await checkFile(file);
+    if (input) files.set(file, input);
+  }
+  const knownInputs = await Promise.all([...files.values()].map(async ({file, target, mode}) => ({
+    file, target, mode,
+    sha256:await (file === command.file ? executableHash(target) : fileHash(target))
+  })));
+  return fingerprint({cwd, file:command.file, args:command.args, node_mode:command.nodeMode, timeout, files:knownInputs});
+}
+
+async function executableSignature(file) {
+  const {dev, ino, size, mode, mtimeNs, ctimeNs} = await fs.stat(file, {bigint:true});
+  return [dev, ino, size, mode, mtimeNs, ctimeNs].join(':');
+}
+
+function failedCommand(error, signal) {
+  return {stdout:'', stderr:error.message, exit_code:signal?.aborted ? 128 : 127, spawn_error:error.message};
+}
+
+async function command(prepared, signal) {
   try {
-    const result = await capture(check.argv, {cwd, signal, encoding:null, limit:maxRecord, timeout:null, stopOnLimit:true});
+    const {cwd, argv, command, timeout} = prepared;
+    const result = await capture(argv, {cwd, command, signal, encoding:null, limit:maxRecord, timeout, stopOnLimit:true});
     return {...result, exit_code:result.exit_code ?? (signal?.aborted ? 128 : 127), spawn_error:result.error ?? null};
   } catch (error) {
-    return {stdout:'', stderr:error.message, exit_code:signal?.aborted ? 128 : 127, spawn_error:error.message};
+    return failedCommand(error, signal);
   }
 }
 
@@ -391,7 +446,24 @@ async function lock(home, operation) {
 
 export function createStore(repository, {engineRoot = path.join(supportRoot, 'engine'), qualityPin, qualityCheck} = {}) {
   const resolvedRoot = fs.realpath(repository);
+  const executables = new Map();
   let qualityService;
+
+  async function executableHash(file) {
+    const signature = await executableSignature(file);
+    const saved = executables.get(file);
+    if (saved?.signature === signature) return saved.sha256;
+    const sha256 = fileHash(file).then(async digest => {
+      assert(signature === await executableSignature(file), 'Check executable changed while reading: ' + file);
+      return digest;
+    });
+    executables.set(file, {signature, sha256});
+    try { return await sha256; }
+    catch (error) {
+      if (executables.get(file)?.sha256 === sha256) executables.delete(file);
+      throw error;
+    }
+  }
 
   async function qualityRunner() {
     qualityService ??= import('./quality.mjs').then(({createQuality}) => createQuality({repository}));
@@ -514,7 +586,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
   async function validateChecks(settings) {
     const root = await resolvedRoot;
     const checks = checkList(settings);
-    for (const check of checks) await projectCwd(root, check.cwd);
+    for (const check of checks) await projectCwd(root, check.cwd, check.phases?.join(',') === 'after');
     return checks;
   }
 
@@ -750,6 +822,22 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return added?.length ? {...pinned, checks: [...pinned.checks, ...added]} : pinned;
   }
 
+  async function preflightChecks(id, {phase = 'baseline'} = {}) {
+    const run = await selected(id);
+    const root = await resolvedRoot;
+    const blockers = [];
+    for (const check of checkList(await configurationFor(run))) {
+      if (!(check.required || check.benchmark) || !(check.phases ?? phases).includes('after')) continue;
+      try {
+        const allowFuture = phase === 'baseline' && !(check.phases ?? phases).includes('baseline');
+        await prepareCheck(root, check, {quality:run.task.quality, allowFuture});
+      } catch (error) {
+        blockers.push({check:check.name, reason:error.message});
+      }
+    }
+    return blockers;
+  }
+
   async function agreementIssues(run) {
     const {task, taskDir, id} = run;
     const issues = await integrityIssues(taskDir);
@@ -862,6 +950,48 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     })).then(results => results.filter(Boolean));
   }
 
+  async function checkInputs(run, check) {
+    const prepared = await prepareCheck(await resolvedRoot, check, {quality:run.task.quality});
+    return {prepared, sha256:await checkInputFingerprint(prepared, executableHash)};
+  }
+
+  async function receiptIssues(run, receipt, check, current, contractHash) {
+    const issues = [];
+    if (receipt.check_sha256 !== fingerprint(check)) issues.push('Check configuration changed: ' + check.name);
+    if (check.benchmark && receipt.benchmark_contract_sha256 !== contractHash) {
+      issues.push('Check benchmark contract changed: ' + check.name);
+    }
+    if (run.task.quality && receipt.quality_revision !== run.task.quality.revision) {
+      issues.push('Check Quality revision differs from the task: ' + check.name);
+    }
+    if (receipt.phase === 'after') {
+      if (receipt.source_before_sha256 !== current.snapshot_sha256 || receipt.source_after_sha256 !== current.snapshot_sha256 ||
+          receipt.diff_sha256 && receipt.diff_sha256 !== current.diff_sha256) {
+        issues.push('After evidence is stale after source mutation: ' + check.name);
+      } else if (passing(receipt)) {
+        const inputs = await checkInputs(run, check).catch(() => null);
+        if (!receipt.check_inputs_sha256 || receipt.check_inputs_sha256 !== inputs?.sha256) {
+          issues.push('After evidence is stale after check inputs changed: ' + check.name);
+        }
+      }
+    }
+    return issues;
+  }
+
+  async function checkReceiptStatus(id, receipt, current) {
+    if (!receipt) return 'stale';
+    const run = await selected(id);
+    const settings = await configurationFor(run);
+    const check = checkList(settings).find(row => row.name === receipt.check);
+    if (!check || receipt.phase !== 'after') return 'stale';
+    if (!current || !current.diff_sha256 && !current.files) current = await sourceSnapshot(await resolvedRoot, run.task);
+    current = {...current, diff_sha256:current.diff_sha256 ?? changeFingerprint(run.task.initial_snapshot.files, current.files)};
+    const contract = check.benchmark && await benchmarkContract(settings, run.task.quality).catch(() => null);
+    if (check.benchmark && !contract) return 'stale';
+    if ((await receiptIssues(run, receipt, check, current, contract && fingerprint(contract))).length) return 'stale';
+    return passing(receipt) ? 'passed' : 'failed';
+  }
+
   function baselineSource(run, before, contract) {
     const initial = run.task.initial_snapshot.files;
     const filtered = {...before.files};
@@ -892,28 +1022,36 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     const quality = run.task.quality;
     let result;
     let measurement;
-    if (quality) {
-      try {
+    let inputs;
+    try {
+      inputs = await checkInputs(run, check);
+      if (quality) {
         const executeCheck = qualityCheck ?? (await qualityRunner()).taskCheck;
         measurement = await executeCheck({policy:quality, check:check.name, files:before.files, signal});
         result = {stdout:check.benchmark ? json(measurement) : measurement.stdout ?? '',
           stderr:measurement.stderr ?? measurement.error ?? '', exit_code:measurement.exit_code ?? (measurement.status === 'passed' ? 0 : 1),
-          spawn_error:measurement.error ?? null, stdout_truncated:measurement.stdout_truncated, stderr_truncated:measurement.stderr_truncated};
-      } catch (error) {
-        result = {stdout:'', stderr:error.message, exit_code:signal?.aborted ? 128 : 127, spawn_error:error.message};
+          spawn_error:measurement.status === 'error' ? measurement.error ?? null : null,
+          timed_out:measurement.timed_out || measurement.samples?.some(row => row.command?.timed_out || row.reset?.timed_out),
+          stdout_truncated:measurement.stdout_truncated, stderr_truncated:measurement.stderr_truncated};
+      } else {
+        result = await command(inputs.prepared, signal);
       }
-    } else {
-      result = await command(root, check, signal);
+    } catch (error) {
+      result = failedCommand(error, signal);
     }
     const duration_seconds = Math.round((performance.now() - start) * 1_000) / 1_000_000;
     const after = await sourceSnapshot(root, run.task);
     const source_changed = before.snapshot_sha256 !== after.snapshot_sha256 || before.head !== after.head ||
       before.branch !== after.branch || before.index_sha256 !== after.index_sha256;
+    const afterInputs = inputs && await checkInputs(run, check).catch(() => null);
+    const inputs_changed = Boolean(inputs && inputs.sha256 !== afterInputs?.sha256);
     const relative = 'results/' + check.name + '/' + phase + '/' + id;
     const receipt = {check:check.name, phase, argv:check.argv, cwd:check.cwd ?? '.', check_sha256:checkHash,
       source_before_sha256:before.snapshot_sha256, source_after_sha256:after.snapshot_sha256, source_changed,
+      check_inputs_sha256:inputs?.sha256 ?? null, inputs_changed,
       exit_code:result.exit_code, spawn_error:result.spawn_error, started_at, duration_seconds, stdout_sha256:hash(result.stdout),
       stderr_sha256:hash(result.stderr), stdout_truncated:Boolean(result.stdout_truncated), stderr_truncated:Boolean(result.stderr_truncated),
+      ...(result.timed_out && {timed_out:true}),
       benchmark_contract_sha256:contract && check.benchmark ? fingerprint(contract) : null,
       diff_sha256:changeFingerprint(run.task.initial_snapshot.files, after.files)};
     if (quality) receipt.quality_revision = quality.revision;
@@ -928,7 +1066,8 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return {...receipt, id, evidence_path:relative};
   }
 
-  async function runConfigured(id, {name, phase, signal, benchmarks = false, measure = (_name, run) => run()} = {}) {
+  async function runConfigured(id, {name, phase, signal, benchmarks = false, reusePassing = false,
+    measure = (_name, run) => run()} = {}) {
     assert(phases.includes(phase), 'Choose baseline or after.');
     return mutate(async home => {
       const run = await selected(id, home);
@@ -953,7 +1092,19 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       }
       await pin(run);
       const results = [];
-      for (const check of checks) results.push(await measure(check.name, () => runPinnedCheck(run, check, phase, contract, signal)));
+      const reuse = reusePassing && phase === 'after';
+      const current = reuse && await sourceSnapshot(await resolvedRoot, run.task);
+      if (reuse) current.diff_sha256 = changeFingerprint(run.task.initial_snapshot.files, current.files);
+      const contractHash = contract && fingerprint(contract);
+      for (const check of checks) {
+        signal?.throwIfAborted();
+        const receipt = reuse && (await checkResults(run, check.name, phase)).at(-1);
+        if (passing(receipt) && !(await receiptIssues(run, receipt, check, current, contractHash)).length) {
+          results.push({...receipt, reused:true});
+        } else {
+          results.push(await measure(check.name, () => runPinnedCheck(run, check, phase, contract, signal)));
+        }
+      }
       const gating = results.filter(row => configured.some(check => check.name === row.check && (check.required || check.benchmark)));
       return {checks:results, verdict:gating.every(passing) ? 'pass' : 'revise'};
     });
@@ -1064,18 +1215,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
           continue;
         }
         if (!passing(latest)) issues.push('Required ' + phase + ' check failed: ' + check.name);
-        if (latest.check_sha256 !== fingerprint(check)) issues.push('Check configuration changed: ' + check.name);
-        if (check.benchmark && latest.benchmark_contract_sha256 !== contractHash) {
-          issues.push('Check benchmark contract changed: ' + check.name);
-        }
-        if (task.quality && latest.quality_revision !== task.quality.revision) {
-          issues.push('Check Quality revision differs from the task: ' + check.name);
-        }
-        if (phase === 'after' && (latest.source_before_sha256 !== snapshot.snapshot_sha256 ||
-            latest.source_after_sha256 !== snapshot.snapshot_sha256 ||
-            latest.diff_sha256 && latest.diff_sha256 !== snapshot.diff_sha256)) {
-          issues.push('After evidence is stale after source mutation: ' + check.name);
-        }
+        issues.push(...await receiptIssues(run, latest, check, snapshot, contractHash));
       }
     }
     const review = (await records(taskDir, 'reviews')).at(-1);
@@ -1307,6 +1447,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
 
   return {initialize:() => mutate(install), config, setConfig, effectiveConfig, getProfile, setProfile, profileApplied, discover, startTask, questions, answer,
     freeze, prompt, executionConfig, snapshot, runCheck, runChecks:runConfigured,
+    preflightChecks, checkReceiptStatus,
     benchmark:(id, options) => runConfigured(id, {...options, benchmarks:true}), record, readRunRecord, getRun, listRuns,
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),
     pause:(id, reason) => changeLifecycle(id, 'pause', reason), stop:(id, reason) => changeLifecycle(id, 'stop', reason),

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {pipeline} from 'node:stream/promises';
 import {isDeepStrictEqual, promisify} from 'node:util';
-import {projectCommand} from '../../web-project.mjs';
+import {resolveCheckCommand} from '../check-command.mjs';
 import {label, lockedDefinition, number, relative} from './schema.mjs';
 
 const exec = promisify(execFile);
@@ -45,6 +45,11 @@ const legacyGuard = [
   "print('Route source evidence present')"
 ].join('\n');
 const legacyGuardCode = 'exec(' + JSON.stringify(legacyGuard) + ')';
+
+export function checkArgv(argv) {
+  return argv[0] === 'python' && argv[1] === '-c' && argv[2] === legacyGuardCode ?
+    ['node', '-e', sourceGuard, ...argv.slice(3)] : argv;
+}
 
 export async function gitOutput(repository, ...args) {
   const options = typeof args.at(-1) === 'object' ? args.pop() : {};
@@ -87,21 +92,25 @@ function killTree(child) {
 }
 
 export async function capture(argv, {
-  cwd, env = process.env, signal, timeout = 120, limit = MAX_OUTPUT, stopOnLimit = false, encoding = 'utf8'
+  cwd, env = process.env, signal, timeout = 120, limit = MAX_OUTPUT, stopOnLimit = false, encoding = 'utf8', command
 }) {
   signal?.throwIfAborted();
-  const command = await projectCommand(/^npm(?:\.cmd)?$/i.test(argv[0]) ?
-    ['npm', ...argv.slice(1)] : argv, env);
+  command ??= await resolveCheckCommand(argv, cwd, env);
   signal?.throwIfAborted();
-  let error, stopping;
+  let error, stopping, timed_out;
   const streams = Object.fromEntries(['stdout', 'stderr'].map(key => [key, {chunks: [], bytes: 0, truncated: false}]));
+  const childEnv = Object.fromEntries(Object.entries(env).filter(([key]) => key.toUpperCase() !== 'ELECTRON_RUN_AS_NODE'));
+  if (command.nodeMode) childEnv.ELECTRON_RUN_AS_NODE = '1';
   const child = spawn(command.file, command.args, {
-    cwd, env: {...env, ELECTRON_RUN_AS_NODE: '1'}, windowsHide: true, shell: false,
+    cwd, env: childEnv, windowsHide: true, shell: false,
     detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe']
   });
   captures.add(child);
-  const stop = message => {
-    error ??= message;
+  const stop = (message, timeoutExpired = false) => {
+    if (!error) {
+      error = message;
+      timed_out = timeoutExpired;
+    }
     stopping ??= killTree(child).finally(() => {
       child.stdout.destroy();
       child.stderr.destroy();
@@ -109,7 +118,9 @@ export async function capture(argv, {
   };
   const abort = () => stop('Command canceled');
   return new Promise(resolve => {
-    const timer = timeout == null ? null : setTimeout(() => stop('Command exceeded ' + timeout + ' seconds'), 1000 * timeout);
+    const timer = timeout == null ? null : setTimeout(() => {
+      stop('Command timed out after ' + timeout + (timeout === 1 ? ' second.' : ' seconds.'), true);
+    }, 1000 * timeout);
     signal?.addEventListener('abort', abort, {once: true});
     for (const [name, stream] of Object.entries(streams)) child[name].on('data', chunk => {
       const remaining = limit - stream.bytes;
@@ -133,6 +144,7 @@ export async function capture(argv, {
         exit_code: error ? null : exit_code,
         status: error ? 'error' : exit_code === 0 ? 'passed' : 'failed',
         ...(error && {error}),
+        ...(timed_out && {timed_out:true}),
         ...Object.fromEntries(Object.entries(streams).flatMap(([name, stream]) => {
           const output = Buffer.concat(stream.chunks);
           return [[name, encoding ? output.toString(encoding) : output], [name + '_truncated', stream.truncated]];
@@ -151,11 +163,10 @@ async function runCommand(root, spec, signal) {
   const started = performance.now();
   const result = {argv: spec.argv, cwd: spec.cwd};
   try {
-    let argv = spec.argv;
-    if (argv[0] === 'python' && argv[1] === '-c' && argv[2] === legacyGuardCode) {
-      argv = ['node', '-e', sourceGuard, ...argv.slice(3)];
+    for (const name of spec.input_paths ?? []) {
+      if (!(await stat(await inside(root, name))).isFile()) throw Error('Expected a check input file: ' + name);
     }
-    Object.assign(result, await capture(argv, {cwd: await inside(root, spec.cwd), signal, timeout: spec.timeout_seconds}));
+    Object.assign(result, await capture(checkArgv(spec.argv), {cwd: await inside(root, spec.cwd), signal, timeout: spec.timeout_seconds}));
   } catch (error) {
     Object.assign(result, {status: 'error', exit_code: null, error: error.message,
       stdout: '', stdout_truncated: false, stderr: '', stderr_truncated: false});

@@ -73,6 +73,11 @@ const WorkbenchProfile = (() => {
   const audits = roles.filter(role => role.kind === "Audit");
   const efforts = ["low", "medium", "high", "xhigh"];
   const providers = ["Codex", "Muse", "RubyMine Air", "Human", "Custom"];
+  const providerBounds = {
+    timeoutSeconds: [10, 1800],
+    providerTimeSeconds: [60, 7200],
+    providerTokenLimit: [1000, 2_000_000]
+  };
   const decisions = {
     planReview: ["plan", "stop"],
     buildReview: ["build", "plan", "stop"],
@@ -117,6 +122,8 @@ const WorkbenchProfile = (() => {
   function validate(data) {
     const assert = (condition, message) => { if (!condition) throw new Error(message); };
     const string = (value, max) => typeof value === "string" && value.length <= max;
+    const validLimit = (value, key) => value === undefined ||
+      Number.isSafeInteger(value) && value >= providerBounds[key][0] && value <= providerBounds[key][1];
     assert(data?.version === 1 && ["audited", "fast"].includes(data.active), "Use a version 1 profile export.");
     assert(Array.isArray(data.documents) && data.documents.length <= 60, "The document library supports up to 60 files.");
     const ids = new Set();
@@ -131,11 +138,15 @@ const WorkbenchProfile = (() => {
     for (const mode of ["audited", "fast"]) {
       const item = data.profiles?.[mode];
       assert(item && string(item.name, 80) && item.name.trim() && string(item.rules, 20000) && validDocs(item.sharedDocs), "A profile has invalid shared rules or documents.");
+      assert(validLimit(item.providerTimeSeconds, "providerTimeSeconds") && validLimit(item.providerTokenLimit, "providerTokenLimit"),
+        "Set a task provider time limit from 60 to 7200 seconds and a token limit from 1000 to 2000000.");
       for (const {id, kind} of roles) {
         const stage = item.stages?.[id];
         assert(stage && typeof stage.enabled === "boolean" && string(stage.instructions, 20000) && validDocs(stage.docs)
           && string(stage.model, 120) && efforts.includes(stage.effort), "A stage has invalid instructions or settings.");
         assert(kind === "Gate" ? stage.provider === "Workbench" : providers.includes(stage.provider), "A stage has an invalid provider.");
+        assert(validLimit(stage.timeoutSeconds, "timeoutSeconds"), "Set a provider call time limit from 10 to 1800 seconds.");
+        assert(stage.shellTools === undefined || typeof stage.shellTools === "boolean", "Set shell access to on or off.");
         const hints = stage.toolHints ?? [];
         assert(Array.isArray(hints) && hints.length <= 32 && new Set(hints).size === hints.length &&
           hints.every(name => typeof name === "string" && /^[a-z][a-z0-9_]{0,67}$/.test(name)), "Select valid stage tools.");
@@ -153,6 +164,15 @@ const WorkbenchProfile = (() => {
   function stageProviders(id, catalog) {
     const eligible = id === "build" ? ["Codex"] : ["Codex", "Muse"];
     return eligible.filter(provider => Object.hasOwn(catalog, provider));
+  }
+
+  function providerLimits(item, mode, stage) {
+    const fast = mode === "fast";
+    return {
+      timeoutSeconds: item.stages?.[stage]?.timeoutSeconds ?? (stage === "build" ? 300 : 120),
+      providerTimeSeconds: item.providerTimeSeconds ?? (fast ? 600 : 1800),
+      providerTokenLimit: item.providerTokenLimit ?? (fast ? 60_000 : 180_000)
+    };
   }
 
   function executable(data, catalog) {
@@ -252,12 +272,12 @@ const WorkbenchProfile = (() => {
     return rows;
   }
 
-  function stagePrompt(item, id, docs, permittedTools = []) {
+  function stagePrompt(item, id, docs, permittedTools = [], stageTools) {
     const role = roles.find(role => role.id === id);
     const stage = item.stages[id];
     const text = ["# " + role.name, item.rules, stage.instructions];
-    const tools = (stage.toolHints || []).filter(name => !name.startsWith("app_") || permittedTools.includes(name));
-    if (tools.length) text.push("Preferred MCP tools: " + tools.join(", "));
+    const tools = stageTools ?? (stage.toolHints || []).filter(name => !name.startsWith("app_") || permittedTools.includes(name));
+    if (tools.length) text.push("Workbench MCP tools: " + tools.join(", "));
     for (const docId of new Set([...item.sharedDocs, ...stage.docs])) {
       const doc = docs.find(entry => entry.id === docId);
       text.push("## " + doc.filename + "\n\n" + doc.content);
@@ -274,7 +294,8 @@ const WorkbenchProfile = (() => {
     return settings;
   }
 
-  return {roles, audits, efforts, providers, decisions, initial, validate, executable, resolve, simulate, stagePrompt, nativeSettings, stageProviders};
+  return {roles, audits, efforts, providers, decisions, initial, validate, executable, resolve, simulate, stagePrompt,
+    nativeSettings, stageProviders, providerLimits, providerBounds};
 })();
 
 export {WorkbenchProfile, modelCatalog, presetDocuments};

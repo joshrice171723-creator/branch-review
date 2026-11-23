@@ -119,6 +119,18 @@ export function createAudit({repository, files, git, store, agent}) {
     }
   }
 
+  async function findPendingCommit(task, build, state) {
+    if (!state.commitIntent) return null;
+    const head = await commitment(git, build.branch);
+    if (head === build.base) return null;
+    const message = await git('show', '-s', '--format=%B', head);
+    if (await git('rev-parse', head + '^') !== build.base ||
+        !message.split(/\r?\n/).includes('Workbench-Operation: ' + state.commitIntent) ||
+        (await store.snapshot(task.id)).snapshot_sha256 !== state.final_snapshot) return null;
+    await ensureCleanTarget(build, head);
+    return head;
+  }
+
   async function commit(task, build, state) {
     const recorded = state.design_sha;
     if (recorded) {
@@ -143,7 +155,10 @@ export function createAudit({repository, files, git, store, agent}) {
       throw Error('The checked source changed while staging the local commit.');
     }
     const title = (build.title || task.action).trim().split(/\r?\n/)[0];
-    await git('--literal-pathspecs', 'commit', '--only', '-m', title, ...pathspec, {input});
+    state.commitIntent ??= id();
+    await files.write(statePath(task.id), state);
+    await git('--literal-pathspecs', 'commit', '--only', '-m', title, '-m',
+      'Workbench-Operation: ' + state.commitIntent, ...pathspec, {input});
     const result = await commitment(git, build.branch);
     if (result === head || await git('rev-parse', result + '^') !== head || currentGroup(build).findings.some(row => row.sha === result)) {
       throw Error('The task did not produce a distinct commit.');
@@ -183,7 +198,7 @@ export function createAudit({repository, files, git, store, agent}) {
     await files.append(loopPath(run) + '/activity.jsonl', {run, stage, actor, timestamp: now(), activity: String(message).slice(0, 500)});
   }
 
-  async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly}) {
+  async function workflow({build, attempt, task, answer, signal, setCancellable, refresh, validateTarget, verificationOnly, runtimeProfile}) {
     const run = task.id;
     const profile = task.profile;
     const config = await store.executionConfig(run);
@@ -209,8 +224,9 @@ export function createAudit({repository, files, git, store, agent}) {
       await activity(run, stage, actor, 'Entered ' + (stageNames[stage] ?? stage));
       await refresh?.(stage);
     };
-    const ask = ({stage, prompt, schema, write = false, images = []}) =>
-      agent({profile, folder, stage, prompt, schema, write, images, signal, visit: state.history.length - 1,
+    const ask = ({stage, prompt, schema, write = false, images = [], evidenceOnly = false}) =>
+      agent({profile, runtimeProfile, folder, stage, prompt, schema, write, images, evidenceOnly, signal,
+        toolScope: build.plan, visit: state.history.length - 1,
         report: (actor, message) => activity(run, stage, actor, message)}).then(reply => reply.text);
     const context = {
       approvedPlan: build.plan, title: build.title ?? task.action, projectAgreement: scope,
@@ -234,6 +250,7 @@ export function createAudit({repository, files, git, store, agent}) {
         if (signal.aborted) throw error;
         state.question_error = error.message;
         await checkpoint('question_retry', error.message);
+        if (error.providerLimit || /^PROVIDER_(?:CALL_TIMEOUT|(?:TASK_TIME|USAGE)_BUDGET)$/.test(error.code ?? '')) throw error;
         return;
       }
       Object.assign(state, decision);
@@ -241,6 +258,7 @@ export function createAudit({repository, files, git, store, agent}) {
     }
 
     async function returnTo(stage, verdict, reason) {
+      state.finding = reason;
       if (state.verificationOnly) {
         await checkpoint('stopped', reason);
         await store.stopAtLimit(run, reason);
@@ -251,13 +269,19 @@ export function createAudit({repository, files, git, store, agent}) {
         route ?? (stage === 'plan_review' ? 'plan' : 'build');
       const bucket = {plan_review: 'planning', build_review: 'build', final_review: 'audit'}[stage];
       const count = state.returns[bucket] ?? state.returns[stage] ?? 0;
-      state.finding = reason;
       if (next === 'stop' || count >= (limit ?? 3)) {
         await checkpoint('stopped', reason);
         await (next === 'stop' ? store.stop(run, reason) : store.stopAtLimit(run, reason));
         return;
       }
       if (next === 'build') {
+        const source = (await store.snapshot()).snapshot_sha256;
+        const checkResults = hash(JSON.stringify((state.checks ?? []).map(row =>
+          [row.check, row.check_sha256, row.check_inputs_sha256, row.exit_code])));
+        // A builder that made no further change cannot resolve the same finding on the same input.
+        if (state.lastRepairSource === source && state.lastRepairChecks === checkResults) {
+          await block(stage, 'The last repair produced no new source or check evidence. ' + reason, 'unchanged_repair');
+        }
         const repairLimit = action('build_review', profile).limit ?? 3;
         if ((state.returns.repair ?? 0) >= repairLimit) {
           await checkpoint('stopped', reason);
@@ -265,45 +289,113 @@ export function createAudit({repository, files, git, store, agent}) {
           return;
         }
         await store.repair(run, reason);
+        state.lastRepairSource = source;
+        state.lastRepairChecks = checkResults;
         state.returns.repair = (state.returns.repair ?? 0) + 1;
       }
+      if (next === 'plan') state.lastReturnedPlan = state.plan;
       state.returns[bucket] = count + 1;
       await activity(run, stage, provider ?? 'Workbench', 'Finding returned to ' + next);
       await checkpoint(next, reason);
+    }
+
+    async function block(stage, reason, kind = 'missing_observation', check) {
+      state.finding = reason;
+      await checkpoint('evidence_blocked', {stage, reason, kind, check});
+      throw Error(reason);
     }
 
     async function checkStage(phase) {
       const stage = phase === 'after' ? 'checks' : 'baseline';
       await activity(run, stage, 'Workbench', 'Started configured ' + phase + ' checks');
       const before = await store.snapshot();
-      const result = await store.runChecks(run, {phase, signal, measure});
+      const result = await store.runChecks(run, {phase, signal, measure, reusePassing: phase === 'after'});
       signal.throwIfAborted();
       const after = await store.snapshot();
       if (before.snapshot_sha256 !== after.snapshot_sha256) throw Error('Project source changed during checks. Restore the expected source and retry.');
       for (const row of result.checks) {
-        await activity(run, stage, 'Workbench', (row.exit_code === 0 && !row.source_changed ? 'Passed ' : 'Failed ') + row.check);
+        await activity(run, stage, 'Workbench', (row.reused ? 'Reused passing receipt for ' :
+          row.exit_code === 0 && !row.source_changed ? 'Passed ' : 'Failed ') + row.check);
       }
       return {checks: result.checks, passed: result.verdict === 'pass', source: after.snapshot_sha256};
+    }
+
+    function afterChecks() {
+      return config.checks.filter(check => (check.phases ?? ['baseline', 'after']).includes('after'));
+    }
+
+    async function receipts(snapshot) {
+      return Promise.all(afterChecks().map(async check => {
+        const receipt = state.checks?.findLast(row => row.check === check.name);
+        return {name: check.name, required: check.required || check.benchmark, receiptId: receipt?.id,
+          status: receipt ? await store.checkReceiptStatus(run, receipt, snapshot) : 'missing'};
+      }));
+    }
+
+    function auditInputs(snapshot, status) {
+      return hash(JSON.stringify({source: snapshot.snapshot_sha256, plan: state.plan,
+        receipts: status.map(({name, receiptId, status}) => [name, receiptId, status])}));
+    }
+
+    async function checkPacket(rows) {
+      return Promise.all(rows.map(async row => {
+        const output = async stream => {
+          if (!row.evidence_path) return '';
+          const name = '.harness/tasks/' + run + '/' + row.evidence_path + '/' + stream + '.log';
+          const data = await files.bytes(name, 2_000_000, null).catch(() => null);
+          return data?.subarray(0, 4000).toString('utf8') ?? '';
+        };
+        return {check: row.check, id: row.id, exit_code: row.exit_code, source_changed: row.source_changed,
+          inputs_changed: row.inputs_changed, timed_out: row.timed_out, spawn_error: row.spawn_error, evidence_path: row.evidence_path,
+          stdout: await output('stdout'), stderr: await output('stderr')};
+      }));
     }
 
     async function audit(stage) {
       const before = await measure('0', () => store.snapshot());
       if (stage !== 'plan_review' && before.snapshot_sha256 !== state.checked_source) {
-        await checkpoint('checks', 'Source changed since checks.');
-        return;
+        return block(stage, 'Project source changed since checks. Restore the checked files before continuing.', 'source_changed');
       }
       const selectedRubric = rubric(task, stage);
       const ownsReview = stage === 'final_review' || (stage === 'build_review' && !finalEnabled);
       const required = selectedRubric?.criteria ?? (ownsReview ? criteriaIds.map(id => ({id, required: true})) : null);
-      const receiptStatus = config.checks.filter(check => (check.phases ?? ['baseline', 'after']).includes('after'))
-        .map(check => {
-          const receipt = state.checks?.findLast(row => row.check === check.name);
-          const current = receipt?.source_before_sha256 === before.snapshot_sha256 &&
-            receipt?.source_after_sha256 === before.snapshot_sha256 && !receipt.source_changed;
-          return {name: check.name, required: check.required || check.benchmark, receiptId: receipt?.id,
-            status: !receipt ? 'missing' : !current ? 'stale' : receipt.exit_code === 0 && !receipt.spawn_error ? 'passed' : 'failed'};
-        });
-      const prompt = 'Independently audit the original request and approved plan. Inspect relevant files and exact check receipts. ' +
+      const receiptStatus = await receipts(before);
+      if (stage !== 'plan_review' && receiptStatus.some(row => row.required && ['stale', 'missing'].includes(row.status))) {
+        await checkpoint('checks', 'Recovering changed check inputs.');
+        return;
+      }
+      const inputs = auditInputs(before, receiptStatus);
+      const buildAudit = state.acceptedBuildAudit?.inputs === inputs ? state.acceptedBuildAudit.row : null;
+      const stageConfig = action(stage, profile);
+      const paths = Object.keys(await changes()).filter(name => !Object.hasOwn(build.preserved, name));
+      const smallUiChange = paths.length > 0 && paths.length <= 6 &&
+        paths.every(name => /(?:^|\/)(?:ui|public|test|tests|__tests__|views|components)\//i.test(name) &&
+          !/(?:auth|migration|session|payments|credentials|permissions)/i.test(name));
+      const canScopeAudit = (stage === 'build_review' || stage === 'final_review' && Boolean(buildAudit)) &&
+        !selectedRubric &&
+        smallUiChange && !selectedProfile(profile)?.sharedDocs?.length &&
+        (!stageConfig.instructions?.trim() ||
+          stageConfig.instructions === 'Inspect the current source and check receipts. Send confirmed code findings to the builder.' ||
+          stageConfig.instructions === 'Use a fresh review session. Verify all rubric criteria against the checked source.') &&
+        (stageConfig.docs ?? []).every(name => name === 'REVIEW.md') && !stageConfig.toolHints?.length &&
+        !state.auditExpansion?.includes(stage + ':' + inputs);
+      let scopedDiff;
+      if (canScopeAudit || stage !== 'plan_review' && stageConfig.shellTools === false) {
+        const patch = await gitRaw(['--literal-pathspecs', 'diff', '--no-ext-diff', 'HEAD', '--', ...paths]);
+        if (patch.length <= 18_000) {
+          const newFiles = await Promise.all(paths.filter(name => !task.initial_snapshot.files[name]).map(async name => ({
+            path: name, content: (await files.bytes(name, 4000, null).catch(() => null))?.toString('utf8')
+          })));
+          if (newFiles.every(file => file.content !== undefined)) scopedDiff = {patch, newFiles};
+        }
+      }
+      const limitedInspection = stageConfig.shellTools !== true && Boolean(scopedDiff);
+      const checks = await checkPacket(state.checks ?? []);
+      const correction = state.auditCorrection?.stage === stage && state.auditCorrection.inputs === inputs ?
+        state.auditCorrection.reason : '';
+      const prompt = (limitedInspection ?
+        'Independently assess the scoped diff and supplied observations. Focus on unsupported claims. ' :
+        'Independently audit the approved plan. Inspect only the changed files and evidence needed to resolve a specific criterion. ') +
         'Return the JSON verdict and cite evidence in reason. Return replan only for a requirements finding. ' +
         'Workbench computed snapshot and receiptStatus from its source inventory. Use them for receipt freshness. ' +
         'Do not substitute a recursive directory hash or include generated preview logs such as .local-dev/workspace/workbench-environment/preview-output.json. ' +
@@ -319,49 +411,78 @@ export function createAudit({repository, files, git, store, agent}) {
           'an explicit automated verification step. Ask about unclear requirements only. Baseline and after checks run after the plan audit. ' :
           'Audit the current checked implementation. Identify unsupported acceptance criteria. ') +
         (required ? 'Record a criterion for every required ID on a pass. Include verdict, reason and evidence strings. ' : '') +
-        '\n' + JSON.stringify({...context, stage, implementationPlan: state.plan, answers: state.answers, checks: state.checks,
+        (correction ? 'Correct the previous response: ' + correction + '\n' : '\n') +
+        JSON.stringify({approvedPlan: build.plan, title: context.title, stage, implementationPlan: state.plan,
+          scopeDecisions: build.decisions, answers: state.answers, checks, buildAudit, scopedDiff,
           acceptanceEvidence: (state.acceptanceEvidence ?? []).filter(row => row.snapshot === before.snapshot_sha256),
-          summary: state.build_summary, snapshot: before.snapshot_sha256, receiptStatus, rubric: selectedRubric ?? required});
-      const reply = objectReply(await ask({stage, prompt, schema: auditSchema(stage, !!required)}));
+          summary: state.build_summary?.slice(0, 2200), snapshot: before.snapshot_sha256, receiptStatus,
+          rubric: selectedRubric ?? required});
+      if (limitedInspection) await activity(run, stage, 'Workbench', 'Using the scoped diff and current receipts with shell disabled.');
+      const raw = await ask({stage, prompt, schema: auditSchema(stage, !!required), evidenceOnly: limitedInspection});
       const valid = stage === 'plan_review' ? ['pass', 'replan', 'needs_evidence'] : ['pass', 'repair', 'replan', 'needs_evidence', 'run_check'];
-      if (!valid.includes(reply.verdict)) throw Error('The auditor returned an invalid verdict.');
+      let reply, reason;
+      try {
+        reply = objectReply(raw);
+        if (!valid.includes(reply.verdict)) throw Error('The auditor returned an invalid verdict.');
+        reason = sentence(reply.reason, 'an audit reason');
+        const issues = reply.verdict === 'pass' && required ? criterionErrors(reply, required) : [];
+        if (issues.length) throw Error(issues.join('\n'));
+      } catch (error) {
+        if (correction) return block(stage, error.message, 'invalid_audit');
+        state.auditCorrection = {stage, inputs, reason: error.message};
+        await activity(run, stage, 'Workbench', 'Recovering audit response format.');
+        await checkpoint(stage, error.message);
+        return;
+      }
       let verdict = reply.verdict;
-      let reason = sentence(reply.reason, 'an audit reason');
       if (verdict === 'run_check') {
         const check = config.checks.find(row => row.name === reply.check && !row.benchmark &&
           (row.phases ?? ['baseline', 'after']).includes('after'));
-        if (!check) throw Error('The audit requested an unavailable after-build check. ' + reason);
-        const key = JSON.stringify([stage, before.snapshot_sha256, check.name]);
-        if ((state.auditCheckRequests ?? []).includes(key)) {
-          const status = receiptStatus.find(row => row.name === check.name);
-          const detail = status?.status === 'passed'
-            ? 'The requested check already passed on Workbench’s current source. ' + reason
-            : 'The requested check already ran on this source. ' + reason;
-          await checkpoint('evidence_blocked', {stage, reason: detail});
-          throw Error(detail);
+        if (!check) return block(stage, 'The audit requested an unavailable after-build check. ' + reason, 'missing_check');
+        const status = receiptStatus.find(row => row.name === check.name);
+        if (status?.status === 'passed') {
+          const detail = 'Check ' + check.name + ' already passed on current source. Use receipt ' + status.receiptId +
+            '. State the exact observation still missing, if any.';
+          if (correction) return block(stage, detail + ' ' + reason, 'duplicate_check', check.name);
+          state.auditCorrection = {stage, inputs, reason: detail};
+          await activity(run, stage, 'Workbench', 'Reusing current receipt for ' + check.name);
+          await checkpoint(stage, detail);
+          return;
         }
+        const key = JSON.stringify([before.snapshot_sha256, check.name, status?.receiptId ?? 'missing']);
+        if ((state.auditCheckRequests ?? []).includes(key)) {
+          return block(stage, 'The requested check already ran on this source. ' + reason, 'duplicate_check', check.name);
+        }
+        if (status?.status === 'failed') return block(stage, 'The requested check already failed. Inspect its result. ' + reason,
+          'failed_check', check.name);
         await activity(run, stage, 'Workbench', 'Audit requested check ' + check.name);
         const receipt = await measure('check-' + check.name, () => store.runCheck(run, {name: check.name, phase: 'after', signal}));
         signal.throwIfAborted();
-        if (receipt.source_changed) throw Error('The requested check changed the source. Review the check output.');
+        if (receipt.source_changed || receipt.inputs_changed) {
+          return block(stage, 'The requested check changed its source or inputs. Review the check output.',
+            'source_changed', check.name);
+        }
         if (receipt.source_before_sha256 !== before.snapshot_sha256) throw Error('Source changed before the requested check.');
-        if (receipt.spawn_error) throw Error('The requested check could not run. ' + receipt.spawn_error);
         (state.auditCheckRequests ??= []).push(key);
         state.checks = [...(state.checks ?? []).filter(row => row.check !== check.name), receipt];
         state.auditCheckFailed = state.checks.filter(row => row.check === check.name || (state.auditCheckFailed ?? []).includes(row.check))
           .filter(row => row.exit_code !== 0).map(row => row.check);
         state.checked_pass = config.checks.filter(row => row.required || row.benchmark)
           .filter(row => (row.phases ?? ['baseline', 'after']).includes('after'))
-          .every(row => state.checks.some(result => result.check === row.name && result.exit_code === 0 && !result.source_changed));
+          .every(row => state.checks.some(result => result.check === row.name && result.exit_code === 0 &&
+            !result.source_changed && !result.inputs_changed));
+        if (receipt.timed_out) return block(stage, 'The check exceeded its time limit. ' + check.name, 'check_timeout', check.name);
+        if (receipt.spawn_error) return block(stage, 'The requested check could not run. ' + receipt.spawn_error, 'check_launch', check.name);
         await checkpoint(stage, {reason: 'Recorded result for ' + check.name, checkId: receipt.id});
         return;
       }
-      if (verdict === 'pass' && required) {
-        const issues = criterionErrors(reply, required);
-        if (issues.length) {
-          verdict = stage === 'plan_review' ? 'replan' : 'repair';
-          reason = issues.join('\n');
-        }
+      delete state.auditCorrection;
+      if (verdict === 'needs_evidence' && limitedInspection && stageConfig.shellTools === undefined) {
+        (state.auditExpansion ??= []).push(stage + ':' + inputs);
+        await activity(run, stage, 'Workbench', 'Checking a specific gap in the recorded evidence.');
+        state.auditCorrection = {stage, inputs, reason};
+        await checkpoint(stage, reason);
+        return;
       }
       if (verdict === 'pass' && stage !== 'plan_review' && (!state.checked_pass || state.auditCheckFailed?.length)) {
         verdict = 'repair';
@@ -377,16 +498,20 @@ export function createAudit({repository, files, git, store, agent}) {
       await activity(run, stage, row.actor, reason);
       if (verdict === 'needs_evidence') {
         if (stage !== 'plan_review') {
-          await checkpoint('evidence_blocked', {stage, reason});
-          throw Error('Runtime verification is blocked. ' + reason);
+          return block(stage, 'Runtime verification is blocked. ' + reason);
         }
-        state.evidenceRequest = {stage, id: id(), text: reason};
-        await checkpoint('evidence', state.evidenceRequest);
+        if (state.planEvidenceRetried) return block(stage, 'Plan verification is blocked. ' + reason, 'missing_check');
+        state.planEvidenceRetried = true;
+        state.lastReturnedPlan = state.plan;
+        state.finding = reason;
+        await activity(run, stage, 'Workbench', 'Recovering the plan’s verification method.');
+        await checkpoint('plan', reason);
       } else if (verdict !== 'pass') {
         await returnTo(stage, verdict, reason);
       } else if (stage === 'plan_review') {
         await checkpoint(state.baseline ? 'build' : 'baseline', row);
       } else if (!ownsReview) {
+        state.acceptedBuildAudit = {inputs, row};
         await checkpoint('final_review', row);
       } else {
         await store.record(run, 'reviews', {author: 'agent', verdict: 'pass', snapshot_sha256: before.snapshot_sha256,
@@ -400,7 +525,13 @@ export function createAudit({repository, files, git, store, agent}) {
     if (!pending) await checkpoint('plan');
     if (verificationOnly) {
       state.verificationOnly = true;
+      state.resumeAudit = state.history.at(-1)?.detail?.stage;
+      delete state.auditCorrection;
       await checkpoint('checks', 'Retry verification on the existing changes.');
+    } else if (state.stage === 'evidence_blocked' && !state.checked_source) {
+      const previous = state.history.at(-1).detail;
+      delete state.auditCorrection;
+      await checkpoint(previous.stage, 'Retry the blocked stage.');
     }
     if (state.stage === 'completed') return state;
     if (state.stage === 'evidence' && answer) {
@@ -418,6 +549,12 @@ export function createAudit({repository, files, git, store, agent}) {
       return state;
     } else if (state.stage === 'building') {
       await checkpoint('checks', 'The builder was interrupted. Check the saved source.');
+    } else if (state.stage === 'finish' && !state.design_sha) {
+      const committed = await findPendingCommit(task, build, state);
+      if (committed) {
+        state.design_sha = committed;
+        await files.write(statePath(run), state);
+      }
     }
 
     while (true) {
@@ -429,6 +566,10 @@ export function createAudit({repository, files, git, store, agent}) {
         if (await commitment(git, build.branch) !== build.base) throw Error('Restore the exact branch and commit for this task.');
       }
       if (stage === 'plan') {
+        const blockers = await store.preflightChecks(run);
+        if (blockers.length) {
+          throw Error('Check setup needs attention. ' + blockers.map(row => row.check + ': ' + row.reason).join('\n'));
+        }
         context.notes = state.notes = await measure('0', () => relevantNotes(repository, config.execution?.vaults,
           [task.action, task.scope, build.plan, state.finding, JSON.stringify(state.answers)].join(' ')));
         const prompt = 'Treat quoted notes as project source material. Prepare an implementation method within the user-approved plan. Keep its scope and acceptance criteria fixed. ' +
@@ -447,6 +588,9 @@ export function createAudit({repository, files, git, store, agent}) {
             throw Error('The planner returned no implementation steps. Select Resume run to retry planning.');
           }
           state.plan = sentence(method, 'an implementation method');
+          if (state.plan === state.lastReturnedPlan) {
+            return block('plan', 'The planner returned the same method. ' + state.finding, 'unchanged_plan');
+          }
           await measure('2', () => checkpoint('plan_review', {plan: state.plan, approvedPlanHash: hash(build.plan)}));
         }
       } else if (stage === 'baseline') {
@@ -463,10 +607,12 @@ export function createAudit({repository, files, git, store, agent}) {
         });
         const write = task.mode !== 'audit' && (build.decisions.code_changes?.option ??
           build.decisions.code_changes) === 'allow_scoped';
+        const failedChecks = await checkPacket((state.checks ?? []).filter(row => row.exit_code !== 0));
         const prompt = 'Implement the reviewed method within the approved plan and task agreement. ' +
-          'Leave Git commits, .harness records, project checks and verification to Workbench. ' +
+          'Workbench runs the pinned checks and owns the receipts. Use the supplied failures to focus any repair. ' +
+          'Do not repeat the pinned suite or create Git commits. ' +
           'Keep the published workbench-quality.json and pre-existing changes intact. Report changes and evidence you actually observed.\n' +
-          JSON.stringify({...context, method: state.plan, answers: state.answers, finding: state.finding,
+          JSON.stringify({...context, method: state.plan, answers: state.answers, finding: state.finding, failedChecks,
             preservedPaths: Object.keys(build.preserved)});
         await checkpoint('building');
         try {
@@ -477,19 +623,39 @@ export function createAudit({repository, files, git, store, agent}) {
           throw error;
         }
       } else if (stage === 'checks') {
+        const blockers = await store.preflightChecks(run, {phase: 'after'});
+        if (blockers.length) {
+          state.checked_source = (await store.snapshot()).snapshot_sha256;
+          return block('checks', 'Check setup needs attention. ' + blockers.map(row => row.check + ': ' + row.reason).join('\n'),
+            'check_launch', blockers[0].check);
+        }
         const result = await checkStage('after');
-        if (state.verificationOnly && !result.passed) throw Error('Verification failed. Open Project checks to inspect the recorded result.');
         const requested = new Set(state.auditCheckFailed ?? []);
         Object.assign(state, {checks: result.checks, checked_source: result.source, checked_pass: result.passed,
           auditCheckFailed: result.checks.filter(row => requested.has(row.check) && row.exit_code !== 0).map(row => row.check)});
-        await checkpoint('build_review', result.checks);
+        const changedInputs = result.checks.find(row => row.inputs_changed || row.source_changed);
+        if (changedInputs) return block('checks', 'The source or check inputs changed while running ' + changedInputs.check +
+          '. Review its receipt before retrying.', 'source_changed', changedInputs.check);
+        const launchFailure = result.checks.find(row => (row.spawn_error || row.timed_out) && afterChecks().some(check =>
+          check.name === row.check && (check.required || check.benchmark)));
+        if (launchFailure?.timed_out) return block('checks', 'The check exceeded its time limit. ' + launchFailure.check,
+          'check_timeout', launchFailure.check);
+        if (launchFailure) return block('checks', 'Could not launch ' + launchFailure.check + '. ' +
+          launchFailure.spawn_error, 'check_launch', launchFailure.check);
+        if (state.verificationOnly && !result.passed) return block('checks',
+          'Verification failed. Open Project checks to inspect the recorded result.', 'failed_check');
+        const snapshot = await store.snapshot();
+        const input = auditInputs(snapshot, await receipts(snapshot));
+        const resume = ['final_review', 'finish'].includes(state.resumeAudit) && state.acceptedBuildAudit?.inputs === input;
+        const nextAudit = resume ? state.resumeAudit : 'build_review';
+        delete state.resumeAudit;
+        await checkpoint(nextAudit, result.checks);
       } else if (stage.endsWith('_review')) {
         await audit(stage);
       } else if (stage === 'final_skip') {
         const current = await store.snapshot();
         if (current.snapshot_sha256 !== state.final_snapshot) {
-          await checkpoint('checks', 'Source changed before the final audit receipt.');
-          continue;
+          return block('finish', 'Project source changed after review. Restore the checked files before continuing.', 'source_changed');
         }
         await store.record(run, 'audits', {stage: 'final_review', actor: 'Workbench', verdict: 'skipped',
           reason: 'Disabled in the pinned Fast profile.', snapshot_sha256: state.final_snapshot, plan_sha256: hash(state.plan),
@@ -497,18 +663,22 @@ export function createAudit({repository, files, git, store, agent}) {
         await checkpoint('finish');
       } else if (stage === 'finish') {
         if ((await store.snapshot()).snapshot_sha256 !== state.final_snapshot) {
-          if (state.design_sha) throw Error('Restore the checked commit before completing this task.');
-          await checkpoint('checks', 'Source changed after the final audit.');
+          return block('finish', 'Project source changed after the final audit. Restore the checked files before continuing.',
+            'source_changed');
+        }
+        const outdated = (await receipts(await store.snapshot()))
+          .find(row => row.required && ['stale', 'missing'].includes(row.status));
+        if (outdated && !state.design_sha) {
+          await checkpoint('checks', 'Recovering changed inputs for ' + outdated.name + '.');
           continue;
         }
         const result = await measure('0', () => store.verify(run, {record: false}));
         if (result.verdict !== 'pass') {
           const messages = (result.issues ?? []).map(issue => typeof issue === 'string' ? issue : issue.message);
-          await returnTo('final_review', 'repair', messages.filter(Boolean).join('\n') || 'Verification did not pass.');
-          continue;
+          return block('finish', messages.filter(Boolean).join('\n') || 'Verification did not pass.', 'completion_gate');
         }
         signal.throwIfAborted();
-        await validateTarget?.();
+        if (!state.design_sha) await validateTarget?.();
         signal.throwIfAborted();
         setCancellable(false);
         const completion = await measure('1', async () => {
@@ -527,5 +697,5 @@ export function createAudit({repository, files, git, store, agent}) {
     }
   }
 
-  return {baseline, ensureCleanTarget, activity, workflow};
+  return {baseline, ensureCleanTarget, findPendingCommit, activity, workflow};
 }

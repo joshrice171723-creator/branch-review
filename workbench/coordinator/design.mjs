@@ -98,7 +98,8 @@ function contextOf(state) {
   };
 }
 
-export function createDesign({files, store, git, agent, image, projectName, projectEvidence, qualityDraft, validateQuality}) {
+export function createDesign({files, store, git, agent, image, projectName, projectEvidence, qualityDraft, validateQuality,
+  buildContext, retryBuildVerification}) {
   async function read() {
     const saved = await files.read(workspaceFile);
     if (saved) {
@@ -340,11 +341,37 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       const fields = ['view', 'tab', 'section', 'id', 'label', 'kind', 'reviewId', 'commit', 'ref', 'scenarioId', 'scenarioTitle', 'route', 'projectPage'];
       const screen = Object.fromEntries(fields.filter(key => typeof payload.context[key] === 'string')
         .map(key => [key, payload.context[key].slice(0, 400)]));
+      const build = await buildContext?.(state.builds.at(-1));
+      const command = !payload.preparePlan && !payload.changeScreenshot ?
+        text.trim().toLowerCase().replace(/[?.]+$/, '') : '';
+      if (['/status', 'build status', 'what is the build status', 'why did the build stop', '/retry-verification'].includes(command)) {
+        let reply = 'There is no current build for this project.';
+        if (build && command === '/retry-verification') {
+          try {
+            await retryBuildVerification(build.id);
+            reply = 'Verification restarted for “' + build.title + '” using the existing changes.';
+          } catch (error) {
+            reply = error.message;
+          }
+        } else if (build) {
+          const position = build.stage ? ' at ' + build.stage : '';
+          const status = build.waitingForReview ? 'Waiting for Branch Review' :
+            ({failed: 'Stopped' + position, cancelled: 'Cancelled' + position, question: 'Waiting for your answer',
+              working: 'Running' + position, cancelling: 'Cancelling' + position, closed: 'Complete'})[build.state] ??
+            ('Current stage' + position);
+          reply = ['“' + build.title + '” · ' + status, build.failure, build.resumeBlocker, build.pendingQuestion,
+            !build.failure && build.activity].filter(Boolean).join('\n\n');
+        }
+        return edit(current => {
+          current.messages.push({id: id(), author: 'user', text, context: screen, time: now()},
+            {id: id(), author: 'agent', coordinator: true, text: reply, context: screen, time: now()});
+        });
+      }
       const quality = screen.view === 'quality' ? await qualityDraft?.() : null;
       const taskMode = payload.mode === 'task' || state.mode === 'task';
       const context = {activeProject: projectName, conversationOpen: true, screen, ...contextOf(state),
         mode: taskMode ? 'task' : 'roadmap', approved: state.approved === state.revision,
-        branch: state.branch, preview: state.preview, message: text,
+        branch: state.branch, preview: state.preview, message: text, build,
         ...(quality ? {quality: quality.definition} : {})};
       if (quality || ['Preview', 'Build'].includes(screen.tab)) context.projectEvidence = await projectEvidence?.();
       if (screen.view === 'workflow' && screen.tab === 'Plan' && !screen.kind) {
@@ -367,7 +394,9 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         images = [await files.path(folder + '/reference.png')];
         context.screenshot = {page: typeof page === 'string' ? page.slice(0, 400) : ''};
       }
-      const prompt = 'Help with the current project and screen. Return one JSON object with message and optional choices. ' +
+      const prompt = 'Answer as the Workbench coordinator for the current project. Return one JSON object with message and optional choices. ' +
+        'For questions about the build, use the recorded build state and failure. Do not infer a completed action or invent a result. ' +
+        'The user can request verification on the same build with /retry-verification. ' +
         (payload.preparePlan === true ? 'The user selected Send to Plan. Use the conversation and latest instructions to return a complete plan proposal. Ask a question with choices if information is missing.\n' : '') +
         'activeProject is the selected project and this project conversation is already open. Use this app state over earlier messages. ' +
         'When the user asks to use this project, confirm the active project and continue with their request. ' +

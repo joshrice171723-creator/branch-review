@@ -39,7 +39,7 @@ const measure = [
 const reset = "require('node:fs').rmSync('scratch.txt',{force:true})";
 const benchmark = {
   schema_version: 1,
-  checks: [{id: 'measure', name: 'Measure rows', argv: ['node', 'measure.mjs'], required: true},
+  checks: [{id: 'measure', name: 'Measure rows', argv: ['node', 'measure.mjs'], required: true, input_paths: ['value.txt']},
     {id: 'check', name: 'Check isolation', argv: ['node', '-e',
       "if(require('node:fs').existsSync('scratch.txt'))process.exit(1);require('node:fs').writeFileSync('scratch.txt','isolated')"],
       required: true}],

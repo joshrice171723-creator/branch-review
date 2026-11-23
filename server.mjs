@@ -629,13 +629,16 @@ async function bindLoopback(server, port, allowFallback) {
   return server.address().port;
 }
 
-export async function startServer({allowPortFallback=false,preferredPort} = {}) {
+export async function startServer({allowPortFallback=false,preferredPort,desktop=false} = {}) {
   const controllerFallback = allowPortFallback && !localOrigin.hasPortOverride;
   const requestedPort = controllerFallback && localOrigin.isControllerPort(preferredPort) ? preferredPort : localOrigin.port;
-  let context, workspace;
+  let context, workspace, desktopExiting = false, pendingWrites = 0;
   const server = http.createServer({maxHeaderSize:128*1024},(req,res)=>{
     if (!context) return json(res,503,{error:'Branch Review is starting.'});
-    void handleRequest(req,res,context);
+    if (req.method !== 'POST') return void handleRequest(req,res,context);
+    if (desktopExiting) return json(res,409,{error:'Branch Review is closing or switching projects.'});
+    pendingWrites++;
+    void handleRequest(req,res,context).finally(() => { pendingWrites--; });
   });
   const listeners = [server];
   try {
@@ -684,7 +687,18 @@ export async function startServer({allowPortFallback=false,preferredPort} = {}) 
       }}finally{checkingMuse=false;}
     },15000).unref();
     console.log(`Branch Review: ${origin}`);
-    return {origin,port};
+    function beginDesktopExit() {
+      if (desktopExiting || pendingWrites || busy || workspace.busy() || jobs.rows.some(job => job.status === 'running') || qaRunning()) {
+        throw Error('Finish or cancel active builds, jobs, and browser QA before leaving this project.');
+      }
+      const resumeRecovery = workspace.suspendRecovery();
+      desktopExiting = true;
+      return () => {
+        desktopExiting = false;
+        resumeRecovery();
+      };
+    }
+    return {origin,port,...(desktop && {beginDesktopExit})};
   } catch (error) {
     for (const listener of listeners) if (listener.listening) listener.close();
     workspace?.close();

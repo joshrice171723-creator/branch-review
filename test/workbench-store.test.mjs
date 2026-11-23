@@ -90,3 +90,91 @@ test('serializes run ownership and records source-mutating checks as failures', 
   assert.equal((await store.resume(id)).lifecycle.status, 'active');
   assert.equal((await store.getRun(id)).ledger.verdict, 'pass');
 });
+
+test('reuses after receipts only while their source and file inputs match', async t => {
+  const wrapper = '.harness/check.js';
+  const declared = '.harness/fixture.txt';
+  const verify = {...check, argv:['node', wrapper], input_paths:[declared], phases:['after']};
+  const {store, folder} = await setup(t, verify);
+  const edit = (name, data) => fs.writeFile(path.join(folder, name), data);
+  await edit(wrapper, 'console.log("Version 1")');
+  await edit(declared, 'Original');
+  const {task_id:id} = await store.startTask(start);
+  const run = async () => (await store.runChecks(id, {phase:'after', reusePassing:true})).checks[0];
+
+  const first = await run();
+  assert.equal(first.exit_code, 0);
+  assert.equal(first.inputs_changed, false);
+  const previewFolder = path.join(folder, '.local-dev/workspace/workbench-environment');
+  await fs.mkdir(previewFolder, {recursive:true});
+  await edit('.local-dev/workspace/workbench-environment/preview-output.json', 'Changed preview log');
+  const reused = await run();
+  assert.equal(reused.reused, true);
+  assert.equal(reused.id, first.id);
+
+  await edit(wrapper, 'console.log("Version 2")');
+  assert.equal(await store.checkReceiptStatus(id, first, await store.snapshot(id)), 'stale');
+  assert.match((await store.status(id)).issues.join('\n'), /After evidence is stale after check inputs changed/);
+  const second = await run();
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.source_after_sha256, first.source_after_sha256);
+
+  await edit(declared, 'Changed');
+  const third = await run();
+  assert.notEqual(third.id, second.id);
+  await edit('greeting.txt', 'Changed source');
+  assert.match((await store.status(id)).issues.join('\n'), /After evidence is stale after source mutation/);
+  assert.notEqual((await run()).id, third.id);
+});
+
+test('preflight defers future project scripts and detects missing tools', async t => {
+  const future = {...check, name:'future', argv:['node', 'verify.js'], cwd:'tests', phases:['after']};
+  const {store, folder} = await setup(t, future);
+  const {task_id:id} = await store.startTask(start);
+  assert.deepEqual(await store.preflightChecks(id), []);
+  const testFolder = path.join(folder, 'tests');
+  await fs.mkdir(testFolder);
+  const missing = await store.preflightChecks(id, {phase:'after'});
+  assert.equal(missing[0]?.check, future.name);
+  assert.match(missing[0]?.reason, /verify.js/);
+  await fs.writeFile(path.join(testFolder, 'verify.js'), 'require("./missing-import.cjs");');
+  assert.deepEqual(await store.preflightChecks(id, {phase:'after'}), []);
+  const row = await store.runCheck(id, {name:future.name, phase:'after'});
+  assert.equal(row.exit_code, 1);
+  assert.equal(row.spawn_error, null);
+  assert.match((await store.readRunRecord(id, row.evidence_path + '/stderr.log')).toString(), /MODULE_NOT_FOUND/);
+  assert.equal(await store.checkReceiptStatus(id, row, await store.status(id)), 'failed');
+
+  await store.stop(id, 'Check another prerequisite');
+  const config = await store.config();
+  const missingTool = {...check, argv:['workbench-test-missing-tool-8073']};
+  await store.setConfig({...config, checks:[missingTool]});
+  const fresh = await store.startTask(start);
+  assert.deepEqual(await store.preflightChecks(fresh.task_id), [{check:check.name,
+    reason:'Check executable is missing or cannot run: ' + missingTool.argv[0]}]);
+});
+
+test('check commands clear an inherited Electron Node mode', async t => {
+  const prior = process.env.ELECTRON_RUN_AS_NODE;
+  process.env.ELECTRON_RUN_AS_NODE = '1';
+  t.after(() => {
+    if (prior === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+    else process.env.ELECTRON_RUN_AS_NODE = prior;
+  });
+  const command = {...check, argv:['node', '-e', 'process.exit(Number(Boolean(process.env.ELECTRON_RUN_AS_NODE)))']};
+  const {store} = await setup(t, command);
+  const {task_id:id} = await store.startTask(start);
+  assert.equal((await store.runCheck(id, {name:check.name, phase:'baseline'})).exit_code, 0);
+});
+
+test('checks record timeout failures and retain output', async t => {
+  const slow = {...check, argv:['node', '-e', 'console.log("started"); setInterval(() => {}, 100);'], timeout_seconds:1};
+  const {store} = await setup(t, slow);
+  const {task_id:id} = await store.startTask(start);
+  const result = await store.runChecks(id, {phase:'baseline'});
+  assert.equal(result.verdict, 'revise');
+  const row = result.checks[0];
+  assert.equal(row.timed_out, true);
+  assert.match(row.spawn_error, /Command timed out after 1 second/);
+  assert.match((await store.readRunRecord(id, row.evidence_path + '/stdout.log')).toString(), /started/);
+});

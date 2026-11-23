@@ -192,7 +192,8 @@ function control(type, value, onChange, options = {}) {
   Object.assign(input, options);
   input.value = value;
   input.addEventListener("change", () => {
-    if (!onChange(input.value)) input.value = value;
+    if (onChange(input.value)) value = input.value;
+    else input.value = value;
   });
   return input;
 }
@@ -280,6 +281,11 @@ function editStage(key, value, redraw = false) {
   return saved;
 }
 
+function providerLimitField(label, key, value, update) {
+  const [min, max] = WorkbenchProfile.providerBounds[key];
+  return field(label, control("number", value, value => update(Number(value)), {min, max, step: 1, required: true}));
+}
+
 function agentFields(stage) {
   const group = element("div", "design-stack");
   const fields = element("div", "form-grid");
@@ -299,6 +305,12 @@ function agentFields(stage) {
   const effort = select(stage.effort, WorkbenchProfile.efforts.map(name => [name, name]), value => editStage("effort", value));
   fields.append(field("Provider", provider), field("Model", picker), field("Thinking level", effort));
   group.append(fields);
+  const {timeoutSeconds} = WorkbenchProfile.providerLimits(active(), data.active, selected);
+  group.append(providerLimitField("Call time limit (seconds)", "timeoutSeconds", timeoutSeconds,
+    value => editStage("timeoutSeconds", value)));
+  const workspaceAccess = selected === "build" ? "Workspace writes allowed." : "Read-only workspace.";
+  group.append(element("small", "", workspaceAccess + (stage.provider === "Muse" ? " Shell disabled." : "")));
+  group.append(button("Choose stage tools", () => chooseToolSettings(true)));
   const health = element("small", "stage-provider-detail");
   health.dataset.providerHealth = stage.provider;
   health.dataset.providerDetail = "";
@@ -314,9 +326,14 @@ function agentFields(stage) {
     const {provider, model, effort} = preset;
     showDialog("Reset agent settings",
       element("p", "", "Use " + provider + " · " + (model || "Provider default") + " · " + effort + " thinking."),
+      element("p", "", "Restore the default call time limit and shell access."),
       element("div", "actions", button("Cancel", () => dialog.close()),
         button("Reset", () => {
-          if (!apply((_, item, stage) => Object.assign(stage, {provider, model, effort}), false)) return;
+          if (!apply((_, item, stage) => {
+            Object.assign(stage, {provider, model, effort});
+            delete stage.timeoutSeconds;
+            delete stage.shellTools;
+          }, false)) return;
           dialog.close();
           const replacement = agentFields(current());
           group.replaceWith(replacement);
@@ -331,29 +348,65 @@ function agentFields(stage) {
 }
 
 async function chooseToolSettings(forStage) {
-  const title = forStage ? "Tools for " + roleById(selected).name : "Project tools";
-  const body = element("div", "library", element("p", "copy", "Loading tools…"));
+  const title = forStage ? "Choose stage tools for " + roleById(selected).name : "Project app tools";
+  const body = element("div", "library");
+  const hints = element("div", "library", element("p", "copy", "Loading tools…"));
+  const stage = forStage && current();
+  if (stage?.provider === "Codex") {
+    const shell = select(stage.shellTools === undefined ? "automatic" : String(stage.shellTools),
+      [["automatic", "Automatic"], ["false", "Disabled"], ["true", "Allowed"]], value =>
+        apply((_, _profile, edited) => {
+          if (value === "automatic") delete edited.shellTools;
+          else edited.shellTools = value === "true";
+        }, false));
+    body.append(field("Shell access", shell), element("p", "copy",
+      "Automatic uses the task scope and available evidence. Disabled blocks shell commands for this stage."));
+  } else if (forStage) {
+    body.append(element("p", "copy", "This provider runs this stage without shell access."));
+  }
+  body.append(hints);
   showDialog(title, body);
   try {
-    const rows = await api("app-tools");
+    const [rows, suggestions] = await Promise.all([api("app-tools"),
+      forStage ? api("design/tool-suggestions?stage=" + encodeURIComponent(selected)) : []]);
     const allowed = data.permittedTools || [];
     const choices = rows.filter(tool => forStage ? !tool.app || allowed.includes(tool.name) : tool.app);
-    body.replaceChildren(element("p", "copy", forStage
-      ? "Selected tools appear in this stage’s instructions."
-      : "Allow registered app tools for this project."));
-    if (!choices.length) body.append(element("p", "copy", "No app tools are registered for this project."));
-    for (const tool of choices) {
-      const row = checkbox(tool.name, (forStage ? current().toolHints || [] : allowed).includes(tool.name), checked =>
-        apply((next, _, stage) => {
-          const owner = forStage ? stage : next;
-          const key = forStage ? "toolHints" : "permittedTools";
-          const entries = (owner[key] || []).filter(name => name !== tool.name);
-          owner[key] = checked ? [...entries, tool.name] : entries;
-        }, false));
-      body.append(element("div", "", row, element("p", "copy", tool.description)));
+    function drawTools() {
+      const custom = forStage && Array.isArray(current().toolHints);
+      const connected = !forStage || current().provider === "Codex";
+      const picked = forStage ? custom ? current().toolHints : suggestions : allowed;
+      hints.replaceChildren(element("p", "copy", !forStage
+        ? "Allow registered app tools for clients connected to this project’s Workbench MCP endpoint."
+        : connected ? "Automatic shows the suggested tools for the saved plan. Audits can use fewer tools when the evidence is sufficient."
+          : "This provider does not connect to the Workbench stage tools."));
+      if (forStage && connected) {
+        hints.append(field("Workbench tools", select(custom ? "custom" : "automatic",
+          [["automatic", "Automatic"], ["custom", "Choose tools"]], value => {
+            if (!apply((_, _profile, edited) => {
+              if (value === "automatic") delete edited.toolHints;
+              else edited.toolHints = suggestions;
+            }, false)) return false;
+            drawTools();
+            return true;
+          })));
+      }
+      if (!choices.length) hints.append(element("p", "copy", "No app tools are registered for this project."));
+      for (const tool of choices) {
+        const usable = connected && (!forStage || tool.stageAllowed);
+        const row = checkbox(tool.name, usable && picked.includes(tool.name), checked =>
+          apply((next, _, edited) => {
+            const owner = forStage ? edited : next;
+            const key = forStage ? "toolHints" : "permittedTools";
+            const entries = (owner[key] || []).filter(name => name !== tool.name);
+            owner[key] = checked ? [...entries, tool.name] : entries;
+          }, false));
+        row.querySelector("input").disabled = !usable || forStage && !custom;
+        hints.append(element("div", "", row, element("p", "copy", tool.access + " · " + tool.description)));
+      }
     }
+    drawTools();
   } catch (error) {
-    body.replaceChildren(element("p", "copy", error.message));
+    hints.replaceChildren(element("p", "copy", error.message));
   }
 }
 
@@ -407,7 +460,7 @@ function inspector() {
     element("p", "", role.description)), badge);
   const body = element("div", "panel-body");
   if (role.kind !== "Gate") {
-    body.append(agentFields(stage), button("Choose stage tools", () => chooseToolSettings(true)));
+    body.append(agentFields(stage));
   }
   if (role.kind === "Audit") {
     body.append(element("div", "audit-fields",
@@ -493,6 +546,8 @@ function documentLibrary() {
 }
 
 function rulesPanel() {
+  const limits = WorkbenchProfile.providerLimits(active(), data.active);
+  const setLimit = key => value => apply((_, item) => { item[key] = value; }, false);
   return element("section", "panel", heading(active().name, "Shared rules appear first in each stage instruction preview."),
     element("div", "panel-body",
       field("Profile name", control("text", active().name, value => {
@@ -501,10 +556,15 @@ function rulesPanel() {
         return true;
       }, {maxLength: 80})),
       field("Instructions for all stages", control("textarea", active().rules, value => apply((_, item) => { item.rules = value; }, false), {rows: 5, maxLength: 20000})),
+      element("div", "form-grid",
+        providerLimitField("Task provider time limit (seconds)", "providerTimeSeconds", limits.providerTimeSeconds, setLimit("providerTimeSeconds")),
+        providerLimitField("Task reported token limit", "providerTokenLimit", limits.providerTokenLimit, setLimit("providerTokenLimit"))),
+      element("small", "", "Token checks run before each call. Reported cache reads are excluded. Usage from an active call can exceed the limit."),
+      element("small", "", "Calls without reported usage remain unknown."),
       documentSection(active().sharedDocs, true),
       field("Project checks (JSON)", control("textarea", jsonText(data.checks), value =>
         apply(next => { next.checks = JSON.parse(value); }, false), {rows: 6})),
-      button("Choose project tools", () => chooseToolSettings(false)),
+      button("Choose project app tools", () => chooseToolSettings(false)),
       element("details", "", element("summary", "", "Advanced tool settings"),
         field("Permitted app tool names (one per line)", control("textarea", (data.permittedTools || []).join("\n"),
           value => apply(next => { next.permittedTools = value.split(/\s+/).filter(Boolean); }, false), {rows: 3})))));

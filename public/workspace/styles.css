@@ -306,3 +306,6 @@ summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { .runtime-spinner { animation:none; } }
 @media (max-width:780px) { .design-columns { grid-template-columns:minmax(0,1fr); } }
 .commit-diff { max-height:32rem; overflow:auto; }
+.run-map-coordinator { padding: .2rem .85rem .65rem; }
+.run-map-coordinator summary { cursor: pointer; }
+.run-map-coordinator p { margin: .35rem 0 0; }

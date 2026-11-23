@@ -700,6 +700,10 @@ function createQualityPanel(key) {
 
   function checkFields(row) {
     return [...commandFields(row),
+      input("Additional input files", (row.input_paths ?? []).join("\n"), value => {
+        if (value.trim()) row.input_paths = value.split("\n").map(line => line.trim()).filter(Boolean);
+        else delete row.input_paths;
+      }, {type: "textarea", rows: 2, hint: "Enter one project-relative file path per line."}),
       input("Phases", row.phases.includes("baseline") ? "both" : "after", value => { row.phases = value === "both" ? ["baseline", "after"] : ["after"]; },
         {options: {both: "Baseline and after", after: "After only"}}),
       flag("Required check", row.required, value => { row.required = value; })];

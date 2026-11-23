@@ -122,13 +122,19 @@ function command(value, fields = [], optional = []) {
 }
 
 function check(value) {
-  const data = command(value, ['id', 'name', 'required'], ['phases']);
+  const data = command(value, ['id', 'name', 'required'], ['phases', 'input_paths']);
   identifier(data.id, 'check ID');
   label(data.name, 'check name', 120);
   boolean(data.required, 'check required');
   data.phases = Object.hasOwn(data, 'phases') ? data.phases : ['baseline', 'after'];
   if (!isDeepStrictEqual(data.phases, ['baseline', 'after']) && !isDeepStrictEqual(data.phases, ['after'])) {
     throw Error('Check phases must be baseline and after, or after only');
+  }
+  if (Object.hasOwn(data, 'input_paths')) {
+    data.input_paths = items(data.input_paths, 'check input paths').map(name => relative(name, 'check input path'));
+    if (data.input_paths.includes('.') || new Set(data.input_paths).size !== data.input_paths.length) {
+      throw Error('Check input paths must be unique project-relative file paths');
+    }
   }
   return data;
 }

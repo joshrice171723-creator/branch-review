@@ -49,9 +49,9 @@ async function defaultDraft(root) {
   const checks = [];
   const upgrade_warnings = [];
   for (const item of legacy.checks || []) {
-    const {name, argv, cwd, phases, required, benchmark} = item;
+    const {name, argv, cwd, phases, required, benchmark, input_paths} = item;
     const candidate = {id: name, name, argv, ...(cwd !== undefined && {cwd}), ...(phases !== undefined && {phases}),
-      required: Boolean(required || benchmark)};
+      ...(input_paths !== undefined && {input_paths}), required: Boolean(required || benchmark)};
     try {
       validateQuality({schema_version: 1, checks: [...checks, candidate], benchmarks: [], rubrics: []});
       checks.push(candidate);

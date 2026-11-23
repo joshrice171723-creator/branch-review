@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -49,6 +49,44 @@ async function waitForBuild(coordinator, wanted = 'review') {
   }
   assert.fail('Build did not reach ' + wanted);
 }
+
+test('blocks provider dispatch at the task token limit and resumes the same stage with a saved increase', async t => {
+  const {git, store, repository} = await fixture(t);
+  const profile = await store.getProfile();
+  profile.profiles[profile.active].providerTokenLimit = 1000;
+  await store.setProfile(profile);
+  const calls = [];
+  const coordinator = await createCoordinator({repository, store, git, invoke: async request => {
+    calls.push(request.stage);
+    if (request.stage === 'plan') {
+      request.onUsage({input: 2350, output: 100, cached: 1500});
+      return {text: JSON.stringify({plan: ['Edit the greeting.']})};
+    }
+    if (request.stage === 'plan_review') {
+      request.onUsage({input: 40, output: 10});
+      return {text: JSON.stringify({verdict: 'pass', reason: 'The plan covers the greeting.'})};
+    }
+    assert.equal(request.stage, 'build');
+    throw Error('Stopped after confirming dispatch.');
+  }});
+  t.after(() => coordinator.close());
+  const action = (name, data) => coordinator.dispatch(name, data, {method: 'POST'});
+  const draft = await action('design/draft', {revision: 0, mode: 'task', title: 'Update greeting',
+    plan: 'Edit the greeting.\n\n## Acceptance criteria\n- The greeting is updated.'});
+  await action('design/approve', {revision: draft.revision, mode: 'task'});
+  await action('design/build', {revision: draft.revision, mode: 'task', decisions});
+  const blocked = await waitForBuild(coordinator, 'failed');
+  assert.match(blocked.error, /1000-token limit/);
+  assert.deepEqual(calls, ['plan', 'plan_review']);
+  assert.match(blocked.error, /1500 cached input tokens/);
+  profile.profiles[profile.active].providerTokenLimit = 2000;
+  await store.setProfile(profile);
+  await action('design/continue', {build: blocked.id});
+  const resumed = await waitForBuild(coordinator, 'failed');
+  assert.equal(resumed.error, 'Stopped after confirming dispatch.');
+  assert.equal(resumed.attempts.at(-1).task, blocked.attempts.at(-1).task);
+  assert.deepEqual(calls, ['plan', 'plan_review', 'build']);
+});
 
 test('restarts a stopped build with saved agent settings and preserves working changes', async t => {
   const {git, store, repository} = await fixture(t);
@@ -134,7 +172,12 @@ test('retries verification on the blocked source without rebuilding it', async t
   await writeFile(path.join(repository, 'greeting.txt'), 'Changed outside the run');
   await assert.rejects(post('design/retry-verification', {build: stopped.id}), /Restore the stopped build’s source/);
   await writeFile(path.join(repository, 'greeting.txt'), 'After');
-  await post('design/retry-verification', {build: stopped.id});
+  const status = {revision: draft.revision, mode: 'task', context: {view: 'workflow', tab: 'Plan'}};
+  const conversation = await post('design/guide', {...status, message: 'Build status'});
+  assert.equal(conversation.messages.at(-1).coordinator, true);
+  assert.match(conversation.messages.at(-1).text, /Stopped at Build audit/);
+  const restarted = await post('design/guide', {...status, message: '/retry-verification'});
+  assert.match(restarted.messages.at(-1).text, /Verification restarted/);
   const finished = await waitForBuild(coordinator);
   assert.equal(finished.attempts.at(-1).task, task);
   assert.equal(builderCalls, count);
@@ -142,26 +185,30 @@ test('retries verification on the blocked source without rebuilding it', async t
   assert.match(await git('diff', '--cached', '--name-only'), /^unrelated\.txt$/);
 });
 
-test('asks for plan clarification and runs registered audit checks without user input', async t => {
+test('recovers planning evidence and reuses a current audit receipt without user input', async t => {
   const {git, store, repository} = await fixture(t);
   const calls = [];
-  const coordinator = await createCoordinator({repository, store, git, async invoke({stage, prompt, schema}) {
+  const coordinator = await createCoordinator({repository, store, git, async invoke({stage, prompt, schema, evidenceOnly}) {
     calls.push(stage);
     let reply;
     if (stage === 'plan') {
       assert.match(prompt, /each acceptance criterion to a configured check/);
-      reply = {plan: ['Update the greeting.', 'Verify the desktop layout manually.']};
+      reply = {plan: ['Update the greeting.', calls.length === 1 ? 'Verify the desktop layout.' :
+        'Use the registered greeting check to verify the expected result.']};
     } else if (stage === 'build') {
-      await writeFile(path.join(repository, 'greeting.txt'), 'After');
-      reply = 'Updated greeting.';
-    } else if (stage === 'plan_review' && !prompt.includes('Use the desktop layout check.')) {
+      await mkdir(path.join(repository, 'public'));
+      await writeFile(path.join(repository, 'public', 'greeting.css'), '.greeting { color: green; }');
+      reply = 'Updated greeting style.';
+    } else if (stage === 'plan_review' && !prompt.includes('Use the registered greeting check')) {
       assert.ok(JSON.parse(await readFile(schema, 'utf8')).properties.verdict.enum.includes('needs_evidence'));
       reply = {verdict: 'needs_evidence', reason: 'Name a check for the desktop layout.'};
     } else if (stage === 'build_review' && calls.filter(item => item === 'build_review').length === 1) {
-      assert.doesNotMatch(prompt, /Use the desktop layout check\./);
+      assert.equal(evidenceOnly, true);
+      assert.match(prompt, /greeting\.css/);
       assert.match(prompt, /"receiptStatus":\[\{"name":"greeting","required":true,"receiptId":"[^"]+","status":"passed"\}/);
-      assert.match(prompt, /workbench-environment\/preview-output\.json/);
       reply = {verdict: 'run_check', check: 'greeting', reason: 'Collect a fresh greeting check result.'};
+    } else if (stage === 'final_review' && calls.filter(item => item === 'final_review').length === 1) {
+      reply = {verdict: 'pass', reason: 'This response forgot the criteria.'};
     } else {
       reply = {verdict: 'pass', reason: 'Reviewed the current evidence.', ...(stage === 'final_review' ? {criteria} : {})};
     }
@@ -173,26 +220,13 @@ test('asks for plan clarification and runs registered audit checks without user 
     plan: 'Edit the greeting.\n\n## Acceptance criteria\n- Verify the desktop layout.'});
   await post('design/approve', {revision: draft.revision, mode: 'task'});
   await post('design/build', {revision: draft.revision, mode: 'task', decisions});
-  const first = await waitForBuild(coordinator, 'question');
-  const request = async role => {
-    const {run} = await coordinator.dispatch('design/progress');
-    assert.equal(run.evidenceRequest.role, role);
-    assert.equal(run.attempts.at(-1).evidence[2], 'Needs evidence');
-    const {active_task: task} = await coordinator.dispatch('live');
-    assert.equal(task.decision_kind, 'evidence');
-    return {task: task.id, question: task.question, question_id: task.question_id};
-  };
-  const planRequest = await request('planReview');
-  assert.deepEqual(calls, ['plan', 'plan_review']);
-  await assert.rejects(post('chat', {message: '/run'}), /pending build decision changed/);
-  await post('chat', {...planRequest, message: 'Use the desktop layout check.'});
   const finished = await waitForBuild(coordinator);
-  assert.equal(finished.id, first.id);
-  assert.equal(finished.attempts.at(-1).task, planRequest.task);
-  assert.deepEqual(calls, ['plan', 'plan_review', 'plan_review', 'build', 'build_review', 'build_review', 'final_review']);
-  const run = await store.getRun(planRequest.task);
+  assert.equal(finished.attempts.length, 1);
+  assert.deepEqual(calls, ['plan', 'plan_review', 'plan', 'plan_review', 'build', 'build_review', 'build_review',
+    'final_review', 'final_review']);
+  const run = await store.getRun(finished.attempts[0].task);
   assert.deepEqual(run.audits.map(row => row.verdict), ['needs_evidence', 'pass', 'pass', 'pass']);
-  assert.equal(run.checks.filter(row => row.phase === 'after' && row.check === 'greeting').length, 2);
+  assert.equal(run.checks.filter(row => row.phase === 'after' && row.check === 'greeting').length, 1);
   assert.equal(run.repair_rounds.length, 0);
 });
 

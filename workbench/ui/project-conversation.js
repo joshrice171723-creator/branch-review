@@ -221,9 +221,10 @@ function connectProjectConversation(initial) {
     const attachment = changeScreenshot;
     submit("guide", {message, context: context(), ...(attachment && {changeScreenshot: attachment})}, message);
   };
+  byId("conversation-build-status").onclick = () => submit("guide", {message: "Build status", context: context()});
   planner.onclick = () => {
     const message = composer.value;
-    const latest = state.messages.findLast(item => item.author === "agent" && !item.asset && !item.decision);
+    const latest = state.messages.findLast(item => item.author === "agent" && !item.asset && !item.decision && !item.coordinator);
     const plan = planFromReply(latest);
     if (!message.trim() && !changeScreenshot && plan) {
       edit(plan, true);
@@ -515,7 +516,7 @@ function connectProjectConversation(initial) {
       const scrollEnd = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 28;
       messages.replaceChildren(...state.messages.filter(item => !item.decision || item.decision !== state.question?.id)
       .map(item => {
-        const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Project agent"),
+        const row = element("li", item.author, element("small", "", item.author === "user" ? "You" : "Workbench coordinator"),
           element("p", "conversation-text", item.text));
         if (item.asset) row.append(assetImage(item.asset, "Generated mockup"));
         if (item.proposal) row.append(proposalCard(item));

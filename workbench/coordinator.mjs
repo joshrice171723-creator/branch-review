@@ -6,12 +6,14 @@ import {createBuilds} from './coordinator/builds.mjs';
 import {createDesign, selectedProfile, stageKeys} from './coordinator/design.mjs';
 import {id, now, ownedFiles, runPattern} from './coordinator/files.mjs';
 import {generateMockup, runProvider} from './coordinator/provider.mjs';
-import {appendMetric} from './coordinator/build-metrics.mjs';
+import {appendMetric, providerSpend, readMetrics} from './coordinator/build-metrics.mjs';
+import {annotateProviderFailure} from './coordinator/provider-limit.mjs';
+import {openStageMcp, selectStageTools} from './mcp.mjs';
 
 const checklist = ['Inspect the commit diff', 'Check the included scope', 'Review the recorded project checks'];
 
 export async function createCoordinator({
-  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe,
+  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe, stageToolCall,
   invoke = runProvider, image = generateMockup
 }) {
   const root = await realpath(repository);
@@ -51,39 +53,74 @@ export async function createCoordinator({
     }));
   }
 
-  async function agent({profile, folder, stage, prompt, schema, write, signal, report, images, visit}) {
+  async function agent({profile, runtimeProfile, folder, stage, prompt, schema, write, signal, report, images, visit, evidenceOnly,
+    toolScope}) {
     const current = selectedProfile(profile);
     const key = stageKeys[stage];
     const configuration = current?.stages?.[key];
     if (!configuration?.provider) throw Error('Apply a profile with a provider for this step.');
     const {provider, model, effort} = configuration;
+    const stageLabel = WorkbenchProfile.roles.find(role => role.id === key)?.name ?? stage;
+    const limitProfile = selectedProfile(runtimeProfile) ?? runtimeProfile ?? current;
+    const limits = WorkbenchProfile.providerLimits(limitProfile, runtimeProfile?.active ?? profile.active, key);
+    const spend = visit === undefined ? null : providerSpend(await readMetrics(files, folder, true));
+    const remaining = spend ? limits.providerTimeSeconds * 1000 - spend.milliseconds : Infinity;
+    if (remaining <= 0) {
+      throw Object.assign(Error('The task reached its ' + limits.providerTimeSeconds + '-second provider time limit.'),
+        {code: 'PROVIDER_TASK_TIME_BUDGET'});
+    }
+    if (spend && spend.tokens >= limits.providerTokenLimit) {
+      const unknown = spend.unknown ? ' Usage is unavailable for ' + spend.unknown + ' prior calls.' : '';
+      throw Object.assign(Error('The task reached its ' + limits.providerTokenLimit + '-token limit. Providers reported ' +
+        spend.tokens + ' tokens plus ' + spend.cached + ' cached input tokens.' + unknown), {code: 'PROVIDER_USAGE_BUDGET'});
+    }
+    signal?.throwIfAborted();
+    const timeoutMs = Math.min(limits.timeoutSeconds * 1000, remaining);
+    const timeoutCode = remaining <= limits.timeoutSeconds * 1000 ? 'PROVIDER_TASK_TIME_BUDGET' : 'PROVIDER_CALL_TIMEOUT';
+    const shellTools = provider === 'Codex' && configuration.shellTools !== false && !evidenceOnly;
+    const stageTools = provider === 'Codex' && stageToolCall ?
+      selectStageTools(stage, configuration.toolHints, {scope: toolScope, evidenceOnly})
+        .filter(name => !name.startsWith('app_') || profile.permittedTools?.includes(name)) : [];
+    const sourceAccess = write && !evidenceOnly ? 'workspace-write' : 'read-only';
     const callId = id();
     const path = folder + '/provider-calls/' + callId;
     const output = await files.path(path + '/reply.txt', true);
-    const instructions = WorkbenchProfile.stagePrompt(current, key, profile.documents, profile.permittedTools);
+    const instructions = WorkbenchProfile.stagePrompt(current, key, profile.documents, profile.permittedTools, stageTools);
     const request = prompt + '\n\n' + instructions;
-    await files.write(path + '/request.json', {provider, model, effort, stage, time: now(), prompt: request});
+    await files.write(path + '/request.json', {provider, model, effort, stage, time: now(), prompt: request,
+      sourceAccess, shellTools, stageTools, timeoutMs, ...(spend && {budget: {...limits, priorUsage: spend}})});
     if (schema) await files.write(path + '/reply.schema.json', schema);
     if (provider === 'Muse') await files.write(path + '/reply.txt.prompt.txt', Buffer.from(request, 'utf8'));
     await report?.(provider, 'Requested model ' + (model || 'provider default') + ' · thinking effort ' + (effort || 'provider default'));
-    const call = {id: callId, visit, stage, provider, model, startedAt: Date.now()};
-    if (visit !== undefined) await appendMetric(files, folder, call);
-    let usage;
+    await report?.('Workbench', (sourceAccess === 'workspace-write' ? 'Workspace writes enabled' : 'Read-only workspace') +
+      ' · shell ' + (shellTools ? 'allowed' : 'disabled') + ' · ' + Math.ceil(timeoutMs / 1000) + 's call limit');
+    if (stageTools.length) await report?.('Workbench', 'Selected MCP tools · ' + stageTools.join(', '));
+    const call = {id: callId, visit, stage, provider, model, startedAt: Date.now(), timeoutMs, sourceAccess, shellTools, stageTools};
+    if (visit !== undefined) await appendMetric(files, folder, call, true);
+    let usage, stageMcp;
     let outcome = 'failed';
     try {
-      const result = await invoke({provider, model, effort, stage, cwd: root, write, signal, output, images,
+      if (stageTools.length) stageMcp = await openStageMcp(stageToolCall, profile, stageTools);
+      const result = await invoke({provider, model, effort, stage, stageLabel, cwd: root, write, signal, output, images,
+        evidenceOnly, shellTools, timeoutMs, timeoutCode, stageMcp,
         providerOptions: await options(), schema: schema ? await files.path(path + '/reply.schema.json') : undefined,
         prompt: request, report: message => report?.(provider, message), onUsage: value => { usage = value; }});
       outcome = 'complete';
       await files.write(path + '/result.json', {time: now(), ...result});
       return result;
+    } catch (error) {
+      if (error.code === 'PROVIDER_CALL_TIMEOUT' || error.code === 'PROVIDER_TASK_TIME_BUDGET') outcome = 'timed_out';
+      throw annotateProviderFailure(error, {provider, model, stage});
     } finally {
+      stageMcp?.close();
       if (visit !== undefined) await appendMetric(files, folder, {...call, outcome: signal?.aborted ? 'cancelled' : outcome,
-        finishedAt: Date.now(), ...(usage && {usage})});
+        finishedAt: Date.now(), ...(usage && {usage})}, true);
     }
   }
 
   const design = createDesign({files, store, git, agent, projectName: path.basename(root), projectEvidence, validateQuality,
+    buildContext: build => builds.conversationContext(build),
+    retryBuildVerification: build => builds.retryVerification({build}),
     qualityDraft: async () => {
       const quality = await qualityDraft?.();
       return quality?.draft ?? (quality?.definition ? quality : null);
@@ -94,11 +131,7 @@ export async function createCoordinator({
   async function readDesign() {
     const [state, layout] = await Promise.all([design.read(), design.layout()]);
     const current = state.builds.at(-1);
-    let restartRequired = false;
-    if (current && ['failed', 'cancelled'].includes(current.status)) {
-      const head = await git('rev-parse', 'HEAD').catch(() => null);
-      restartRequired = Boolean(head && head !== current.base);
-    }
+    const restartRequired = await builds.restartRequired(current);
     return {...state, checklist, layout, restartRequired, resumeBlocker: await builds.resumeBlocker(current),
       verificationAvailable: !restartRequired && await builds.verificationAvailable(current)};
   }
@@ -117,6 +150,12 @@ export async function createCoordinator({
         case 'GET design/readiness': return await builds.readiness();
         case 'GET design/providers': return await checkProviders(await store.getProfile(), data.refresh === '1');
         case 'GET design/history': return await builds.history();
+        case 'GET design/tool-suggestions': {
+          const stage = Object.keys(stageKeys).find(key => stageKeys[key] === data.stage);
+          if (!stage) return [];
+          const state = await design.read();
+          return selectStageTools(stage, undefined, {scope: state.plan});
+        }
         case 'GET design/conversations': return await design.conversations(data);
         case 'GET design/summary': return await builds.summary();
         case 'GET design/evidence': return await builds.evidence(data);
@@ -174,6 +213,7 @@ export async function createCoordinator({
       if (method === 'POST') pending--;
     }
   }
-  return {dispatch, busy: () => pending > 0 || builds.busy(), close: builds.close};
+  return {dispatch, busy: () => pending > 0 || builds.busy(), close: builds.close,
+    suspendRecovery: builds.suspendRecovery};
 }
 

@@ -1,14 +1,17 @@
 import {isDeepStrictEqual} from 'node:util';
-import {id, now, runPattern, sentence} from './files.mjs';
-import {checkMode, hash, jsonHash, selectedProfile} from './design.mjs';
+import {assetPattern, id, now, runPattern, sentence} from './files.mjs';
+import {checkMode, hash, jsonHash, selectedProfile, workspaceFile} from './design.mjs';
 import {commitment, currentGroup, loopPath, markerPath, statePath} from './audit.mjs';
 import {buildStageRoles, buildTrace, checkRows, gateEvidence, stageEvidence} from './step-evidence.mjs';
 import {legacyProviderMetrics, readMetrics, visitMetrics} from './build-metrics.mjs';
+import {WorkbenchProfile} from '../profile.mjs';
+import {annotateProviderFailure} from './provider-limit.mjs';
 
 const leasePath = '.harness/design/build.owner';
 const pendingStates = ['working', 'cancelling'];
 const closedStates = ['closed', 'retired'];
 const decisionStages = ['question', 'question_retry', 'evidence'];
+const budgetErrors = ['PROVIDER_CALL_TIMEOUT', 'PROVIDER_TASK_TIME_BUDGET', 'PROVIDER_USAGE_BUDGET'];
 const repairLimitMessage = 'This run reached its repair limit. Review the last audit before starting another build.';
 const workflowChangedMessage = build => 'Agent settings changed after this run started. ' + (build.mode === 'task'
   ? 'Restart the build to use the saved settings.'
@@ -68,6 +71,10 @@ function groupMembers(state, payload) {
 
 export function createBuilds({files, git, store, design, audit, review, push, checkProviders = async () => []}) {
   const jobs = new Map();
+  let recoveryTimer;
+  let recoverySuspended = false;
+  let closing = false;
+  let operations = 0;
   let legacyMetrics;
   const providerReady = row => ['ready', 'unverified'].includes(row.status);
   const providerMessage = row => row.roles.join(', ') + ' · ' + row.message;
@@ -99,13 +106,31 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     }
     return legacyMetrics.calls;
   }
+  async function providerLimitFor(attempt, run) {
+    if (attempt.providerLimit) return attempt.providerLimit;
+    const stage = attempt.step === 'question_retry' ? 'plan' : attempt.step;
+    const role = buildStageRoles[stage];
+    if (!role || !attempt.error) return null;
+    const limit = annotateProviderFailure({message: attempt.error}, {stage}).providerLimit;
+    if (!limit) return null;
+    const pinned = run ?? await store.getRun(attempt.task);
+    const settings = selectedProfile(pinned.task.profile)?.stages[role];
+    return settings?.provider ? {...limit, provider: settings.provider, model: settings.model} : null;
+  }
   async function resumeBlocker(build, run) {
     const attempt = build?.attempts.at(-1);
     if (!attempt || !['failed', 'cancelled'].includes(build.status)) return '';
     const pinned = run ?? await store.getRun(attempt.task);
     if (pinned.lifecycle.cause === 'repair_limit') return repairLimitMessage;
-    if (attempt.step === 'evidence_blocked') return 'The previous verification attempt stopped. Use Retry verification to run the current checks.';
-    return changedAgents(pinned.task.profile, await store.getProfile()).length ? workflowChangedMessage(build) : '';
+    if (attempt.step === 'stopped') return 'The audit stopped this run. Review the last audit before starting another build.';
+    if (attempt.step === 'evidence_blocked' && await verificationAvailable(build)) {
+      return 'The previous verification attempt stopped. Use Retry verification to run the current checks.';
+    }
+    if (changedAgents(pinned.task.profile, await store.getProfile()).length) return workflowChangedMessage(build);
+    if (Date.parse((await providerLimitFor(attempt, pinned))?.resetAt) > Date.now()) {
+      return 'The provider reported a reset time. This run will resume when the quota resets.';
+    }
+    return '';
   }
   function verificationCheckpoint(run, loop) {
     if (loop?.design_sha) return null;
@@ -122,10 +147,36 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const [run, loop] = await Promise.all([store.getRun(attempt.task), files.read(statePath(attempt.task))]);
     return Boolean(verificationCheckpoint(run, loop));
   }
+  async function restartRequired(build) {
+    if (!build || !['failed', 'cancelled'].includes(build.status)) return false;
+    try {
+      await ensureResumeTarget(build, build.attempts.at(-1)?.task);
+      return false;
+    } catch {
+      return true;
+    }
+  }
+  async function ensureResumeTarget(build, taskId, checkpoint) {
+    if (await commitment(git, build.branch) === build.base) return;
+    const loop = checkpoint ?? (taskId && await files.read(statePath(taskId)));
+    if (loop?.design_sha) return audit.ensureCleanTarget(build, loop.design_sha);
+    if (loop?.commitIntent && await audit.findPendingCommit(await store.getRun(taskId).then(run => run.task), build, loop)) return;
+    throw Error('Restore the exact branch and commit for this task.');
+  }
   async function profileMatches(build, profile) {
     if (build.profile === jsonHash(profile)) return true;
     const bytes = await files.bytes('.harness/profile.json', 4_000_000, null);
     return !!bytes && hash(bytes) === build.profile;
+  }
+  async function runtimeProfile(previous, taskId) {
+    if (previous?.task !== taskId) return;
+    if (!budgetErrors.includes(previous.errorCode)) return previous.runtimeProfile;
+    const saved = await store.getProfile();
+    const profile = selectedProfile(saved);
+    const stages = Object.fromEntries(Object.keys(profile.stages).map(key =>
+      [key, {timeoutSeconds: WorkbenchProfile.providerLimits(profile, saved.active, key).timeoutSeconds}]));
+    const {providerTimeSeconds, providerTokenLimit} = WorkbenchProfile.providerLimits(profile, saved.active);
+    return {providerTimeSeconds, providerTokenLimit, stages};
   }
 
   async function readiness() {
@@ -152,7 +203,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return {ready: items.filter(row => row.id !== 'review').every(row => row.status === 'ready'), items};
   }
 
-  async function newAttempt(state, build, answer, verificationOnly) {
+  async function newAttempt(state, build, answer, verificationOnly, automaticRecovery) {
     if (!approved(state, build)) throw Error('The approved plan changed. Retire this build before continuing.');
     if (state.branch !== build.branch) throw Error('Restore the configured branch before continuing.');
     const previous = build.attempts.at(-1);
@@ -162,9 +213,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (!member) throw Error('This group is waiting for Branch Review.');
     const prior = previous?.slice === member && previous.outcome !== 'completed'
       ? await store.getRun(previous.task) : null;
+    const loop = prior && await files.read(statePath(prior.id));
     let verificationSource;
     if (verificationOnly) {
-      const loop = prior && await files.read(statePath(prior.id));
       verificationSource = verificationCheckpoint(prior, loop);
       if (!verificationSource) {
         throw Error('Select a build stopped during audit before it produced a review commit.');
@@ -174,9 +225,10 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const blocker = verificationOnly ? '' : await resumeBlocker(build, prior);
     if (blocker) throw Error(blocker);
     let task = prior && (verificationOnly || ['active', 'paused', 'completed'].includes(prior.lifecycle.status)) ? prior.task : null;
+    if (automaticRecovery && !task) throw Error('The original task is unavailable for recovery.');
     if (task && !verificationOnly) {
-      const loop = await files.read(statePath(task.id));
       if (loop?.stage === 'stopped') throw Error('The audit return limit was reached. Retire this build before continuing.');
+      await ensureResumeTarget(build, task.id, loop);
       if (prior.lifecycle.status === 'paused') await store.resume(task.id);
     } else if (!task) {
       await audit.ensureCleanTarget(build, build.base);
@@ -215,12 +267,16 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     if (!saved) await files.write(markerPath(task.id), marker);
     else if (!isDeepStrictEqual(saved, marker)) throw Error('The recorded build scope changed.');
     if (verificationOnly) await store.retryVerification(task.id, verificationSource);
+    const limits = await runtimeProfile(previous, task.id);
     const attempt = {id: id(), job: id(), slice: member, task: task.id, started: now(), outcome: 'running',
+      ...(limits && {runtimeProfile: limits}),
+      ...(automaticRecovery && {automaticRecovery}),
       reason: group.findings.at(-1)?.text ?? previous?.error ?? ''};
     build.attempts.push(attempt);
     build.status = 'working';
     delete build.error;
-    return {build: structuredClone(build), attempt, task, answer, verificationOnly};
+    return {build: structuredClone(build), attempt, task, answer, verificationOnly, runtimeProfile: limits,
+      step: verificationOnly ? 'checks' : loop?.stage};
   }
 
   async function recordResult(buildId, job, loop) {
@@ -229,7 +285,8 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       const attempt = build.attempts.find(row => row.job === job.id);
       if (!attempt || attempt.finished) return;
       const group = currentGroup(build);
-      Object.assign(attempt, {outcome: job.state, finished: now(), step: loop?.stage, error: job.error ?? ''});
+      Object.assign(attempt, {outcome: job.state, finished: job.finished_at ?? now(), step: loop?.stage, error: job.error ?? '',
+        ...(job.providerLimit && {providerLimit: job.providerLimit}), ...(job.errorCode && {errorCode: job.errorCode})});
       if (loop?.stage === 'completed' && job.state === 'completed' && loop.design_sha) {
         attempt.sha = group.sha = build.base = loop.design_sha;
         group.pending = group.pending.filter(member => member !== attempt.slice);
@@ -239,12 +296,12 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         build.status = group.pending.length ? 'ready' : 'review';
       } else if (job.state === 'cancelled') {
         build.status = 'cancelled';
-      } else if (decisionStages.includes(loop?.stage)) {
+      } else if (job.state === 'completed' && decisionStages.includes(loop?.stage)) {
         build.status = 'question';
         attempt.outcome = {question: 'waiting for answer', question_retry: 'retry suggestions', evidence: 'waiting for evidence'}[loop.stage];
       } else {
         build.status = 'failed';
-        build.error = job.error ?? loop?.finding ?? 'The build stopped before verification.';
+        build.error = job.error || loop?.finding || 'The build stopped before verification.';
       }
     });
   }
@@ -252,9 +309,9 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
   function start(prepared, release) {
     const {build, attempt, task} = prepared;
     const controller = new AbortController();
-    const job = {id: attempt.job, task_id: task.id, state: 'running', started_at: attempt.started, step: 'plan',
+    const job = {id: attempt.job, task_id: task.id, state: 'running', started_at: attempt.started, step: prepared.step ?? 'plan',
       cancellable: true, response: '', error: null};
-    const execution = {job, controller};
+    const execution = {job, controller, active: true};
     jobs.set(job.id, execution);
     execution.done = (async () => {
       let loop;
@@ -270,23 +327,35 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         job.response = loop.stage === 'completed' ? loop.summary ?? 'Verified for Branch Review.' :
           pendingReply(loop)?.question ?? '';
         job.state = loop.stage === 'stopped' ? 'failed' : 'completed';
-        if (loop.stage === 'stopped') job.error = loop.finding;
+        if (loop.stage === 'stopped') {
+          const detail = loop.history?.at(-1)?.detail;
+          job.error = (typeof detail === 'string' ? detail : detail?.reason) || loop.finding;
+        }
       } catch (error) {
         loop = await files.read(statePath(task.id), {}).catch(() => ({}));
         job.state = controller.signal.aborted ? 'cancelled' : 'failed';
         job.error = controller.signal.aborted ? 'Task cancelled.' : error.message;
+        if (!controller.signal.aborted) {
+          job.providerLimit = error.providerLimit;
+          if (budgetErrors.includes(error.code)) job.errorCode = error.code;
+        }
         await audit.activity(task.id, loop.stage ?? 'plan', 'Workbench', job.error).catch(() => {});
         if (controller.signal.aborted) await store.pause(task.id, 'Task cancelled.').catch(() => {});
       } finally {
         job.cancellable = false;
+        job.finished_at = now();
         try {
           await files.write(loopPath(task.id) + '/jobs/' + job.id + '.json', job);
           if (!build.standalone) await recordResult(build.id, job, loop);
         } catch (error) {
           job.state = 'failed';
           job.error = error.message;
-        } finally { await release(); }
+        } finally {
+          try { await release(); }
+          finally { execution.active = false; }
+        }
       }
+      if (!build.standalone && job.providerLimit?.resetAt) await refreshRecovery();
       if (!build.standalone && job.state === 'completed' && loop?.stage === 'completed') {
         const state = await design.read();
         if (state.builds.at(-1)?.id === build.id && state.builds.at(-1).status === 'ready') {
@@ -302,20 +371,24 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     return {...job};
   }
 
-  async function drive(change, answer, verificationOnly = false) {
-    const release = await files.acquire(leasePath);
+  async function drive(change, answer, verificationOnly = false, automaticRecovery) {
+    if (closing || recoverySuspended) throw Error('Branch Review is closing or switching projects.');
+    operations++;
+    let release;
     let handedOff = false;
     try {
+      release = await files.acquire(leasePath);
       let prepared;
       const state = await design.edit(async state => {
         const build = await change(state);
-        prepared = await newAttempt(state, build, answer, verificationOnly);
+        prepared = await newAttempt(state, build, answer, verificationOnly, automaticRecovery);
       });
       const job = start(prepared, release);
       handedOff = true;
       return {state, job};
     } finally {
-      if (!handedOff) await release();
+      try { if (!handedOff) await release?.(); }
+      finally { operations--; }
     }
   }
 
@@ -374,6 +447,56 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     }, undefined, true)).state;
   }
 
+  function scheduleRecovery(callback, wait) {
+    clearTimeout(recoveryTimer);
+    if (!closing && !recoverySuspended) {
+      recoveryTimer = setTimeout(() => {
+        recoveryTimer = undefined;
+        void callback().catch(() => {});
+      }, Math.min(wait, 2147483647));
+      recoveryTimer.unref();
+    }
+  }
+
+  async function refreshRecovery(reconnectPending = false) {
+    if (closing || recoverySuspended) return;
+    const state = await files.read(workspaceFile);
+    const build = state?.builds?.at(-1);
+    const attempt = build?.attempts.at(-1);
+    if (!attempt || jobs.get(attempt.job)?.active) return;
+    if (reconnectPending && pendingStates.includes(build.status)) {
+      try { await reconnect({build: build.id}); }
+      catch (error) {
+        if (error.message === 'This checkout already has an active Workbench operation.') {
+          scheduleRecovery(() => refreshRecovery(true), 1000);
+        }
+        return;
+      }
+      return refreshRecovery();
+    }
+    if (build.status !== 'failed') return;
+    const limit = await providerLimitFor(attempt);
+    const deadline = Date.parse(limit?.resetAt);
+    if (!Number.isFinite(deadline) ||
+        build.attempts.some(row => row.task === attempt.task && isDeepStrictEqual(row.automaticRecovery, limit))) return;
+    const wait = deadline - Date.now();
+    if (wait > 0) {
+      scheduleRecovery(refreshRecovery, wait);
+      return;
+    }
+    try {
+      await drive(state => {
+        const next = state.builds.at(-1);
+        if (next?.id !== build.id || next.status !== 'failed' || next.attempts.at(-1)?.id !== attempt.id) {
+          throw Error('The run has already changed.');
+        }
+        return next;
+      }, undefined, false, limit);
+    } catch (error) {
+      if (error.message === 'This checkout already has an active Workbench operation.') scheduleRecovery(refreshRecovery, 1000);
+    }
+  }
+
   async function cancel(payload) {
     let execution;
     const state = await design.edit(state => {
@@ -395,20 +518,46 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     const build = current(state, payload.build);
     if (!pendingStates.includes(build.status)) return state;
     const attempt = build.attempts.at(-1);
-    if (pendingStates.includes(jobs.get(attempt.job)?.job.state) || jobs.get(attempt.job)?.job.state === 'running') return state;
-    const release = await files.acquire(leasePath);
+    if (jobs.get(attempt.job)?.active) return state;
+    if (closing || recoverySuspended) throw Error('Branch Review is closing or switching projects.');
+    operations++;
+    let release;
+    let handedOff = false;
     try {
+      release = await files.acquire(leasePath);
+      const fresh = await design.read();
+      const latest = fresh.builds.at(-1);
+      if (latest?.id !== build.id || latest.attempts.at(-1)?.id !== attempt.id || !pendingStates.includes(latest.status)) return fresh;
       const loop = await files.read(statePath(attempt.task), {});
-      const result = attempt.job ? await files.read(loopPath(attempt.task) + '/jobs/' + attempt.job + '.json') : null;
-      const job = result ?? {id: attempt.job,
-        state: loop.stage === 'completed' || decisionStages.includes(loop.stage) ? 'completed' :
-          build.status === 'cancelling' ? 'cancelled' : 'failed',
-        error: loop.stage === 'completed' ? '' : 'Recovered the saved build checkpoint.'};
+      const result = await readJob(attempt.task, attempt.job);
+      if (!result && loop.stage === 'finish' && (loop.design_sha || loop.commitIntent) &&
+          latest.branch === fresh.branch && approved(fresh, latest)) {
+        const {task} = await store.getRun(attempt.task);
+        const committed = loop.design_sha || await audit.findPendingCommit(task, latest, loop).catch(() => null);
+        if (committed) {
+          start({build: latest, attempt, task, step: 'finish', runtimeProfile: attempt.runtimeProfile}, release);
+          handedOff = true;
+          return fresh;
+        }
+      }
+      const completed = loop.stage === 'completed' || decisionStages.includes(loop.stage);
+      const detail = loop.history?.at(-1)?.detail;
+      const recordedError = ['evidence_blocked', 'stopped'].includes(loop.stage) &&
+        (typeof detail === 'string' ? detail : detail?.reason);
+      const job = result ?? {id: attempt.job, task_id: attempt.task, step: loop.stage, started_at: attempt.started,
+        state: completed ? 'completed' : latest.status === 'cancelling' ? 'cancelled' : 'failed', cancellable: false,
+        finished_at: now(), error: completed ? '' : recordedError || 'Recovered the saved build checkpoint.'};
       if (job.state === 'cancelled') await store.pause(attempt.task, 'Task cancelled.').catch(() => {});
+      if (!result && assetPattern.test(attempt.job ?? '')) await files.write(loopPath(attempt.task) + '/jobs/' + attempt.job + '.json', job);
       await recordResult(build.id, job, loop);
       return design.read();
-    } finally { await release(); }
+    } finally {
+      try { if (!handedOff) await release?.(); }
+      finally { operations--; }
+    }
   }
+
+  const readJob = (task, job) => assetPattern.test(job ?? '') ? files.read(loopPath(task) + '/jobs/' + job + '.json') : null;
 
   async function reviewed(build, group) {
     const attempt = build.attempts.findLast(row => row.outcome === 'completed' && group.slices.includes(row.slice));
@@ -502,6 +651,7 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
   }
 
   async function runStandalone(running, payload, message) {
+    if (closing || recoverySuspended) throw Error('Branch Review is closing or switching projects.');
     const release = await files.acquire(leasePath);
     let started = false;
     try {
@@ -585,6 +735,10 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       ...pendingReply(loop),
       ...(loop.stage === 'question_retry' ? {question_error: loop.question_error} : {})} : null;
     const jobsData = [...jobs.values()].map(entry => entry.job);
+    if (last && !jobs.has(last.job)) {
+      const saved = await readJob(last.task, last.job);
+      if (saved) jobsData.push(saved);
+    }
     const {questions} = await store.questions(running?.id);
     return {active_task: task, jobs: jobsData, questions, coordinator_running: jobsData.some(job => ['running', 'cancelling'].includes(job.state)),
       design_question: state.question, design_retry: state.plannerRetry, design_revision: state.revision};
@@ -615,15 +769,16 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         evidence: statuses(stageEvidence(task, build, visit, visits))};
     });
     const tail = attempts.at(-1);
-    const failedRole = tail?.role || buildStageRoles[attempt.step];
+    const blockedStage = loop.stage === 'evidence_blocked' ? loop.history?.at(-1)?.detail?.stage : null;
+    const failedRole = buildStageRoles[blockedStage] || tail?.role || buildStageRoles[attempt.step];
     let failure = null;
     if (build.status === 'failed' && build.error && failedRole) {
       const saved = await store.getProfile();
       const stage = failedRole === 'repair' ? 'build' : failedRole;
       const changed = changedAgents(task.task.profile, saved);
       failure = {role: failedRole, message: build.error.slice(0, 4000), repairLimit: task.lifecycle.cause === 'repair_limit',
-        resumeBlocker: task.lifecycle.cause === 'repair_limit' ? repairLimitMessage :
-          changed.length ? workflowChangedMessage(build) : '',
+        resumeBlocker: await resumeBlocker(build, task),
+        providerLimit: await providerLimitFor(attempt, task), errorCode: attempt.errorCode ?? null,
         savedAgent: changed.includes(stage) ? agentSettings(selectedProfile(saved).stages[stage]) : null};
     }
     const activity = await files.bytes(loopPath(attempt.task) + '/activity.jsonl', 32_000_000, Buffer.alloc(0));
@@ -642,6 +797,20 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
         pushMs: group.pushed?.sha === group.sha ? group.pushed?.milliseconds : undefined,
         evidence: {humanReview: statuses(gateEvidence('humanReview', build, group)),
           push: statuses(gateEvidence('push', build, group))}}};
+  }
+
+  async function conversationContext(build) {
+    if (!build || build.status === 'retired') return null;
+    const attempt = build.attempts.at(-1);
+    const loop = attempt ? await files.read(statePath(attempt.task), {}) : {};
+    const detail = loop.history?.at(-1)?.detail;
+    const step = buildStageRoles[detail?.stage ?? loop.stage] ?? buildStageRoles[attempt?.step];
+    const stage = WorkbenchProfile.roles.find(role => role.id === step)?.name ??
+      ({baseline: 'Baseline checks', repair: 'Repair', checks: 'Project checks'})[step];
+    return {id: build.id, title: build.title || 'Current build', state: build.status, stage,
+      pendingQuestion: build.status === 'question' ? loop.question : undefined,
+      waitingForReview: build.status === 'review', failure: build.error?.slice(0, 4000),
+      activity: typeof detail === 'string' ? detail.slice(0, 800) : detail?.reason?.slice(0, 800)};
   }
 
   async function step({task: id, visit, role, key, output}) {
@@ -719,7 +888,18 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
     })};
   }
 
-  return {launch, advance, retryVerification, verificationAvailable, cancel, reconnect, decision, readiness, chat, live, history, progress, step, events, summary, resumeBlocker, busy: () => [...jobs.values()].some(({job}) => ['running', 'cancelling'].includes(job.state)),
+  const busy = () => operations > 0 || [...jobs.values()].some(entry => entry.active);
+  void refreshRecovery(true).catch(() => {});
+  return {launch, advance, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, readiness, chat, live, history, progress, conversationContext, step, events, summary, resumeBlocker, busy,
+    suspendRecovery() {
+      if (busy() || closing || recoverySuspended) throw Error('Finish or cancel the active build before leaving this project.');
+      recoverySuspended = true;
+      clearTimeout(recoveryTimer);
+      return () => {
+        recoverySuspended = false;
+        void refreshRecovery(true).catch(() => {});
+      };
+    },
     async group(payload) {
       const build = current(await design.read(), payload.build);
       return reviewed(build, groupAt(build, payload.group));
@@ -739,13 +919,22 @@ export function createBuilds({files, git, store, design, audit, review, push, ch
       entry.controller.abort();
       return {...entry.job};
     },
-    job(payload) {
-      const job = jobs.get(payload.id)?.job;
+    async job(payload) {
+      let job = jobs.get(payload.id)?.job;
+      if (!job && assetPattern.test(payload.id ?? '')) {
+        const state = await design.read();
+        const attempt = [...state.builds, ...(state.archivedBuilds ?? [])].flatMap(build => build.attempts)
+          .find(row => row.job === payload.id);
+        const task = attempt?.task ?? (await active())?.id;
+        if (task) job = await readJob(task, payload.id);
+      }
       if (!job) throw Error('Unknown job.');
       return {...job, events: [], next_cursor: 0};
     },
     async close() {
-      const executions = [...jobs.values()].filter(({job}) => job.state === 'running' || job.state === 'cancelling');
+      closing = true;
+      clearTimeout(recoveryTimer);
+      const executions = [...jobs.values()].filter(entry => entry.active);
       for (const {job, controller} of executions) if (job.cancellable) controller.abort();
       await Promise.all(executions.map(entry => entry.done));
     }
