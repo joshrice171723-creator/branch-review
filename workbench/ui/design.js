@@ -344,15 +344,15 @@ function designPanel(initialState) {
     }
     const start = button("Start build", async () => {
       if (startingFromPlan) return;
-      if (byId("apply-profile").textContent === "Apply changes") {
-        showPlanStartStatus("Apply your workflow profile changes before starting a build.");
-        return;
-      }
       startingFromPlan = true;
       start.disabled = true;
       showPlanStartStatus("Checking build readiness…");
       const onError = error => showPlanStartStatus(error.message);
       try {
+        if (!stateProfileApplied() || byId("apply-profile").textContent === "Apply changes") {
+          showPlanStartStatus("Preparing the " + active().name + " workflow…");
+          await saveWorkflowProfile();
+        }
         const preflight = await api("design/readiness");
         const blockers = preflight.items.filter(item => item.status === "blocked" && !["plan", "review"].includes(item.id));
         if (blockers.length) {
@@ -408,7 +408,7 @@ function designPanel(initialState) {
     const result = box("Plan", field("Change title", title),
       element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
       rendered, draft, summary,
-      agreement, element("p", "", "Start build approves this plan and confirms the agreement."),
+      agreement, element("p", "", "Start build uses the " + active().name + " workflow and approves this plan and agreement."),
       element("div", "actions", save, discard, start), startFeedback);
     if (baseRevision !== state.revision) result.append(
       element("details", "", element("summary", "", "Compare saved plan"), element("pre", "", state.plan)),
@@ -1078,28 +1078,35 @@ function designPanel(initialState) {
         } catch (error) { readinessStatus.textContent = error.message; }
         finally { prepare.disabled = false; }
       });
-      const launch = button("Start build", () => {
+      const launch = button("Start build", async () => {
         const [kind, key] = scope.value.split("/");
         const target = embedded ? {} : {scope: kind, key, frequency: frequency.value};
-        change("build", {...target, stages: active().stages, decisions: launchForm.decisions}, {wait: "Starting build…", done: "Build started."});
+        launch.disabled = true;
+        try {
+          if (!stateProfileApplied() || byId("apply-profile").textContent === "Apply changes") await saveWorkflowProfile();
+          await change("build", {...target, stages: active().stages, decisions: launchForm.decisions},
+            {wait: "Starting build…", done: "Build started.", onError: error => { readinessStatus.textContent = error.message; }});
+        } catch (error) { readinessStatus.textContent = error.message; }
+        finally { updateLaunch(); }
       }, "button primary");
       function updateLaunch() {
-        const profileDraft = byId("apply-profile").textContent === "Apply changes";
         const agreementMissing = questions.some(q => !launchForm.decisions[q.id]);
         const blocker = localDraft.plan ? "Save or discard your local plan draft." :
-          profileDraft ? "Apply your profile changes." :
           agreementMissing ? "Complete the build agreement." : "";
-        launch.disabled = !readiness?.ready || Boolean(blocker);
+        launch.disabled = !readiness || readiness.items.some(item =>
+          item.status === "blocked" && !["profile", "review"].includes(item.id)) || Boolean(blocker);
         reasons.textContent = blocker;
       }
       function showReadiness() {
         readinessList.replaceChildren(...(readiness?.items || []).map(item => {
           const row = element("li", "", element("strong", "", item.status === "ready" ? "Ready" : "Blocked"),
-            element("span", "", item.message));
+            element("span", "", item.id === "profile" && item.status === "blocked"
+              ? "Start build prepares the selected workflow." : item.message));
+          if (item.id === "profile" && item.status === "blocked") row.firstElementChild.textContent = "On start";
           row.dataset.status = item.status;
           return row;
         }));
-        prepare.hidden = !readiness?.items?.some(item => ["profile", "checks"].includes(item.id) && item.status === "blocked");
+        prepare.hidden = !readiness?.items?.some(item => item.id === "checks" && item.status === "blocked");
         updateLaunch();
       }
       async function checkReadiness() {
@@ -1176,10 +1183,9 @@ function designPanel(initialState) {
       const field = body.querySelector('[data-design-focus="' + name + '"]');
       (field && !field.disabled ? field : body.querySelector('[data-design-focus="plan"]'))?.focus();
     };
-    const problem = readiness?.items.find(item => item.status === "blocked");
+    const problem = readiness?.items.find(item => item.status === "blocked" && item.id !== "profile");
     const actions = {
       plan: ["Review the plan", focus("plan")],
-      profile: ["Apply the workflow profile", () => byId("apply-profile").focus()],
       checks: ["Configure project checks", () => goQuality("checks")],
       branch: ["Choose a build branch", () => goBuild("branch")],
       review: ["Connect Branch Review", () => goBuild("review-host")],
@@ -1193,7 +1199,11 @@ function designPanel(initialState) {
     } else if (state.question || state.plannerRetry) next = ["Resolve the planning decision", () => projectConversation.open()];
     else if (localDraft.plan) next = ["Save the local draft", focus("plan-save")];
     else if (!state.plan.trim()) next = ["Draft a plan", () => projectConversation.open()];
-    else if (state.approved !== state.revision) next = ["Approve the saved plan", focus("plan-approve")];
+    else if (state.approved !== state.revision && !embedded) next = ["Approve the saved plan", focus("plan-approve")];
+    else if (tab === "Plan" && embedded && !problem) {
+      nextAction.replaceChildren();
+      return;
+    }
     else if (problem) next = actions[problem.id] || ["Review build readiness", () => goBuild()];
     else next = [readiness?.ready ? "Set up the build" : "Check build readiness", () => goBuild()];
     nextAction.replaceChildren(button(next[0], next[1], "button primary"));

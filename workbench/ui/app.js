@@ -811,16 +811,24 @@ byId("document-files").addEventListener("change", async event => {
     notify("Upload failed. " + error.message);
   }
 });
-byId("apply-profile").addEventListener("click", async event => {
-  const button = event.currentTarget;
+async function saveWorkflowProfile() {
+  const button = byId("apply-profile");
+  if (button.disabled) throw Error("Wait for the workflow profile to finish saving.");
+  const selected = data;
   button.disabled = true;
   try {
-    await api("profile", data);
+    await api("profile", selected);
     projectState.profile_applied = true;
+    if (data !== selected) throw Error("The workflow profile changed while saving. Try again.");
     button.textContent = "Apply profile";
+  }
+  finally { button.disabled = false; }
+}
+byId("apply-profile").addEventListener("click", async () => {
+  try {
+    await saveWorkflowProfile();
     notify("Project profile applied to future runs.");
   } catch (error) { notify(error.message); }
-  finally { button.disabled = false; }
 });
 await loadProject();
 
