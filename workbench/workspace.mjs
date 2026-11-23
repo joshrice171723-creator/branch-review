@@ -8,7 +8,6 @@ import {probeProvider} from '../providers.mjs';
 import {modelCatalog, WorkbenchProfile, presetDocuments} from './profile.mjs';
 import {toolDescriptions, workspaceMcp} from './mcp.mjs';
 import discovery from '../desktop/project-discovery.cjs';
-import path from 'node:path';
 import {observeRuntime} from './coordinator/runtime-probes.mjs';
 import {repairRuntime} from './coordinator/health-repair.mjs';
 
@@ -34,16 +33,15 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     repository,store:tasks,git,review,push,providerOptions,
     stageToolCall:call,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
-      directory: path.join(local, 'coordinator-health'),
-      observe: () => observeRuntime({preview: () => readEnvironment('design/app-process'), origin, desktop: diagnostics}),
+      directory: diagnostics.healthDirectory,
+      observe: () => observeRuntime(diagnostics),
       idle: canRepair,
-      recover: signal => signal.owner === 'host' ? diagnostics.recoverRenderer() : environment.recoverPreview(),
       repair: async (incident, directory, signal, mayApply, prior) => repairRuntime({
-        repository: (incident.repairOwner || incident.owner) === 'host' ? diagnostics.repository : repository,
-        incident, directory, signal, mayApply, prior, packaged: (incident.repairOwner || incident.owner) === 'host' && diagnostics.packaged,
+        repository: diagnostics.repository,
+        incident, directory, signal, mayApply, prior, packaged: diagnostics.packaged,
         profile: await tasks.getProfile(), providerOptions: await providerOptions()
       }),
-      activate: row => (row.repairOwner || row.owner) === 'project' ? environment.recoverPreview() : diagnostics.activateHost(row)
+      restartRequired: row => diagnostics.notifyRestartRequired(row)
     },
     providerProbe:(provider,override)=>probeProvider(provider,override,{liveMuse:false}),
     projectEvidence:()=>readEnvironment('project-capabilities'),

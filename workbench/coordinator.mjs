@@ -156,9 +156,6 @@ export async function createCoordinator({
     try {
       switch (request) {
         case 'GET coordinator/health': return health?.status() || {disabled: true, incidents: []};
-        case 'POST coordinator/health/retry':
-          if (!health) throw Error('Open the desktop app to retry a health check.');
-          return await health.retry(data.id);
         case 'GET design': return await readDesign();
         case 'GET design/layout': return await design.layout();
         case 'GET design/readiness': return await builds.readiness(data);

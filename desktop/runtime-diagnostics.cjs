@@ -1,94 +1,96 @@
-// Retain runtime faults until the same document loads again. Navigation elsewhere is not a retest.
+const {webFrameMain} = require('electron');
+
 exports.createRuntimeDiagnostics = function () {
-  const pages = new Map();
-  let window, hostOrigin;
+  const events = new Map();
+  let window, origin;
   let unresponsive = false;
-  const page = value => {
+  const appUrl = value => {
     const url = URL.parse(value);
-    return url && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ? url.origin + url.pathname : null;
+    return url?.origin === origin ? url : null;
   };
-  function record(url, detail) {
-    const key = page(url);
-    if (!key) return;
-    if (pages.size >= 128 && !pages.has(key)) pages.delete(pages.keys().next().value);
-    pages.set(key, String(detail).slice(0, 1200));
+  function record(id, title, error, evidence) {
+    if (events.size >= 128 && !events.has(id)) {
+      const firstSuccess = [...events.values()].find(row => !row.error);
+      if (!firstSuccess && !error) return;
+      events.delete(firstSuccess?.id ?? events.keys().next().value);
+    }
+    events.set(id, {owner: 'host', id, title, error: String(error || '').slice(0, 1200), evidence});
   }
   return {
-    attach(target, origin) {
+    attach(target, hostOrigin) {
       window = target;
-      hostOrigin = origin;
+      origin = hostOrigin;
       const contents = target.webContents;
       target.on('unresponsive', () => { unresponsive = true; });
       target.on('responsive', () => { unresponsive = false; });
       contents.on('console-message', event => {
-        if (event.level === 'error') record(event.frame?.url || event.sourceId, event.message);
+        const url = appUrl(event.frame?.url);
+        if (event.level === 'error' && url) {
+          record('page:' + url.pathname, 'Page ' + url.pathname, event.message, event.sourceId && 'Source: ' + event.sourceId);
+        }
       });
-      contents.on('did-fail-load', (_event, code, message, url) => {
-        if (code !== -3) record(url, message);
+      contents.on('did-fail-load', (_event, code, message, value) => {
+        const url = appUrl(value);
+        if (url && code !== -3) record('load:' + url.pathname, 'Page load ' + url.pathname, message);
       });
       contents.on('did-start-navigation', details => {
-        if (details && !details.isSameDocument && pages.has(page(details.url))) pages.set(page(details.url), null);
-      });
-      contents.session.webRequest.onCompleted({urls: ['http://127.0.0.1/*', 'http://localhost/*']}, details => {
-        if (details.webContentsId !== contents.id || !['xhr','script','stylesheet','image','font'].includes(details.resourceType)) return;
-        const url = page(details.url);
-        if (!url) return;
-        const key = url + '#request';
-        if (details.statusCode >= 500 || (details.statusCode === 404 && details.resourceType !== 'xhr')) {
-          pages.set(key, 'HTTP ' + details.statusCode + ' loading ' + details.resourceType);
-        } else if (details.statusCode < 400) pages.set(key, '');
-        if (pages.size > 128) pages.delete(pages.keys().next().value);
+        const url = appUrl(details?.url);
+        if (url && !details.isSameDocument) events.delete('page:' + url.pathname);
       });
       contents.on('did-frame-finish-load', (_event, _main, pid, rid) => {
-        const frame = require('electron').webFrameMain.fromId(pid, rid);
-        const key = page(frame?.url);
-        if (key && !pages.get(key)) record(key, '');
+        const url = appUrl(webFrameMain.fromId(pid, rid)?.url);
+        if (url) record('load:' + url.pathname, 'Page load ' + url.pathname, '');
+      });
+      const filter = {urls: ['http://127.0.0.1/*']};
+      function request(details, error) {
+        if (details.webContentsId !== contents.id) return;
+        const initiator = details.initiatorOrigin || appUrl(details.frame?.url)?.origin;
+        if (initiator !== origin) return;
+        const url = appUrl(details.url);
+        if (!url || url.pathname === '/api/workspace/coordinator/health') return;
+        const title = details.method + ' ' + url.pathname;
+        record('request:' + title, title, error);
+      }
+      contents.session.webRequest.onCompleted(filter, details => {
+        if (details.statusCode >= 500 || (details.statusCode === 404 && ['script','stylesheet'].includes(details.resourceType))) {
+          request(details, 'HTTP ' + details.statusCode);
+        } else if (details.statusCode < 400) request(details, '');
+      });
+      contents.session.webRequest.onErrorOccurred(filter, details => {
+        if (details.error !== 'net::ERR_ABORTED') request(details, details.error);
       });
     },
-    async observations(origin, previewUrl) {
+    rendererUnavailable() {
+      return unresponsive || window?.webContents.isCrashed();
+    },
+    async observations() {
       if (!window || window.isDestroyed()) return [];
-      const preview = URL.parse(previewUrl)?.origin;
-      const rows = [{owner: 'host', id: 'renderer', title: 'Workspace renderer',
-        error: window.webContents.isCrashed() ? 'The workspace renderer crashed.' : '', restart: true}];
-      rows.push({owner: 'host', id: 'responsive', title: 'Workspace responsiveness',
-        error: unresponsive ? 'The desktop window is unresponsive.' : ''});
-      for (const [url, error] of pages) {
-        const address = new URL(url);
-        const owner = address.origin === origin ? 'host' : address.origin === preview ? 'project' : '';
-        if (owner && error !== null) rows.push({owner, id: 'page:' + address.pathname + address.hash,
-          title: (address.hash ? 'Request ' : 'Page ') + address.pathname, error});
-      }
-      if (!unresponsive && !window.webContents.isCrashed()) {
-        for (const frame of window.webContents.mainFrame.framesInSubtree) {
-          const address = URL.parse(frame.url);
-          const owner = address?.origin === origin ? 'host' : preview && address?.origin === preview ? 'project' : '';
-          if (!owner || frame.detached) continue;
-          let timer;
-          try {
-            const blank = await Promise.race([
-              frame.executeJavaScript(`document.readyState === 'complete' && document.body &&
-                !document.body.innerText.trim() &&
-                !document.body.querySelector('canvas,svg,img,video,iframe,input,textarea,button,[role=application]')`),
-              new Promise(resolve => { timer = setTimeout(() => resolve(null), 1500); })
-            ]);
-            if (typeof blank === 'boolean') rows.push({owner, id: 'render:' + address.pathname,
-              title: 'Rendered page ' + address.pathname, error: blank ? 'The loaded page contains no visible content or controls.' : ''});
-          } catch { /* A detached or navigating frame has no current observation. */ }
-          finally { clearTimeout(timer); }
-        }
+      const crashed = window.webContents.isCrashed();
+      const rows = [...events.values()];
+      const loaded = !crashed && appUrl(window.webContents.mainFrame?.url) && !window.webContents.isLoadingMainFrame();
+      if (crashed || loaded) rows.push({owner: 'host', id: 'renderer', title: 'Workspace renderer',
+        error: crashed ? 'The workspace renderer crashed.' : '', restart: true});
+      if (unresponsive || loaded) rows.push({owner: 'host', id: 'responsive', title: 'Workspace responsiveness',
+        error: unresponsive ? 'The desktop window is unresponsive.' : '', restart: true});
+      if (unresponsive || crashed) return rows;
+      for (const frame of window.webContents.mainFrame.framesInSubtree) {
+        const address = appUrl(frame.url);
+        if (!address || frame.detached) continue;
+        let timer;
+        try {
+          const blank = await Promise.race([
+            frame.executeJavaScript(`document.readyState === 'complete' && document.body ? (
+              !document.body.innerText.trim() &&
+              !document.body.querySelector('canvas,svg,img,video,iframe,input,textarea,button,[role=application]')
+            ) : null`),
+            new Promise(resolve => { timer = setTimeout(() => resolve(null), 1500); })
+          ]);
+          if (typeof blank === 'boolean') rows.push({owner: 'host', id: 'render:' + address.pathname,
+            title: 'Rendered page ' + address.pathname, error: blank ? 'The loaded page contains no visible content or controls.' : ''});
+        } catch { /* A detached or navigating frame has no current observation. */ }
+        finally { clearTimeout(timer); }
       }
       return rows;
-    },
-    recoverRenderer() {
-      if (window && !window.isDestroyed() && window.webContents.isCrashed()) return window.loadURL(hostOrigin);
-    },
-    hasPendingEdits() {
-      return window.webContents.executeJavaScript(`(function dirty(root) {
-        if (root.querySelector('dialog[open], [contenteditable=true]:focus')) return true;
-        if ([...root.querySelectorAll('input:not([type]),input[type=text],textarea')].some(
-          el => !el.readOnly && !el.disabled && el.value && el.value !== el.defaultValue)) return true;
-        return [...root.querySelectorAll('*')].some(el => el.shadowRoot && dirty(el.shadowRoot));
-      })(document)`);
     }
   };
 };

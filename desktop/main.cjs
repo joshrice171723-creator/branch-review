@@ -103,6 +103,7 @@ async function launch() {
   const diagnostics = require('./runtime-diagnostics.cjs').createRuntimeDiagnostics();
   diagnostics.repository = root;
   diagnostics.packaged = app.isPackaged;
+  diagnostics.healthDirectory = path.join(app.getPath('userData'), 'coordinator-health');
   const {origin, port, beginDesktopExit} = await startServer({allowPortFallback:app.isPackaged || hasPortOverride,
     preferredPort:settings.controllerPort, desktop:true, diagnostics});
   if (app.isPackaged && !hasPortOverride) settings.controllerPort=port;
@@ -203,26 +204,14 @@ async function launch() {
     if (qaTask || qaStarting) throw Error('Finish or cancel browser QA before leaving this project.');
     return beginDesktopExit();
   }
-  let hostRestartTimer;
-  diagnostics.activateHost = () => {
-    const retry = () => {
-      clearTimeout(hostRestartTimer);
-      hostRestartTimer = setTimeout(async () => {
-        if (closing || window.isDestroyed()) return;
-        try {
-          if (!window.webContents.isCrashed() && await diagnostics.hasPendingEdits()) return retry();
-          if (window.isFocused() && require('electron').powerMonitor.getSystemIdleTime() < 60) return retry();
-          const resume = protectDesktopExit();
-          try {
-            await writeFile(settingsPath, JSON.stringify({...settings, home, window: {...window.getNormalBounds(), maximized: window.isMaximized()}}));
-            app.relaunch(); closing = true; app.exit(0);
-          }
-          catch (error) { resume(); throw error; }
-        } catch { retry(); }
-      }, 5000);
-      hostRestartTimer.unref();
-    };
-    retry();
+  diagnostics.notifyRestartRequired = row => {
+    if (window.isDestroyed() || !diagnostics.rendererUnavailable()) return;
+    void dialog.showMessageBox(window, {
+      type: 'warning', message: 'App Health needs to restart Branch Review',
+      detail: row.note, buttons: ['Close', 'Restart'], defaultId: 0, cancelId: 0
+    }).then(choice => {
+      if (choice.response === 1) return requestExit(true);
+    }).catch(error => console.error('App Health could not show the restart notice:', error.message));
   };
   async function startQa(input){
     if(qaTask || qaStarting)throw Error('A browser run is already active.');
@@ -365,24 +354,48 @@ async function launch() {
     if (recovery.canceled) return null;
     return { keyPath: key.filePaths[0], recoveryDirectory: recovery.filePaths[0] };
   });
-  window.on('close', async event => {
+  let exiting = false;
+  async function requestExit(restart) {
+    if (closing || exiting) return;
+    exiting = true;
+    try {
+      const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
+      if (state?.busy || state?.workspaceBusy || state?.jobsRunning || state?.qaRunning || qaTask || qaStarting) {
+        await dialog.showMessageBox(window, {message: 'Finish or cancel active builds, jobs, and browser QA before exiting Branch Review.'});
+        return;
+      }
+      if (!restart) {
+        const {response} = await dialog.showMessageBox(window, {type: 'question', buttons: ['Keep working', 'Close app'],
+          defaultId: 0, cancelId: 0, message: 'Close Branch Review?',
+          detail: 'Save any unsaved edits first. Reviews stay saved. Generic preview processes stop when the app closes. Meta Clinic previews stay available until you stop them.'});
+        if (response !== 1) return;
+      }
+      let resume;
+      try { resume = protectDesktopExit(); }
+      catch (error) { await dialog.showMessageBox(window, {message: error.message}); return; }
+      try {
+        await writeFile(settingsPath, JSON.stringify({...settings, home,
+          window: {...window.getNormalBounds(), maximized: window.isMaximized()}}));
+        if (restart) app.relaunch();
+      } catch (error) {
+        resume();
+        await dialog.showMessageBox(window, {message: restart ? 'Could not restart Branch Review.' : 'Could not save window settings.', detail: error.message});
+        return;
+      }
+      closing = true;
+      app.exit(0);
+    } finally {
+      exiting = false;
+    }
+  }
+  ipcMain.handle('review:restart', async event => {
+    trusted(event);
+    await requestExit(true);
+  });
+  window.on('close', event => {
     if (closing) return;
     event.preventDefault();
-    const state = await fetch(origin + '/api/state').then(r => r.json()).catch(() => null);
-    if (state?.busy || state?.workspaceBusy || state?.jobsRunning || state?.qaRunning || qaTask || qaStarting) {
-      await dialog.showMessageBox(window, {message:'Finish or cancel active builds, jobs, and browser QA before closing Branch Review.'});
-      return;
-    }
-    const result=await dialog.showMessageBox(window, { type: 'question', buttons: ['Keep working', 'Close app'], defaultId: 0, cancelId: 0,
-      message: 'Close Branch Review?', detail: 'Reviews stay saved. Generic preview processes stop when the app closes. Meta Clinic previews remain available until you stop them.' });
-    if(result.response===1){
-      let resume;
-      try { resume=protectDesktopExit(); }
-      catch(error){ await dialog.showMessageBox(window,{message:error.message});return; }
-      try {await writeFile(settingsPath,JSON.stringify({...settings,home,window:{...window.getNormalBounds(),maximized:window.isMaximized()}}));}
-      catch(error){resume();await dialog.showMessageBox(window,{message:'Could not save window settings.',detail:error.message});return;}
-      closing=true;app.exit(0);
-    }
+    void requestExit(false);
   });
   await window.loadURL(origin);
   if(settings.window?.maximized)window.maximize();

@@ -1165,7 +1165,7 @@ html[data-theme="dark"] #change-composer{background:#22252a;color:#f1f3f5;border
 .health-detail { margin-top: 16px; }
 .health-detail span { color: #74837a; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .health-detail p { margin: 5px 0 0; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-.health-retry { margin-top: 18px; }
+.health-apply { margin-top: 18px; }
 .health-empty { padding: 24px; text-align: center; color: #64756d; }
 html[data-theme="dark"] .health-content { background: #1b1e22; }
 html[data-theme="dark"] .health-summary { background: #26372f; border-color: #425a49; }
@@ -1176,3 +1176,12 @@ html[data-theme="dark"] .health-status[data-state="recovered"] { background: #31
 html[data-theme="dark"] .health-status[data-state="attention"] { background: #60472c; color: #ffe3bc; }
 html[data-theme="dark"] .health-status[data-state="detected"] { background: #643a39; color: #ffe0dc; }
 @media (max-width: 600px) { .health-dialog .health-heading, .health-content { padding: 18px; } .health-summary { align-items: flex-start; flex-direction: column; } }
+
+.health-notice { position: fixed; right: 22px; bottom: 22px; z-index: 1000; display: flex; align-items: flex-start; gap: 16px; width: min(440px, calc(100vw - 44px)); padding: 16px; border: 1px solid #d9e5dc; border-radius: 10px; background: #fff; box-shadow: 0 8px 32px #0003; }
+.health-notice div { min-width: 0; }
+.health-notice strong { font-size: 14px; }
+.health-notice p { margin: 5px 0 0; line-height: 1.45; overflow-wrap: anywhere; }
+.health-notice button { margin-left: auto; flex: none; }
+.health-detail summary { cursor: pointer; }
+.health-detail li { margin-bottom: 6px; overflow-wrap: anywhere; }
+html[data-theme="dark"] .health-notice { background: #292d32; border-color: #484d55; }

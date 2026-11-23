@@ -54,6 +54,18 @@ export function workflow({api, getState, getSide, error, poll, reopen, openHando
     notice('');
   }
   connectProjects({launcher: $('choose-repository'), flush: guide.flush, error});
+  const restart = $('restart-app');
+  restart.hidden = !window.desktop?.restart;
+  restart.onclick = async () => {
+    restart.disabled = true;
+    try {
+      if (await guide.flush()) await window.desktop.restart();
+    } catch (issue) {
+      error(issue.message);
+    } finally {
+      restart.disabled = false;
+    }
+  };
   $('scenario-select').onchange = () => guide.navigate($('scenario-select').value);
   $('capture').hidden = !window.desktop;
   $('capture').onclick = async () => {

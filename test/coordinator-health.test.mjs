@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {createServer} from 'node:http';
+import {EventEmitter} from 'node:events';
+import diagnostics from '../desktop/runtime-diagnostics.cjs';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,57 +15,105 @@ async function temp(t) {
   t.after(() => rm(dir, {recursive: true, force: true, maxRetries: 3}));
   return dir;
 }
-async function listen(t, respond) {
-  const server = createServer(respond);
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  return 'http://127.0.0.1:' + server.address().port;
-}
+test('observes host requests during use and excludes the loaded project', async () => {
+  const origin = 'http://127.0.0.1:4310';
+  const project = 'http://127.0.0.1:4410';
+  const window = new EventEmitter();
+  window.isDestroyed = () => false;
+  const contents = window.webContents = new EventEmitter();
+  contents.id = 9;
+  contents.isCrashed = () => false;
+  contents.mainFrame = {framesInSubtree: []};
+  let complete, fail;
+  contents.session = {webRequest: {
+    onCompleted: (_filter, callback) => { complete = callback; },
+    onErrorOccurred: (_filter, callback) => { fail = callback; }
+  }};
+  const monitor = diagnostics.createRuntimeDiagnostics();
+  monitor.attach(window, origin);
+  const request = {webContentsId: contents.id, url: origin + '/api/example', method: 'POST', statusCode: 500};
+  complete({...request, initiatorOrigin: project});
+  fail({...request, url: project + '/example', initiatorOrigin: origin, error: 'Connection failed'});
+  contents.emit('console-message', {level: 'error', frame: {url: project}, message: 'Project error'});
+  assert.deepEqual((await monitor.observations()).filter(row => row.error), []);
 
-test('detects project and host failures independently and verifies recovery from new observations', async t => {
-  const directory = await temp(t);
-  let hostStatus = 500, denyFrame = true, canRepair = false;
-  const origin = await listen(t, (_req, res) => {
-    res.writeHead(hostStatus); res.end(JSON.stringify({builds: []}));
-  });
-  const url = await listen(t, (_req, res) => {
-    res.writeHead(200, denyFrame ? {'X-Frame-Options':'SAMEORIGIN'} : {}); res.end('Project');
-  });
-  const owners = [];
-  const monitor = await createHealthReviewer({directory, start: false,
-    idle: () => canRepair,
-    observe: () => observeRuntime({origin, preview: () => ({owned: true, url, state:'running', settings:{mode:'web'}})}),
-    repair: async row => { owners.push(row.owner); return {summary:'Fixture correction', checks:'Fixture check'}; },
-    activate: row => { if (row.owner === 'host') hostStatus = 200; else denyFrame = false; }});
-  t.after(() => monitor.close());
-  await Promise.all([monitor.tick(), monitor.tick()]);
-  assert.deepEqual(owners, []);
-  await monitor.tick();
-  assert.deepEqual(owners, []);
-  canRepair = true;
-  await monitor.tick(); await monitor.tick(); await monitor.tick();
-  assert.deepEqual(owners, ['host','project']);
-  assert.equal(monitor.status().incidents.length, 2);
-  assert.ok(monitor.status().incidents.every(row => row.state === 'recovered' && row.verifiedAt));
-  const persisted = JSON.parse(await readFile(path.join(directory, 'incidents.json')));
-  assert.equal(persisted.filter(row => row.state === 'recovered').length, 2);
+  complete({...request, initiatorOrigin: origin});
+  const issue = (await monitor.observations()).find(row => row.id === 'request:POST /api/example');
+  assert.equal(issue.error, 'HTTP 500');
+  complete({...request, initiatorOrigin: origin, statusCode: 200});
+  assert.equal((await monitor.observations()).find(row => row.id === issue.id).error, '');
 });
 
-test('recovers a process first and keeps missing evidence pending', async t => {
+test('ignores project failures and verifies a host repair only after restart', async t => {
   const directory = await temp(t);
-  const finding = {owner:'project', id:'process', title:'Process', error:'Exited', restart:true};
-  let signals = [finding], restarts = 0;
-  const reviewer = await createHealthReviewer({directory, start:false, observe: () => signals, idle: () => true,
-    recover: () => { restarts++; }, repair: () => assert.fail('Unexpected provider call')});
-  t.after(() => reviewer.close());
-  await reviewer.tick(); await reviewer.tick();
-  assert.equal(restarts, 1);
-  signals = [];
-  await reviewer.tick();
-  assert.equal(reviewer.status().incidents[0].state, 'verifying');
-  signals = [{...finding,error:''}];
-  await reviewer.tick();
-  assert.equal(reviewer.status().incidents[0].state, 'recovered');
+  const host = {owner: 'host', id: 'api', title: 'Workspace API', error: 'HTTP 500'};
+  const project = {owner: 'project', id: 'preview', title: 'Preview', error: 'Preview failed'};
+  let signals = [host, project], canRepair = false, notices = 0;
+  const options = {directory, start: false, idle: () => canRepair,
+    observe: () => observeRuntime({observations: () => signals}),
+    repair: async row => {
+      assert.equal(row.owner, 'host');
+      return {summary: 'Fixed the workspace response', checks: 'Request check passed', files: ['server.mjs']};
+    },
+    restartRequired: () => { notices++; }};
+  const monitor = await createHealthReviewer(options);
+  await monitor.tick(); await monitor.tick();
+  assert.deepEqual(monitor.status().incidents.map(row => row.owner), ['host']);
+  assert.equal(monitor.status().incidents[0].state, 'detected');
+  canRepair = true;
+  await monitor.tick();
+  assert.equal(notices, 1);
+  assert.equal(monitor.status().incidents[0].state, 'restart-required');
+  signals = [{...host, error: ''}, project];
+  await monitor.tick();
+  assert.equal(monitor.status().incidents[0].state, 'restart-required');
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  signals = [project];
+  await restarted.tick();
+  assert.equal(restarted.status().incidents[0].state, 'verifying');
+  signals = [{...host, error: ''}, project];
+  await restarted.tick();
+  const [row] = restarted.status().incidents;
+  assert.equal(row.state, 'recovered');
+  assert.equal(row.history[0].outcome, 'verified');
+  assert.ok(row.verifiedAt);
+});
+
+test('uses failed repair results and stops after five attempts across a restart', async t => {
+  const directory = await temp(t);
+  const signal = {owner: 'host', id: 'renderer', title: 'Workspace renderer', error: 'Renderer crashed', restart: true};
+  let now = 1000, notices = 0;
+  const failures = [];
+  const options = {directory, start: false, interval: 10, clock: () => now, observe: () => [signal],
+    idle: () => true, restartRequired: () => { notices++; },
+    repair: row => {
+      assert.ok(row.history.slice(0, -1).every(attempt => attempt.outcome === 'failed' && attempt.detail));
+      const detail = 'Approach ' + row.attempts + ' did not pass its checks';
+      failures.push(detail);
+      throw Error(detail);
+    }};
+  const monitor = await createHealthReviewer(options);
+  await monitor.tick(); await monitor.tick();
+  assert.equal(notices, 1);
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  for (let tick = 0; tick < 12; tick++) {
+    now += 50;
+    await restarted.tick();
+  }
+  const [row] = restarted.status().incidents;
+  assert.equal(row.state, 'attention');
+  assert.equal(row.attempts, 5);
+  assert.equal(failures.length, 4);
+  assert.match(row.history[0].detail, /still fails after restart/);
+  assert.deepEqual(row.history.slice(1).map(attempt => attempt.detail), failures);
+  signal.error = 'Renderer crashed with a different error';
+  now += 500;
+  await restarted.tick(); await restarted.tick();
+  assert.equal(restarted.status().incidents[0].attempts, 5);
 });
 
 test('keeps observing other failures during a repair and rejects a stale application', async t => {
@@ -82,9 +131,9 @@ test('keeps observing other failures during a repair and rejects a stale applica
     }});
   t.after(() => reviewer.close());
   await reviewer.tick(); await reviewer.tick(false); await working;
-  signals = [{...host,error:''}, {owner:'project', id:'page', title:'Page', error:'Blank page'}];
+  signals = [{...host,error:''}, {owner:'host', id:'other', title:'Page', error:'Blank page'}];
   await reviewer.tick(false);
-  assert.equal(reviewer.status().incidents.find(row => row.owner === 'project').state, 'detected');
+  assert.equal(reviewer.status().incidents.find(row => row.key === 'host/other').state, 'detected');
   release(); await reviewer.tick();
   assert.equal(Boolean(applicable), false);
 });

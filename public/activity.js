@@ -15,12 +15,60 @@ export function coordinatorHealth(api) {
   const summary = dialog.querySelector('.health-summary');
   const list = dialog.querySelector('.health-list');
   dialog.querySelector('button').onclick = () => dialog.close();
+  const notice = document.createElement('aside');
+  notice.className = 'health-notice';
+  notice.hidden = true;
+  notice.innerHTML = '<div role="status"><strong></strong><p></p><p></p></div><button type="button" class="quiet">Close</button>';
+  document.body.append(notice);
+  const [finding, progress] = notice.querySelectorAll('p');
+  const restart = document.createElement('button');
+  restart.type = 'button';
+  restart.className = 'secondary';
+  restart.textContent = 'Restart';
+  restart.onclick = () => document.getElementById('restart-app').click();
+  notice.insertBefore(restart, notice.querySelector('.quiet'));
+  const dismissalKey = 'branch-review:health-dismissed';
+  let dismissed = [];
+  try {
+    const saved = JSON.parse(localStorage.getItem(dismissalKey));
+    if (Array.isArray(saved)) dismissed = saved;
+  } catch {}
+  let visibleNotice;
+  notice.querySelector('.quiet').onclick = () => {
+    dismissed = [...dismissed, visibleNotice].slice(-80);
+    try { localStorage.setItem(dismissalKey, JSON.stringify(dismissed)); } catch {}
+    notice.hidden = true;
+  };
+  function showNotice(incidents, maxAttempts) {
+    const key = row => row.id + (row.state === 'attention' ? ':failed' : row.state === 'restart-required' ? ':restart' : ':active');
+    const row = incidents.find(row => row.state === 'attention' && !dismissed.includes(key(row))) ||
+      incidents.find(row => row.state !== 'recovered' && !dismissed.includes(key(row)));
+    notice.hidden = !row;
+    if (!row) return;
+    visibleNotice = key(row);
+    restart.hidden = row.state !== 'restart-required';
+    const heading = row.state === 'attention' ? 'App Health could not fix this issue' :
+      row.state === 'restart-required' ? 'Restart required' :
+      row.state === 'verifying' ? 'App Health is checking a repair' : 'App Health found an issue';
+    const detail = row.state === 'attention' ? `Repair stopped after ${row.attempts} attempts. ${row.note || ''}` :
+      row.state === 'restart-required' ? `${row.note || ''} Select Restart to load the repair.` :
+      row.state === 'verifying' ? row.note :
+      row.state === 'retrying' ? `Attempt ${row.attempts} of ${maxAttempts} failed. App Health will try another approach.` :
+      row.note || 'App Health will investigate and repair it automatically.';
+    const message = row.title + ' — ' + row.error;
+    const title = notice.querySelector('strong');
+    if (title.textContent !== heading) title.textContent = heading;
+    if (finding.textContent !== message) finding.textContent = message;
+    if (progress.textContent !== detail) progress.textContent = detail;
+  }
+  let displayed;
   async function refresh() {
     try {
-      const {incidents, error, disabled, checkedAt} = await api('/api/workspace/coordinator/health');
+      const {incidents, error, disabled, checkedAt, maxAttempts} = await api('/api/workspace/coordinator/health');
       button.hidden = Boolean(disabled);
       const count = incidents.filter(row => row.state !== 'recovered').length;
       button.textContent = count ? 'Health (' + count + ')' : 'Health';
+      showNotice(incidents, maxAttempts);
       if (!dialog.open) return;
       summary.replaceChildren();
       const overview = document.createElement('strong');
@@ -28,6 +76,10 @@ export function coordinatorHealth(api) {
       const timestamp = document.createElement('span');
       timestamp.textContent = error || (checkedAt ? 'Last check ' + new Date(checkedAt).toLocaleTimeString() : 'Waiting for the first check.');
       summary.append(overview, timestamp);
+      const snapshot = JSON.stringify(incidents);
+      if (snapshot === displayed) return;
+      displayed = snapshot;
+      const expanded = new Set([...list.querySelectorAll('details[open]')].map(item => item.closest('article').dataset.id));
       list.replaceChildren();
       if (!incidents.length) {
         const empty = document.createElement('p');
@@ -38,14 +90,15 @@ export function coordinatorHealth(api) {
       for (const row of incidents.slice(0, 30)) {
         const item = document.createElement('article');
         item.className = 'health-card';
+        item.dataset.id = row.id;
         const heading = document.createElement('div');
         heading.className = 'health-card-heading';
         const title = document.createElement('h3');
-        title.textContent = (row.owner === 'host' ? 'Branch Review' : 'Project') + ' · ' + row.title;
+        title.textContent = row.title;
         const status = document.createElement('span');
         status.className = 'health-status';
         status.dataset.state = row.state;
-        status.textContent = row.state;
+        status.textContent = row.state.replaceAll('-', ' ');
         heading.append(title, status);
         item.append(heading);
         for (const [label, text] of [['Issue', row.error], ['Activity', row.note], ['Checks', row.checks], ['Verified', row.verifiedAt && new Date(row.verifiedAt).toLocaleString()]]) {
@@ -59,16 +112,27 @@ export function coordinatorHealth(api) {
           detail.append(name, value);
           item.append(detail);
         }
-        if (row.state === 'attention') {
-          const retry = document.createElement('button');
-          retry.className = 'secondary health-retry';
-          retry.textContent = 'Retry repair';
-          retry.onclick = async () => {
-            retry.disabled = true;
-            try { await api('/api/workspace/coordinator/health/retry', {id: row.id}); await refresh(); }
-            catch (issue) { summary.textContent = issue.message; retry.disabled = false; }
-          };
-          item.append(retry);
+        if (row.state === 'restart-required') {
+          const apply = restart.cloneNode(true);
+          apply.hidden = false;
+          apply.classList.add('health-apply');
+          apply.onclick = restart.onclick;
+          item.append(apply);
+        }
+        if (row.history?.length) {
+          const history = document.createElement('details');
+          history.className = 'health-detail';
+          history.open = expanded.has(row.id);
+          const heading = document.createElement('summary');
+          heading.textContent = 'Repair attempts';
+          const attempts = document.createElement('ol');
+          for (const attempt of row.history) {
+            const entry = document.createElement('li');
+            entry.textContent = [attempt.approach, attempt.detail !== attempt.approach && attempt.detail, attempt.checks].filter(Boolean).join(' ');
+            attempts.append(entry);
+          }
+          history.append(heading, attempts);
+          item.append(history);
         }
         list.append(item);
       }
@@ -76,7 +140,7 @@ export function coordinatorHealth(api) {
   }
   button.onclick = () => { dialog.showModal(); void refresh(); };
   void refresh();
-  setInterval(refresh, 15000);
+  setInterval(refresh, 3000);
 }
 export function activity({api,getState,navigate,flush,poll}){
   const strip=document.createElement('div');strip.id='work-progress';
