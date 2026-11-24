@@ -42,22 +42,22 @@ export function coordinatorHealth(api) {
   function showNotice(incidents, maxAttempts) {
     const key = row => row.id + (row.state === 'attention' ? ':failed' : row.state === 'restart-required' ? ':restart' : row.state === 'awaiting-observation' ? ':observing' : ':active');
     const row = incidents.find(row => row.state === 'attention' && !dismissed.includes(key(row))) ||
-      incidents.find(row => row.state !== 'recovered' && !dismissed.includes(key(row)));
+      incidents.find(row => !['recovered', 'cancelled'].includes(row.state) && !dismissed.includes(key(row)));
     notice.hidden = !row;
     if (!row) return;
     visibleNotice = key(row);
     restart.hidden = row.state !== 'restart-required';
-    const heading = row.state === 'attention' ? 'App Health could not fix this issue' :
+    const heading = row.state === 'attention' ? 'Coordinator needs your attention' :
       row.state === 'restart-required' ? 'Restart required' :
       row.state === 'awaiting-observation' ? 'Repair loaded · awaiting observation' :
       row.state === 'verifying' ? 'App Health is checking a repair' : 'App Health found an issue';
-    const detail = row.state === 'attention' ? `Repair stopped after ${row.attempts} attempts. ${row.note || ''}` :
+    const detail = row.state === 'attention' ? [row.note, row.nextAction].filter(Boolean).join(' ') :
       row.state === 'restart-required' ? `${row.note || ''} Select Restart to load the repair.` :
       row.state === 'verifying' ? row.note :
       row.state === 'awaiting-observation' ? row.note :
       row.state === 'retrying' ? `Attempt ${row.attempts} of ${maxAttempts} failed. App Health will try another approach.` :
       row.note || 'App Health will investigate and repair it automatically.';
-    const message = row.title + ' — ' + row.error;
+    const message = row.title;
     const title = notice.querySelector('strong');
     if (title.textContent !== heading) title.textContent = heading;
     if (finding.textContent !== message) finding.textContent = message;
@@ -68,7 +68,7 @@ export function coordinatorHealth(api) {
     try {
       const {incidents, error, disabled, checkedAt, maxAttempts} = await api('/api/workspace/coordinator/health');
       button.hidden = Boolean(disabled);
-      const count = incidents.filter(row => row.state !== 'recovered').length;
+      const count = incidents.filter(row => !['recovered', 'cancelled'].includes(row.state)).length;
       button.textContent = count ? 'Health (' + count + ')' : 'Health';
       showNotice(incidents, maxAttempts);
       if (!dialog.open) return;
@@ -103,7 +103,7 @@ export function coordinatorHealth(api) {
         status.textContent = row.state.replaceAll('-', ' ');
         heading.append(title, status);
         item.append(heading);
-        for (const [label, text] of [['Issue', row.error], ['Activity', row.note], ['Checks', row.checks],
+        for (const [label, text] of [['Issue', row.error], ['Activity', row.note], ['Next action', row.nextAction], ['Checks', row.checks],
           ['Regression check', row.verification?.detail], ['Verified', row.verifiedAt && new Date(row.verifiedAt).toLocaleString()]]) {
           if (!text) continue;
           const detail = document.createElement('div');

@@ -74,9 +74,12 @@ function groupMembers(state, payload) {
   return frequency === 'plan' ? [selected.flat()] : selected;
 }
 
-export function createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders = async () => [], supervise, prepareBrowserRecovery}) {
+export function createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders = async () => [], supervise, prepareBrowserRecovery, signal}) {
   const jobs = new Map();
   const recovering = new Set();
+  const recoveryControllers = new Map();
+  const reviewRecoveries = new Map();
+  const reviewControllers = new Map();
   let recoveryTimer;
   let recoverySuspended = false;
   let closing = false;
@@ -381,7 +384,7 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
         ? 'I need you to decide which changes belong to this build before I can include them in a commit.'
         : /\b429\b|rate_limit_error|quota exhausted/i.test(reason)
           ? 'The provider still cannot run. Check its quota or connection before retrying.'
-          : 'Review this blocker before retrying. You can ask me about it here.';
+          : diagnosis?.nextAction || 'Review this blocker before retrying. You can ask me about it here.';
     const checked = (loop.checks ?? []).filter(row => row.exit_code === 0 && !row.source_changed && !row.inputs_changed);
     const receiptNote = checked.length
       ? 'I kept ' + checked.length + ' passing check ' + (checked.length === 1 ? 'receipt.' : 'receipts.') : '';
@@ -614,7 +617,94 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     return [...preparation, 'Resumed the existing build.'].join(' ');
   }
 
-  async function retryVerification(payload) {
+  function recoverReview(payload) {
+    if (reviewRecoveries.has(payload.runId)) return reviewRecoveries.get(payload.runId);
+    const controller = new AbortController();
+    reviewControllers.set(payload.runId, controller);
+    const recovery = (async () => {
+      const state = await design.read();
+      const build = state.builds.at(-1);
+      if (build?.status !== 'review' || build.attempts.at(-1)?.task !== payload.runId) {
+        throw Error('The review target changed. Refresh Branch Review.');
+      }
+      const record = async (status, message, detail) => design.edit(current => {
+        const target = current.builds.at(-1);
+        if (target?.id === build.id && target.status === 'review' && target.attempts.at(-1)?.task === payload.runId) {
+          target.reviewRecovery = {runId: payload.runId, status, message, updatedAt: now(), ...(detail && {detail})};
+        }
+      });
+      await record('verifying', 'Review needs fresh checks. Coordinator is checking this build before opening review.');
+      try {
+        await retryVerification({build: build.id, runId: payload.runId, reusePassing: true},
+          signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
+        return await record('verified', 'The checks passed. Waiting for Branch Review to open.');
+      } catch (error) {
+        if (controller.signal.aborted) {
+          await record('cancelled', 'Review verification cancelled.');
+          throw Object.assign(Error('Review verification cancelled.'), {code: 'OPERATION_CANCELLED'});
+        }
+        if (signal?.aborted) throw error;
+        await record('blocked', 'Review is waiting for a check to pass. Select Retry verification to try again.', error.message);
+        throw Object.assign(error, {code: 'REVIEW_VERIFICATION_REQUIRED', recoveryOwner: 'project-checks',
+          nextAction: 'Open Coordinator and ask it to fix the failed project check. Then select Retry verification in the current build.'});
+      }
+    })();
+    reviewRecoveries.set(payload.runId, recovery);
+    void recovery.finally(() => {
+      reviewRecoveries.delete(payload.runId);
+      reviewControllers.delete(payload.runId);
+    }).catch(() => {});
+    return recovery;
+  }
+
+  async function reviewOutcome(payload) {
+    return design.edit(state => {
+      const build = state.builds.at(-1);
+      const attempt = build?.attempts.at(-1);
+      const group = build?.groups[build.index];
+      if (build?.status !== 'review' || attempt?.task !== payload.runId ||
+          payload.commit && payload.commit !== group?.sha || !build.reviewRecovery) return;
+      if (build.reviewRecovery.status === 'cancelled' || payload.opened && build.reviewRecovery.status !== 'verified') return;
+      build.reviewRecovery = {runId: payload.runId, commit: group.sha, updatedAt: now(),
+        status: payload.opened ? 'recovered' : 'blocked',
+        message: payload.opened ? 'Branch Review is open.' : 'Branch Review could not open. Open Coordinator to continue recovery.',
+        ...(!payload.opened && {detail: String(payload.error || 'The review did not open.').slice(0, 4000)})};
+    });
+  }
+
+  async function retryVerification(payload, verificationSignal = signal) {
+    const selected = current(await design.read(), payload.build);
+    if (payload.runId || selected.status === 'review') {
+      if (closing || recoverySuspended) throw Error('Branch Review is closing or switching projects.');
+      const release = await files.acquire(leasePath);
+      operations++;
+      try {
+        const runId = payload.runId ?? selected.attempts.at(-1)?.task;
+        const state = await design.edit(async state => {
+          const build = current(state, payload.build);
+          const group = build.groups[build.index];
+          const attempt = build.attempts.at(-1);
+          if (build.status !== 'review' || !approved(state, build) || state.branch !== build.branch ||
+              !group?.sha || group.pending.length || !group.slices.includes(attempt?.slice) ||
+              attempt.outcome !== 'completed' || attempt.task !== runId || attempt.sha !== group.sha) {
+            throw Error('The review target changed. Refresh Branch Review.');
+          }
+          const loop = await files.read(statePath(runId));
+          if (loop?.stage !== 'completed' || loop.design_sha !== group.sha) throw Error('Restore the completed review checkpoint.');
+          const target = audit.withRecoveredPaths(build, loop);
+          await audit.ensureCleanTarget(target, group.sha);
+          const result = await store.runReviewChecks(runId, {sha: group.sha, branch: build.branch,
+            prepareBrowserRecovery, reusePassing: payload.reusePassing}, verificationSignal);
+          const report = await store.status(runId);
+          if (result.verdict !== 'pass' || report.verdict !== 'pass') throw Error(report.issues.join(' ') || 'Required checks failed.');
+          await audit.ensureCleanTarget(target, group.sha);
+        });
+        return {...state, reviewRun: runId};
+      } finally {
+        operations--;
+        await release();
+      }
+    }
     return (await drive(state => {
       const build = current(state, payload.build);
       if (build.status !== 'failed') throw Error('Select the stopped build.');
@@ -645,7 +735,7 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     });
   }
 
-  async function superviseStop(build, attempt) {
+  async function superviseStop(build, attempt, signal) {
     const loop = await files.read(statePath(attempt.task), {});
     let readFailure;
     const run = await store.getRun(attempt.task).catch(error => { readFailure = error.message; return null; });
@@ -674,7 +764,7 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     await audit.activity(attempt.task, stage ?? 'plan', 'Coordinator', 'Reviewing the stopped stage for automatic recovery.').catch(() => {});
     let diagnosis;
     try {
-      diagnosis = await supervise({build, attempt, failure: redact(build.error ?? attempt.error ?? ''), evidence: {
+      diagnosis = await supervise({build, attempt, signal, failure: redact(build.error ?? attempt.error ?? ''), evidence: {
         detail, canVerify, canReturn, auditRoute, ownership, managedBrowser, exhausted, readFailure, evidenceTests,
         previous: previous.map(row => ({action: row.automaticRecovery.action, reason: row.automaticRecovery.reason, error: redact(row.error ?? '')})),
         checks: (run?.checks ?? []).slice(-8).map(row => ({name: row.check, code: row.exit_code, sourceChanged: row.source_changed,
@@ -694,6 +784,11 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     const alreadyTried = action => previous.some(row => row.automaticRecovery.action === action &&
       row.error === attempt.error && row.automaticRecovery.source?.snapshot_sha256 === savedSource.snapshot_sha256);
     const summary = typeof diagnosis?.summary === 'string' ? redact(diagnosis.summary).replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+    if (diagnosis?.action === 'report' && typeof diagnosis.nextAction === 'string' && diagnosis.nextAction.trim()) {
+      const nextAction = typeof diagnosis.nextAction === 'string' ?
+        redact(diagnosis.nextAction).replace(/\s+/g, ' ').trim().slice(0, 500) : '';
+      return {reported: true, summary, reason, nextAction};
+    }
     const evidenceTest = diagnosis?.action === 'test-only' && evidenceTests.find(row => row.id === diagnosis.checkId);
     if (evidenceTest && !previous.some(row => row.automaticRecovery.evidenceCheck === evidenceTest.id &&
         row.automaticRecovery.source?.snapshot_sha256 === savedSource.snapshot_sha256)) {
@@ -730,6 +825,10 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     const build = state?.builds?.at(-1);
     const attempt = build?.attempts.at(-1);
     if (!attempt || jobs.get(attempt.job)?.active) return;
+    if (build.status === 'review' && build.reviewRecovery?.status === 'verifying') {
+      await recoverReview({runId: attempt.task});
+      return;
+    }
     if (reconnectPending && pendingStates.includes(build.status)) {
       try { await reconnect({build: build.id}); }
       catch (error) {
@@ -743,25 +842,32 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     if (build.status !== 'failed' || recovering.has(attempt.id) ||
         build.recovery?.attempt === attempt.id && build.recovery.status === 'blocked') return;
     recovering.add(attempt.id);
+    const controller = new AbortController();
+    let finishRecovery;
+    const done = new Promise(resolve => { finishRecovery = resolve; });
+    recoveryControllers.set(build.id, {controller, done});
     try {
-      await recoverStoppedBuild(state, build, attempt);
+      await recoverStoppedBuild(state, build, attempt, controller.signal);
     } catch (error) {
       await publishAttention(build, attempt, error.message);
     } finally {
       recovering.delete(attempt.id);
+      recoveryControllers.delete(build.id);
+      finishRecovery();
     }
   }
 
-  async function recoverStoppedBuild(state, build, attempt) {
+  async function recoverStoppedBuild(state, build, attempt, signal) {
     let decision;
     if (supervise) {
       if (build.recovery?.attempt === attempt.id && build.recovery.status === 'waiting' && build.recovery.decision) {
         decision = build.recovery.decision;
       } else {
         await recoveryStatus(build, attempt, 'reviewing', 'Coordinator is reviewing this stop.');
-        decision = await superviseStop(build, attempt);
+        decision = await superviseStop(build, attempt, signal);
       }
-      if (decision.exhausted) {
+      signal?.throwIfAborted();
+      if (decision.exhausted || decision.reported) {
         await publishAttention(build, attempt, null, decision);
         return;
       }
@@ -843,10 +949,25 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
   }
 
   async function cancel(payload) {
+    const selected = current(await design.read(), payload.build);
+    const reviewRun = selected.status === 'review' && selected.attempts.at(-1)?.task;
+    const reviewController = reviewControllers.get(reviewRun);
+    if (reviewController) {
+      reviewController.abort();
+      await reviewRecoveries.get(reviewRun).catch(() => {});
+      return design.read();
+    }
     let execution;
+    let recoveryTask;
     const state = await design.edit(state => {
       const build = current(state, payload.build);
       if (['cancelling', 'cancelled'].includes(build.status)) return;
+      if (build.status === 'failed' && ['queued', 'reviewing', 'waiting', 'resuming'].includes(build.recovery?.status)) {
+        build.status = 'cancelled';
+        build.recovery = {...build.recovery, status: 'cancelled', message: 'Recovery cancelled.'};
+        recoveryTask = build.attempts.at(-1)?.task;
+        return;
+      }
       if (build.status !== 'working') throw Error('Select the active build.');
       const attempt = build.attempts.at(-1);
       execution = jobs.get(attempt.job);
@@ -855,6 +976,10 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
       }
       build.status = execution.job.state = 'cancelling';
     });
+    if (recoveryTask) {
+      recoveryControllers.get(payload.build)?.controller.abort();
+      await store.pause(recoveryTask, 'Task cancelled.');
+    }
     execution?.controller.abort();
     return state;
   }
@@ -928,6 +1053,7 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
         if (running?.lifecycle.status === 'active' && build?.attempts.at(-1)?.task === running.id) {
           await store.pause(running.id, 'Conversation archived.');
         }
+        recoveryControllers.get(build?.id)?.controller.abort();
       });
     } finally { await release(); }
   }
@@ -1175,7 +1301,8 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
       ({baseline: 'Baseline checks', repair: 'Repair', checks: 'Project checks'})[step];
     return {id: build.id, title: build.title || 'Current build', state: build.status, stage,
       pendingQuestion: build.status === 'question' ? loop.question : undefined,
-      waitingForReview: build.status === 'review', failure: build.error?.slice(0, 4000),
+      waitingForReview: build.status === 'review', reviewRun: build.status === 'review' ? attempt?.task : undefined,
+      failure: build.error?.slice(0, 4000),
       failureSummary: build.error && (build.recovery?.summary || stopSummary(build.error, detail?.kind)),
       recoveryMessage: build.recovery?.message,
       activity: typeof detail === 'string' ? detail.slice(0, 800) : detail?.reason?.slice(0, 800)};
@@ -1256,13 +1383,14 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     })};
   }
 
-  const busy = () => operations > 0 || [...jobs.values()].some(entry => entry.active);
+  const busy = () => operations > 0 || reviewRecoveries.size > 0 || [...jobs.values()].some(entry => entry.active);
   void refreshRecovery(true).catch(() => {});
-  return {launch, execution, advance, recoverFromConversation, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, archive, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
+  return {launch, execution, advance, recoverFromConversation, recoverReview, reviewOutcome, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, archive, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
     suspendRecovery() {
       if (busy() || closing || recoverySuspended) throw Error('Finish or cancel the active build before leaving this project.');
       recoverySuspended = true;
       clearTimeout(recoveryTimer);
+      for (const {controller} of recoveryControllers.values()) controller.abort();
       return () => {
         recoverySuspended = false;
         void refreshRecovery(true).catch(() => {});
@@ -1302,9 +1430,13 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     async close() {
       closing = true;
       clearTimeout(recoveryTimer);
+      const recoveries = [...recoveryControllers.values()];
+      for (const {controller} of recoveries) controller.abort();
       const executions = [...jobs.values()].filter(entry => entry.active);
       for (const {job, controller} of executions) if (job.cancellable) controller.abort();
       await Promise.all(executions.map(entry => entry.done));
+      await Promise.all(recoveries.map(entry => entry.done));
+      await Promise.allSettled([...reviewRecoveries.values()]);
     }
   };
 }

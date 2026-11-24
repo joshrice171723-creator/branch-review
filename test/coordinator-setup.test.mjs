@@ -378,7 +378,7 @@ test('Coordinator collects a missing declared test result inside the repair loop
         assert.equal(effort, 'high');
         onUsage({input:100, cached:70, output:15});
         assert.match(prompt, /"canReturn":true/);
-        const context = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1).split('\n\n#')[0]);
+        const context = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1).split('\n\n')[0]);
         return {text: JSON.stringify({action: 'test-only', checkId: context.evidence.evidenceTests[0].id, reason: finding,
           summary: 'The audit needs one more test result.'})};
       }
@@ -431,4 +431,97 @@ test('Coordinator collects a missing declared test result inside the repair loop
   const progress = await coordinator.dispatch('design/progress');
   assert.equal(progress.run.usage.recovery.length, 1);
   assert.equal(progress.run.usage.uncached, 30);
+});
+
+test('Coordinator reads an unfamiliar failed check and keeps its actionable report without blind retries', async t => {
+  const failure = 'Fixture seed orchard-739 requires the amber setting.';
+  const nextAction = 'Open Workspace and set the fixture seed to amber, then select Retry.';
+  let diagnoses = 0;
+  const {store, coordinator} = await fixture(t, {'greeting.txt': 'Before'}, {
+    superviseFailures: true,
+    invoke: async ({stage, prompt}) => {
+      if (prompt.startsWith('Supervise this stopped Branch Review build')) {
+        diagnoses++;
+        assert.ok(prompt.includes(failure), 'Coordinator must receive the actual saved check output.');
+        return {text: JSON.stringify({action: 'report', reason: 'The required fixture setting is missing.',
+          summary: 'The project check needs a fixture setting.', nextAction})};
+      }
+      if (stage === 'plan') return {text: JSON.stringify({plan: ['Update the greeting.']})};
+      assert.equal(stage, 'plan_review');
+      return {text: JSON.stringify({verdict: 'pass', reason: 'The plan covers the requested greeting.'})};
+    }
+  });
+  await store.setProfile({...await store.getProfile(), checks: [{name: 'fixture',
+    argv: ['node', '-e', 'console.error(' + JSON.stringify(failure) + '); process.exit(1)'],
+    required: true, benchmark: false, cwd: '.'}]});
+  const post = (route, data) => coordinator.dispatch('design/' + route, data, {method: 'POST'});
+  const {revision} = await post('draft', {...plan, revision: 0, mode: 'task'});
+  await post('approve', {revision, mode: 'task'});
+  const started = await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
+    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+  let state, build;
+  for (let index = 0; index < 400; index++) {
+    state = await coordinator.dispatch('design');
+    build = state.builds.at(-1);
+    if (build.attention) break;
+    await delay(100);
+  }
+  assert.equal(build.id, started.builds[0].id);
+  assert.equal(build.status, 'failed');
+  assert.equal(build.attempts.length, 1);
+  assert.equal(diagnoses, 1);
+  assert.ok(state.messages.some(message => message.buildAttention && message.text.includes(nextAction)));
+  const run = await store.getRun(build.attempts[0].task);
+  assert.equal(run.checks[0].exit_code, 1);
+  assert.notEqual((await store.status(build.attempts[0].task)).verdict, 'pass');
+});
+
+for (const operation of ['cancel', 'archive']) test(operation + ' interrupts Coordinator diagnosis and survives restart', async t => {
+  let diagnosing;
+  const diagnosisStarted = new Promise(resolve => { diagnosing = resolve; });
+  let diagnoses = 0, interrupted = false;
+  const invoke = async ({stage, prompt, signal}) => {
+    if (prompt.startsWith('Supervise this stopped Branch Review build')) {
+      diagnoses++;
+      diagnosing();
+      return new Promise((_resolve, reject) => {
+        const abort = () => { interrupted = true; reject(signal.reason); };
+        if (signal.aborted) abort();
+        else signal.addEventListener('abort', abort, {once: true});
+      });
+    }
+    assert.equal(stage, 'plan');
+    throw Error('Fixture interrupted before planning.');
+  };
+  const {store, coordinator, git, repository} = await fixture(t, {'greeting.txt': 'Before'}, {
+    superviseFailures: true, invoke
+  });
+  await store.setProfile({...await store.getProfile(), checks: [{name: 'fixture',
+    argv: ['node', '-e', 'process.exit(0)'], required: true, benchmark: false, cwd: '.'}]});
+  const post = (route, data) => coordinator.dispatch('design/' + route, data, {method: 'POST'});
+  const {revision} = await post('draft', {...plan, revision: 0, mode: 'task'});
+  await post('approve', {revision, mode: 'task'});
+  const started = await post('build', {revision, mode: 'task', decisions: {scope_confirmed: 'confirmed',
+    code_changes: 'allow_scoped', migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
+  await diagnosisStarted;
+  const stopped = await post(operation, {build: started.builds[0].id, revision});
+  if (operation === 'cancel') assert.equal(stopped.builds[0].status, 'cancelled');
+  else assert.deepEqual(stopped.builds, []);
+  assert.equal(interrupted, true);
+  await coordinator.close();
+  const resumed = await createCoordinator({repository, store, git, superviseFailures: true, invoke});
+  t.after(() => resumed.close());
+  let state = await resumed.dispatch('design');
+  if (operation === 'cancel') {
+    assert.equal(state.builds[0].status, 'cancelled');
+    assert.equal(state.builds[0].attempts.length, 1);
+  } else assert.deepEqual(state.builds, []);
+  await resumed.dispatch('design/attention');
+  assert.equal(diagnoses, 1);
+  if (operation === 'cancel') {
+    state = await resumed.dispatch('design/archive', {revision: state.revision}, {method: 'POST'});
+    assert.deepEqual(state.builds, []);
+  }
+  await resumed.dispatch('design/attention');
+  assert.equal(diagnoses, 1);
 });

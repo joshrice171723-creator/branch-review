@@ -49,8 +49,9 @@ export async function exportHandoff(repository,runId,git,{store} = {}) {
       current.snapshot_sha256!==digest) throw Error('This checkout differs from the completed run.');
   const run=await runs.getRun(runId);
   if (run.task?.harness_version==='0.3.0-native' && (current.verdict!=='pass' || run.ledger.verdict!=='pass'))
-    throw Error('The saved checks need verification before review can open. ' +
-      (current.issues?.join(' ') || run.ledger.issues?.join(' ') || 'The completed run has incomplete evidence.'));
+    throw Object.assign(Error('The saved checks need verification before review can open. ' +
+      (current.issues?.join(' ') || run.ledger.issues?.join(' ') || 'The completed run has incomplete evidence.')),
+      {code:'REVIEW_VERIFICATION_REQUIRED'});
   const evidence=path.join(root,'.harness','tasks',runId,'snapshots');
   let snapshot;
   for(const name of [digest.slice(0,20),digest]) {

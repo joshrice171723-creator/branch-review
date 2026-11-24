@@ -9,7 +9,7 @@ export function cosmeticCandidate({plan, profile, quality, checks}) {
   const settings = profile.profiles.audited;
   if (settings.rules !== defaults.rules ||
       settings.sharedDocs.length || ['planReview', 'buildReview', 'finalReview'].some(key =>
-    settings.stages[key].docs.some(name => name !== 'REVIEW.md') || settings.stages[key].toolHints?.length ||
+    settings.stages[key].docs.some(name => name !== 'REVIEW.md') ||
     settings.stages[key].instructions !== defaults.stages[key].instructions)) return null;
   return checks.find(check => check.required && (check.phases ?? ['baseline', 'after']).includes('after') &&
     /(?:^|[_-])(?:ui|layout|visual|browser|desktop|playwright|e2e)(?:[_-]|$)/i.test(check.name))?.name ?? null;

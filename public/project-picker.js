@@ -38,7 +38,8 @@ export function connectProjects({launcher, flush, error}) {
       <div data-matches></div>
     </section>
     <button type="button" data-add>Browse for a folder</button>
-    <p role="status" data-status></p>`;
+    <p role="status" data-status></p>
+    <button type="button" data-retry hidden>Retry</button>`;
   document.body.append(dialog);
 
   const $ = selector => dialog.querySelector(selector);
@@ -49,10 +50,17 @@ export function connectProjects({launcher, flush, error}) {
   const query = $('#project-query');
   const matches = $('[data-matches]');
   const send = $('button[type="submit"]');
+  const retry = $('[data-retry]');
   let recent = [];
   let messages = [];
   let searching = false;
   let opening = false;
+
+  function failed(issue, action) {
+    status.textContent = issue.message;
+    retry.hidden = false;
+    retry.onclick = action;
+  }
 
   function showSearch(show) {
     $('[data-saved-panel]').hidden = show;
@@ -60,6 +68,7 @@ export function connectProjects({launcher, flush, error}) {
     $('[data-saved]').setAttribute('aria-pressed', String(!show));
     $('[data-find]').setAttribute('aria-pressed', String(show));
     status.textContent = '';
+    retry.hidden = true;
     (show ? query : filter).focus();
   }
 
@@ -69,10 +78,11 @@ export function connectProjects({launcher, flush, error}) {
     try {
       if (!await flush()) return;
       status.textContent = 'Opening project…';
+      retry.hidden = true;
       await desktop.chooseRepository(project, discovered);
       status.textContent = '';
     } catch (issue) {
-      status.textContent = issue.message;
+      failed(issue, () => openProject(project, discovered));
     } finally {
       opening = false;
     }
@@ -123,14 +133,15 @@ export function connectProjects({launcher, flush, error}) {
     chat.scrollTop = chat.scrollHeight;
   }
 
-  $('form').onsubmit = async event => {
-    event.preventDefault();
-    const message = query.value.trim();
+  async function search(message, repeat = false) {
     if (!message || searching || opening) return;
     searching = send.disabled = true;
+    retry.hidden = true;
     query.value = '';
-    say('You', message);
-    messages = [...messages.slice(-14), {role: 'user', text: message}];
+    if (!repeat) {
+      say('You', message);
+      messages = [...messages.slice(-14), {role: 'user', text: message}];
+    }
     matches.replaceChildren();
     status.textContent = 'Searching for local Git projects…';
     try {
@@ -140,10 +151,14 @@ export function connectProjects({launcher, flush, error}) {
       matches.append(...reply.projects.map(project => projectRow(project, true)));
       status.textContent = '';
     } catch (issue) {
-      status.textContent = issue.message;
+      failed(issue, () => search(message, true));
     } finally {
       searching = send.disabled = false;
     }
+  }
+  $('form').onsubmit = event => {
+    event.preventDefault();
+    return search(query.value.trim());
   };
 
   filter.oninput = renderSaved;
@@ -154,11 +169,20 @@ export function connectProjects({launcher, flush, error}) {
   launcher.onclick = async () => {
     try {
       if (!await flush() || dialog.open) return;
-      recent = await desktop.recentProjects();
       filter.value = '';
-      renderSaved();
       dialog.showModal();
       showSearch(false);
+      await loadSaved();
     } catch (issue) { error(issue.message); }
   };
+
+  async function loadSaved() {
+    status.textContent = 'Loading saved projects…';
+    retry.hidden = true;
+    try {
+      recent = await desktop.recentProjects();
+      renderSaved();
+      status.textContent = '';
+    } catch (issue) { failed(issue, loadSaved); }
+  }
 }

@@ -7,6 +7,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {test} from 'node:test';
 import {createCoordinator} from '../workbench/coordinator.mjs';
 import {createStore} from '../workbench/store.mjs';
+import {createWorkspace} from '../workbench/workspace.mjs';
 import {exportHandoff, workbenchComparison} from '../workbench-handoff.mjs';
 
 const decisions = {scope_confirmed: 'confirmed', code_changes: 'allow_scoped', migrations: 'deny',
@@ -155,10 +156,13 @@ for (const escalates of [false, true]) {
     await git('commit', '-qm', 'Add layout fixture', '--only', '--', 'public/layout.css');
     const config = await store.config();
     await store.setConfig({...config, checks: [{...config.checks[0], name: 'ui_layout'}]});
-    const profile = await store.getProfile();
-    const agents = profile.profiles[profile.active].stages;
     const calls = [];
-    const coordinator = await createCoordinator({repository, store, git, async invoke({stage, model, effort, provider}) {
+    let selections = 0;
+    const coordinator = await createCoordinator({repository, store, git, async invoke({stage, model, effort, provider, prompt}) {
+      if (prompt.startsWith('Choose execution settings')) {
+        selections++;
+        return {text: JSON.stringify({stages: {}})};
+      }
       calls.push({stage, model, effort, provider});
       if (stage === 'plan') return {text: JSON.stringify({plan: ['Align the conversation and run the UI layout check.']})};
       if (stage === 'build') {
@@ -176,12 +180,13 @@ for (const escalates of [false, true]) {
     await post('design/build', {revision: draft.revision, mode: 'task', decisions, automaticRouting: true});
     const build = await waitForBuild(coordinator);
     const run = await store.getRun(build.attempts[0].task);
+    assert.equal(selections, 1);
     assert.equal(run.task.cosmetic_route.check, 'ui_layout');
     assert.deepEqual(calls.map(row => row.stage), escalates ? ['plan', 'build', 'plan_review', 'build_review', 'final_review'] :
       ['plan', 'build', 'build_review']);
     assert.deepEqual(calls.slice(0, 2).map(({provider, model, effort}) => [provider, model, effort]),
       [['Codex', 'gpt-6.2-sol', 'low'], ['Codex', 'gpt-6.2-sol', 'medium']]);
-    if (escalates) assert.equal(calls.at(-1).provider, agents.finalReview.provider);
+    if (escalates) assert.equal(calls.at(-1).provider, build.executionSetup.stages.finalReview.provider);
     else assert.deepEqual(run.audits.map(row => [row.stage, row.verdict]),
       [['plan_review', 'skipped'], ['build_review', 'pass'], ['final_review', 'skipped']]);
     assert.equal(run.lifecycle.status, 'completed');
@@ -250,6 +255,151 @@ test('retries verification on the blocked source without rebuilding it', async t
   assert.equal(builderCalls, count);
   assert.ok((await store.getRun(task)).checks.some(row => row.check === 'desktop_acceptance' && row.exit_code === 0));
   assert.match(await git('diff', '--cached', '--name-only'), /^unrelated\.txt$/);
+});
+
+test('retries saved checks on the current preview while the same build waits for review', async t => {
+  const {repository, git} = await fixture(t);
+  const preview = {url: 'http://127.0.0.1:4310/', owned: true};
+  const browserArtifacts = await mkdtemp(path.join(os.tmpdir(), 'review-retry-output-'));
+  t.after(() => rm(browserArtifacts, {recursive: true, force: true}));
+  const store = createStore(repository, {browserPreview: () => preview, browserArtifacts});
+  const bin = path.join(repository, 'node_modules', '.bin');
+  await mkdir(bin, {recursive: true});
+  await writeFile(path.join(repository, '.gitignore'), '.harness/\nnode_modules/\n');
+  await writeFile(path.join(repository, 'package.json'), JSON.stringify({scripts: {browser: 'playwright test'}}));
+  await writeFile(path.join(repository, 'playwright.config.js'), 'module.exports={use:{baseURL:process.env.BASE_URL}}');
+  await writeFile(path.join(repository, 'check.cjs'),
+    "console.log(process.env.BASE_URL); process.exitCode = Number(require('node:fs').existsSync('.harness/fail-check'));");
+  await writeFile(path.join(bin, 'playwright.cmd'), '@node check.cjs %*\r\n');
+  await writeFile(path.join(bin, 'playwright'), '#!/bin/sh\nexec node check.cjs "$@"\n', {mode: 0o755});
+  await git('add', 'package.json', 'playwright.config.js', 'check.cjs');
+  await git('commit', '--only', '-qm', 'Add preview fixture', '--', '.gitignore', 'package.json', 'playwright.config.js', 'check.cjs');
+  await store.setProfile({...await store.getProfile(), checks: [{name: 'browser', argv: ['npm', 'run', 'browser'],
+    phases: ['after'], required: true, benchmark: false}]});
+  t.mock.method(globalThis, 'fetch', async url => {
+    assert.equal(url, preview.url);
+    return new Response('ready');
+  });
+  let edits = 0;
+  let holdRecovery = false, recoveryHeld = false;
+  const coordinator = await createCoordinator({repository, git, store, async prepareBrowserRecovery({taskId, signal} = {}) {
+    if (holdRecovery) {
+      recoveryHeld = true;
+      await delay(60_000, undefined, {signal});
+    }
+    preview.revision = await git('rev-parse', 'HEAD');
+    if (taskId) preview.source = (await store.snapshot(taskId, {record: false})).snapshot_sha256;
+    return {...preview, state: 'ready', message: 'Preview ready.'};
+  }, async invoke({stage}) {
+    if (stage === 'plan') return {text: JSON.stringify({plan: ['Update the greeting.']})};
+    if (stage === 'build') {
+      edits++;
+      await writeFile(path.join(repository, 'greeting.txt'), 'After');
+      return {text: 'Updated greeting.'};
+    }
+    return {text: JSON.stringify({verdict: 'pass', reason: 'Reviewed the greeting.', criteria})};
+  }});
+  t.after(() => coordinator.close());
+  const post = (route, data) => coordinator.dispatch(route, data, {method: 'POST'});
+  const {revision} = await post('design/draft', {revision: 0, mode: 'task', title: 'Greeting', plan: 'Update the greeting.'});
+  await post('design/approve', {revision, mode: 'task'});
+  await post('design/build', {revision, mode: 'task', decisions});
+  const build = await waitForBuild(coordinator);
+  const runId = build.attempts.at(-1).task;
+  const handoff = () => exportHandoff(repository, runId, git, {store});
+  preview.url = 'http://127.0.0.1:4311/';
+  await assert.rejects(handoff, /preview address changed/);
+  await assert.rejects(post('design/retry-verification', {build:build.id, runId:'stale'}), /review target changed/);
+  const failure = path.join(repository, '.harness', 'fail-check');
+  await writeFile(failure, '');
+  await assert.rejects(post('design/retry-verification', {build:build.id, runId}), /Required after check failed: browser/);
+  await assert.rejects(handoff, /Required after check failed: browser/);
+  const guide = message => post('design/guide', {revision, message, context:{view:'workflow', tab:'Build'}});
+  const blocked = await guide('Retry verification');
+  assert.equal(blocked.messages.at(-1).coordinatorAction.state, 'blocked');
+  assert.deepEqual(blocked.messages.at(-1).choices, ['Retry verification']);
+  assert.equal(blocked.reviewRun, undefined);
+  await rm(failure);
+  const retried = await guide('fix it');
+  assert.equal(retried.reviewRun, runId);
+  assert.deepEqual(retried.builds.at(-1), build);
+  assert.equal(edits, 1);
+  assert.equal((await handoff()).commit, build.groups[0].sha);
+  const receipt = (await store.getRun(runId)).checks.filter(row => row.check === 'browser').at(-1);
+  assert.equal(receipt.browser.base_url, preview.url);
+  assert.equal(receipt.stdout_preview.trim().split(/\s+/).at(-1), preview.url);
+  preview.url = 'http://127.0.0.1:4312/';
+  const beforeRecovery = (await store.getRun(runId)).checks.filter(row => row.check === 'browser').length;
+  await Promise.all([post('design/recover-review', {runId}), post('design/recover-review', {runId})]);
+  const recovered = (await coordinator.dispatch('design')).builds.at(-1);
+  assert.equal(recovered.reviewRecovery.status, 'verified');
+  assert.equal(recovered.attempts.at(-1).task, runId);
+  assert.equal((await store.getRun(runId)).checks.filter(row => row.check === 'browser').length, beforeRecovery + 1);
+  assert.equal((await handoff()).commit, build.groups[0].sha);
+  assert.equal(edits, 1);
+  holdRecovery = true;
+  preview.url = 'http://127.0.0.1:4313/';
+  const cancellation = post('design/recover-review', {runId}).catch(error => error);
+  while (!recoveryHeld) await delay(10);
+  await post('design/cancel', {build: build.id});
+  assert.equal((await cancellation).code, 'OPERATION_CANCELLED');
+  const cancelled = (await coordinator.dispatch('design')).builds.at(-1);
+  assert.equal(cancelled.status, 'review');
+  assert.equal(cancelled.reviewRecovery.status, 'cancelled');
+  assert.equal(cancelled.attempts.at(-1).task, runId);
+});
+
+test('opening review automatically refreshes failed evidence on the same completed build', async t => {
+  const {git, store, repository} = await fixture(t);
+  const config = await store.config();
+  const profile = await store.getProfile();
+  config.checks[0].argv = ['node', '-e', 'process.exitCode=Number(require("node:fs").existsSync(".harness/fail-check"))'];
+  await store.setConfig(config);
+  profile.checks = config.checks;
+  await store.setProfile(profile);
+  let builds = 0;
+  const coordinator = await createCoordinator({repository, git, store, async invoke({stage}) {
+    if (stage === 'plan') return {text: JSON.stringify({plan: ['Update greeting.']})};
+    if (stage === 'build') {
+      builds++;
+      await writeFile(path.join(repository, 'greeting.txt'), 'After');
+      return {text: 'Updated greeting.'};
+    }
+    return {text: JSON.stringify({verdict: 'pass', reason: 'Checked greeting.', criteria})};
+  }});
+  t.after(() => coordinator.close());
+  const post = (route, data) => coordinator.dispatch(route, data, {method: 'POST'});
+  const {revision} = await post('design/draft', {revision: 0, mode: 'task', title: 'Greeting', plan: 'Update greeting.'});
+  await post('design/approve', {revision, mode: 'task'});
+  await post('design/build', {revision, mode: 'task', decisions});
+  const completed = await waitForBuild(coordinator);
+  const runId = completed.attempts.at(-1).task;
+  const failure = path.join(repository, '.harness', 'fail-check');
+  await writeFile(failure, '');
+  await store.runReviewChecks(runId, {sha: completed.groups[0].sha, branch: completed.branch});
+  await coordinator.close();
+  const workspace = await createWorkspace({repository, git, origin: 'http://127.0.0.1:4310', token: 'test',
+    providerOptions: async () => ({})});
+  t.after(() => workspace.close());
+  await assert.rejects(workspace.exportHandoff(runId), /Required after check failed/);
+  const blocked = await workspace.dispatch('GET', 'design');
+  assert.equal(blocked.builds.at(-1).reviewRecovery.status, 'blocked');
+  await rm(failure);
+  const [first, second] = await Promise.all([workspace.exportHandoff(runId), workspace.exportHandoff(runId)]);
+  assert.equal(first.runId, runId);
+  assert.deepEqual(second, first);
+  assert.equal(first.commit, completed.groups[0].sha);
+  assert.equal(builds, 1);
+  const recovered = (await workspace.dispatch('GET', 'design')).builds.at(-1);
+  assert.equal(recovered.reviewRecovery.status, 'verified');
+  assert.deepEqual(recovered.attempts, completed.attempts);
+  await workspace.dispatch('POST', 'design/review-outcome', {runId, commit: '0'.repeat(40), opened:true});
+  assert.equal((await workspace.dispatch('GET','design')).builds.at(-1).reviewRecovery.status, 'verified');
+  await workspace.dispatch('POST', 'design/review-outcome', {runId, commit: first.commit, opened:false, error:'The preview could not start.'});
+  assert.equal((await workspace.dispatch('GET','design')).builds.at(-1).reviewRecovery.status, 'blocked');
+  await workspace.dispatch('POST', 'design/recover-review', {runId});
+  await workspace.dispatch('POST', 'design/review-outcome', {runId, commit: first.commit, opened:true});
+  assert.equal((await workspace.dispatch('GET','design')).builds.at(-1).reviewRecovery.status, 'recovered');
 });
 
 test('recovers planning evidence and reuses a current audit receipt without user input', async t => {

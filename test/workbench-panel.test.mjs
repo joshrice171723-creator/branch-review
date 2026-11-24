@@ -48,3 +48,46 @@ test('the native workspace module binds only Branch Review routes',async()=>{
   assert.match(source,/api\/workspace/);
   assert.doesNotMatch(source,/__workbench\/|window\.parent\.postMessage/);
 });
+
+test('blocked review keeps Retry verification available until the same run passes export', async t => {
+  const nodes = new Map();
+  function node() {
+    return {dataset:{}, setAttribute(){}, children:[], append(...items){this.children.push(...items);},
+      replaceChildren(...items){this.children = items;}};
+  }
+  globalThis.document = {createElement:node, getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, node());
+    return nodes.get(id);
+  }};
+  globalThis.window = {};
+  t.after(() => { delete globalThis.document; delete globalThis.window; });
+  const opened = [];
+  let retries = 0, exports = 0;
+  const runId = 'completed-run';
+  const panel = apexPanel({getState:() => ({}), openBranch:async (_, id) => { opened.push(id); return true; },
+    reportError:assert.fail, api:async (route, payload) => {
+      if (route === '/api/workbench-export') {
+        exports++;
+        assert.deepEqual(payload, {runId});
+        if (retries < 2) throw Object.assign(Error('The preview address changed.'), {code:'REVIEW_VERIFICATION_REQUIRED'});
+        return {result:{ref:'refs/heads/change', commit:'abc', title:'Greeting'}};
+      }
+      if (route === '/api/workspace/design') return {builds:[{id:'build', status:'review', attempts:[{task:runId}]}]};
+      assert.equal(route, '/api/workspace/design/retry-verification');
+      assert.deepEqual(payload, {build:'build', runId});
+      if (++retries === 1) throw Error('Required after check failed: browser');
+    }});
+  await assert.rejects(panel.inspect(runId), /preview address changed/);
+  const status = nodes.get('apex-panel-status');
+  const retry = status.children.at(-1);
+  assert.equal(retry.textContent, 'Retry verification');
+  await retry.onclick();
+  assert.match(status.children[0], /Required after check failed: browser/);
+  assert.equal(status.children.at(-1), retry);
+  assert.equal(retry.disabled, false);
+  assert.equal(exports, 1);
+  assert.deepEqual(opened, []);
+  await retry.onclick();
+  assert.equal(exports, 2);
+  assert.deepEqual(opened, [runId]);
+});

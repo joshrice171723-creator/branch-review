@@ -99,17 +99,24 @@ test('restores a quota retry after restart and keeps the task and stage', {timeo
     if (!attention) await delay(100);
   }
   assert.equal(attention?.coordinator, true);
-  assert.match(attention.text, /needs attention at Plan audit/);
-  assert.match(attention.text, /quota exhausted/);
+  assert.equal(attention.buildAttention.stage, 'Plan audit');
+  assert.match(attention.text, /retried this stage after the provider reset/);
+  assert.match(attention.buildAttention.details, /quota exhausted/);
   assert.equal((await coordinator.dispatch('design')).messages.filter(message => message.buildAttention).length, 1);
   assert.equal((await current()).attempts.length, 2);
 });
 
-test('retries a default audit timeout before posting a single coordinator message', {timeout: 90000}, async t => {
+test('Coordinator retries a provider timeout without app time limits before posting one message', {timeout: 90000}, async t => {
   const {repository, git, store} = await setup(t);
   const calls = [];
+  let diagnoses = 0;
   let state;
-  const coordinator = await createCoordinator({repository, git, store, async invoke({stage, timeoutMs}) {
+  const coordinator = await createCoordinator({repository, git, store, superviseFailures: true, async invoke({stage, timeoutMs, prompt}) {
+    if (prompt.startsWith('Supervise this stopped Branch Review build.')) {
+      diagnoses++;
+      return {text: JSON.stringify({action: 'retry', reason: 'The provider connection timed out.',
+        summary: 'The provider stopped responding.'})};
+    }
     if (stage === 'plan') return {text: JSON.stringify({plan: ['Edit the greeting.']})};
     calls.push({stage, timeoutMs});
     throw Object.assign(Error('The audit call timed out.'), {code: 'PROVIDER_CALL_TIMEOUT'});
@@ -127,8 +134,10 @@ test('retries a default audit timeout before posting a single coordinator messag
   }
   const notices = state.messages.filter(row => row.buildAttention);
   assert.equal(notices.length, 1);
-  assert.match(notices[0].text, /retried this stage with a longer call allowance/);
-  assert.deepEqual(calls, [{stage: 'plan_review', timeoutMs: 120000}, {stage: 'plan_review', timeoutMs: 240000}]);
+  assert.match(notices[0].text, /provider stopped responding/);
+  assert.match(notices[0].buildAttention.details, /timed out/);
+  assert.deepEqual(calls, [{stage: 'plan_review', timeoutMs: null}, {stage: 'plan_review', timeoutMs: null}]);
+  assert.equal(diagnoses, 2);
   const attempts = state.builds.at(-1).attempts;
   assert.equal(attempts[0].task, attempts[1].task);
   assert.equal(attempts[1].budgetResetAt, undefined);

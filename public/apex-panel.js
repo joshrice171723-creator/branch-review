@@ -178,15 +178,43 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
     byId('apex-findings').hidden=!choiceList.childElementCount;
   }
   async function inspect(runId) {
+    let handoff;
     try {
       const {result} = await api('/api/workbench-export', {runId});
+      handoff = result;
       const branch = {ref:result.ref,sha:result.commit,name:result.ref.slice('refs/heads/'.length),
         subject:result.title,aliases:[],base:result.design?.base};
       if (!await openBranch(branch, runId)) throw Error('Save changes in the current review and try again.');
+      message('');
       showWorkspace(true);
       render(getState());
     } catch (error) {
+      if (handoff) await api('/api/workspace/design/review-outcome',
+        {runId,commit:handoff.commit,opened:false,error:error.message}).catch(() => {});
       message(error.message);
+      if (error.code === 'REVIEW_VERIFICATION_REQUIRED') {
+        const target = qa ? deliveryStatus : status;
+        const design = await api('/api/workspace/design');
+        const build = design.builds.at(-1);
+        if (build?.status === 'review' && build.attempts.at(-1)?.task === runId && target.textContent === error.message) {
+          const retry = document.createElement('button');
+          retry.type = 'button';
+          retry.textContent = 'Retry verification';
+          target.append(' ', retry);
+          retry.onclick = async () => {
+            retry.disabled = true;
+            target.replaceChildren('Running the saved checks… ', retry);
+            try {
+              await api('/api/workspace/design/retry-verification', {build:build.id, runId});
+            } catch (blocker) {
+              target.replaceChildren(blocker.message + ' ', retry);
+              retry.disabled = false;
+              return;
+            }
+            await inspect(runId).catch(error => reportError(error.message));
+          };
+        }
+      }
       throw error;
     }
   }

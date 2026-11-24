@@ -1178,6 +1178,16 @@ function designPanel(initialState) {
       const continueBuild = build.status === "ready" ? button(embedded ? "Start repair" : "Continue build", () =>
         change("continue", {build: build.id}, {wait: embedded ? "Starting repair…" : "Starting the next slice…"}), "button primary") : null;
       if (continueBuild && !showContinueByReview) controls.append(continueBuild);
+      if (build.status === "failed" && ["queued", "reviewing", "waiting", "resuming"].includes(build.recovery?.status) ||
+          build.status === "review" && build.reviewRecovery?.status === "verifying") {
+        controls.append(button("Cancel run", () => change("cancel", {build: build.id},
+          {wait: "Cancelling recovery…", done: "Recovery cancelled."})));
+      }
+      if (build.status === "review" && attempt?.task) controls.append(button("Retry verification", async () => {
+        const result = await change("retry-verification", {build: build.id, runId: attempt.task},
+          {wait: "Running the saved checks…", done: "Verification passed."});
+        if (result?.reviewRun) await openReview(result.reviewRun);
+      }));
       if (["failed", "cancelled"].includes(build.status) && !state.restartRequired && !state.resumeBlocker) controls.append(
         button("Retry", () =>
           change("continue", {build: build.id}, {wait: "Retrying the stopped stage…"}), "button primary"));
@@ -1246,6 +1256,11 @@ function designPanel(initialState) {
         button("Open Quality checks", () => goQuality("checks")));
       const headingText = element("strong", "", evidenceNeeded ? "Waiting for audit evidence" : labels[build.status] || build.status);
       const info = box("Current build", element("p", "design-build-status", headingText, " · Revision " + build.revision), controls);
+      if (build.status === "review" && build.reviewRecovery?.message) {
+        info.append(element("p", "design-status", build.reviewRecovery.message));
+        if (build.reviewRecovery.detail) info.append(element("details", "", element("summary", "", "Technical details"),
+          formatEvidenceText(build.reviewRecovery.detail)));
+      }
       if (canRestart) info.append(element("p", "", "Restart uses the saved workflow and approved plan. Existing working changes stay on disk outside the new build’s commit."));
       if (state.restartRequired) {
         info.append(element("p", "evidence-warning",

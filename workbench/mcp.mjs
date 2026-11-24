@@ -55,7 +55,7 @@ export function toolDescriptions() {
     access:write?'Project writes':name==='quality_routes'?'Reads or runs project code':'Read only'}));
 }
 
-export async function workspaceMcp(message,{call,getProfile,verified,stageTools}) {
+export async function workspaceMcp(message,{call,getProfile,verified,stageTools,coordinatorChat=false}) {
   const {id,method,params={}} = message || {};
   const error = (code,text) => ({jsonrpc:'2.0',id:id ?? null,error:{code,message:text}});
   if (message?.jsonrpc!=='2.0' || typeof method!=='string' || (id!==undefined && typeof id!=='string' && !Number.isInteger(id)))
@@ -74,7 +74,7 @@ export async function workspaceMcp(message,{call,getProfile,verified,stageTools}
   const allowed = (await getProfile())?.permittedTools || [];
   const visible = tools.filter(item=>(!item.name.startsWith('app_') || allowed.includes(item.name)) &&
     (!item.local || verified && !stageTools) &&
-    (!stageTools || !item.write && stageTools.includes(item.name)));
+    (!stageTools || stageTools.includes(item.name) && (!item.write || coordinatorChat && verified)));
   if (method==='tools/list') return reply({tools:visible.map(({write,local,...definition})=>definition)});
   if (method!=='tools/call') return error(-32601,'Unknown method.');
   const definition = visible.find(item=>item.name===params.name);
@@ -110,7 +110,12 @@ export function selectStageTools(stage, selections, {scope = '', evidenceOnly = 
   return [...selected];
 }
 
-export async function openStageMcp(call, profile, names, {coordinatorChat = false} = {}) {
+export function coordinatorTools(diagnosisOnly) {
+  return tools.filter(item => !item.local && (!item.write || !diagnosisOnly))
+    .map(item => item.name);
+}
+
+export async function openStageMcp(call, profile, names, {coordinatorChat = false, coordinatorDiagnosis = false} = {}) {
   if (!names.length) return null;
   const token = '/' + randomUUID();
   let calls = 0;
@@ -128,9 +133,9 @@ export async function openStageMcp(call, profile, names, {coordinatorChat = fals
         chunks.push(chunk);
       }
       const request = JSON.parse(Buffer.concat(chunks));
-      const result = await workspaceMcp(request, {getProfile: () => profile, stageTools: names, verified: false,
+      const result = await workspaceMcp(request, {getProfile: () => profile, stageTools: names, verified: coordinatorChat, coordinatorChat,
         call: async (name, values) => {
-          if (!coordinatorChat && ++calls > 8) throw Error('This stage reached its tool call limit.');
+          if (!coordinatorChat && !coordinatorDiagnosis && ++calls > 8) throw Error('This stage reached its tool call limit.');
           const data = await call(name, values);
           const serialized = JSON.stringify(data) ?? '';
           return serialized.length > 20000 ? {preview: serialized.slice(0, 20000), truncated: true} : data;

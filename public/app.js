@@ -11,6 +11,18 @@ import {workbench} from './workbench.js';
 import {apexPanel} from './apex-panel.js';
 import {evidenceTools} from './evidence-tools.js';
 const $ = (id) => document.getElementById(id);
+let paintedReview, reviewOutcomeKey;
+function acknowledgeReview() {
+  const identity = currentState.record?.identity;
+  if (currentState.status !== 'ready' || currentState.busy || !identity?.workbenchRun ||
+      $('review-workspace').hidden || $('frames').hidden || paintedReview?.sha !== identity.changed ||
+      paintedReview.frame !== $('frame-changed')?.contentWindow) return;
+  const key = identity.workbenchRun + ':' + identity.changed;
+  if (reviewOutcomeKey === key) return;
+  reviewOutcomeKey = key;
+  void api('/api/workspace/design/review-outcome', {runId:identity.workbenchRun, commit:identity.changed, opened:true})
+    .catch(problem => { reviewOutcomeKey = null; error(problem.message); });
+}
 function dismissOverlays() {
   let pressedBackdrop=null;
   const outside=(dialog,event)=>{
@@ -181,7 +193,7 @@ async function requestApi(path, data) {
   );
   const text=await response.text();
   let result;try{result=JSON.parse(text);}catch{throw Error(`Could not read ${path.split('?')[0]} (HTTP ${response.status}). Retry the operation.`);}
-  if (!response.ok) throw new Error(result.error);
+  if (!response.ok) throw Object.assign(new Error(result.error), {code:result.code});
   return result;
 }
 let lastErrorMessage=null;
@@ -338,13 +350,14 @@ async function select(branch,reveal=false) {
   }
 }
 async function openBranch(branch, workbenchRun) {
-  if(workbenchRun) await poll();
+  if(workbenchRun) { reviewOutcomeKey = null; await poll(); }
   if(currentState.busy || openingSelection?.starting)return false;
   const selection={...branch,workbenchRun};
   if(currentState.status==='ready' && matchesReview(currentState.record?.identity,selection) &&
     (!branch.base || currentState.record.identity.base===branch.base) &&
     (!branch.fixJob || currentState.record.fixComparison))return true;
   if(!await reviewWorkflow.flush())return false;
+  paintedReview = null;
   openingSelection={...selection,starting:true};selected=branch;selectedComparison=null;
   openingSummary.textContent=`${branchTitle(branch)} · ${branch.name} · ${branch.sha.slice(0,7)}`;
   try{sessionStorage.setItem('branch-review:opening',JSON.stringify(openingSelection));}catch{}
@@ -566,6 +579,7 @@ async function poll() {
     if (reviewChanged || previousBusy && !currentState.busy) await loadBranches();
     if(previousBusy!==currentState.busy || previousReview!==currentState.record?.id)branchList();
     batch.render(currentState);
+    acknowledgeReview();
   } catch (e) {
     $("connection").textContent = "REVIEW SERVER DISCONNECTED";
     error(e.message);
@@ -642,7 +656,13 @@ window.addEventListener("message", (event) => {
   )
     error(`${side}: ${event.data.message}`);
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:focus-status' && event.data.key===currentState.manifest?.scenarios.find(item=>item.id===reviewWorkflow.scenario())?.focus && ['waiting','found','missing','cancelled'].includes(event.data.status)){focusStates[side]=event.data.status;renderFocusStatus();}
-  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context'){reviewWorkflow.context(side,event.data);renderAddress();}
+  if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:context'){
+    reviewWorkflow.context(side,event.data);renderAddress();
+    if (side === 'changed' && event.data.painted === true) {
+      paintedReview = {sha:currentState.changed.sha,frame:event.source};
+      acknowledgeReview();
+    }
+  }
   if(side && event.source === $(`frame-${side}`)?.contentWindow && event.data?.type === 'review:change-target' && currentState.status==='ready' && !currentState.busy){
     const data=event.data;if(typeof data.location!=='string' || !data.location.startsWith('/') || !data.target)return;
     toggle(side);reviewWorkflow.context(side,{...reviewWorkflow.getContext(side),location:data.location});renderAddress();

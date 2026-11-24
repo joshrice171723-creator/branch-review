@@ -187,14 +187,14 @@ test('check commands clear an inherited Electron Node mode', async t => {
   assert.equal((await store.runCheck(id, {name:check.name, phase:'baseline'})).exit_code, 0);
 });
 
-test('checks record timeout failures and retain output', async t => {
-  const slow = {...check, argv:['node', '-e', 'console.log("started"); setInterval(() => {}, 100);'], timeout_seconds:1};
+test('legacy time limits do not stop a required check or discard its output', async t => {
+  const slow = {...check, argv:['node', '-e', 'setTimeout(() => console.log("finished"), 1200);'], timeout_seconds:1};
   const {store} = await setup(t, slow);
   const {task_id:id} = await store.startTask(start);
   const result = await store.runChecks(id, {phase:'baseline'});
-  assert.equal(result.verdict, 'revise');
+  assert.equal(result.verdict, 'pass');
   const row = result.checks[0];
-  assert.equal(row.timed_out, true);
-  assert.match(row.spawn_error, /Command timed out after 1 second/);
-  assert.match((await store.readRunRecord(id, row.evidence_path + '/stdout.log')).toString(), /started/);
+  assert.notEqual(row.timed_out, true);
+  assert.equal(row.exit_code, 0);
+  assert.match((await store.readRunRecord(id, row.evidence_path + '/stdout.log')).toString(), /finished/);
 });

@@ -9,7 +9,7 @@ import {createHealthReviewer} from '../workbench/coordinator/health.mjs';
 import {observeRuntime} from '../workbench/coordinator/runtime-probes.mjs';
 import {repairRuntime} from '../workbench/coordinator/health-repair.mjs';
 import {gitRead} from '../workbench/environment/paths.mjs';
-import {healthRegression, verifyHostHttpRegression} from '../workbench/coordinator/health-regression.mjs';
+import {healthRegression, operationRegression, verifyHostHttpRegression} from '../workbench/coordinator/health-regression.mjs';
 
 async function temp(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'br-health-test-'));
@@ -105,7 +105,7 @@ test('legacy reported repairs show an observation wait and a repeated report res
   await restarted.tick();
   const [row] = restarted.status().incidents;
   assert.equal(row.state, 'awaiting-observation');
-  assert.match(row.note, /no automatic regression check/);
+  assert.match(row.note, /Retry Dialog failure/);
   await restarted.report({title: row.title, issue: row.error, request: 'It still fails.'});
   assert.equal(restarted.status().incidents[0].state, 'retrying');
   assert.equal(restarted.status().incidents[0].history[0].outcome, 'failed');
@@ -292,4 +292,200 @@ test('repairs shipped host source without a Git checkout at the installation', a
   assert.deepEqual(result.files, ['host.mjs']);
   assert.equal((await readFile(file,'utf8')).trim(), 'export default true;');
   await assert.rejects(readFile(path.join(repository,'.git','HEAD')), {code:'ENOENT'});
+});
+
+test('deduplicates an unfamiliar operation and preserves its exact verification after restart', async t => {
+  const directory = await temp(t);
+  const id = 'operation:' + 'a'.repeat(64);
+  let now = 1000, repairs = 0;
+  let observed = [{owner: 'host', id, title: 'Open review', error: 'Unfamiliar failure', occurredAt: now}];
+  const options = {directory, start: false, clock: () => now, idle: () => true, observe: () => observed,
+    repair: async () => {
+      repairs++;
+      return {summary: 'Fixed review.', files: ['server.mjs'], checks: 'Review check passed.',
+        regression: {kind: 'http', path: '/api/workspace/design', status: 200}};
+    }};
+  const monitor = await createHealthReviewer(options);
+  await monitor.report({id, title: 'Open review', issue: 'Unfamiliar failure',
+    regression: {kind: 'observation', id}});
+  await monitor.tick();
+  await monitor.report({id, title: 'A different title', issue: 'Unfamiliar failure'});
+  assert.equal(monitor.status().incidents.length, 1);
+  assert.equal(repairs, 1);
+  await monitor.close();
+  now = 2000;
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  observed = [{owner: 'host', id, title: 'Open review', error: '', occurredAt: 1500}];
+  await restarted.tick();
+  assert.equal(restarted.status().incidents[0].state, 'awaiting-observation');
+  observed[0].occurredAt = 2001;
+  await restarted.tick();
+  assert.equal(restarted.status().incidents[0].state, 'recovered');
+  assert.equal(restarted.status().incidents[0].verification.probe.id, id);
+});
+
+test('persists project preview recovery and verifies its result without restarting the host', async t => {
+  const directory = await temp(t);
+  let now = 1000, attempts = 0;
+  const observed = [{owner: 'project', id: 'preview', scope: '/fixture', title: 'Project preview', error: 'Setup exited.'}];
+  const options = {directory, start: false, interval: 10, clock: () => now, idle: () => true, observe: () => observed,
+    recoverProject: async signal => {
+      assert.equal(signal.scope, '/fixture');
+      attempts++;
+      return {passed: attempts === 2, detail: attempts === 2 ? 'The intended page rendered.' : 'The page is still blank.'};
+    }};
+  const monitor = await createHealthReviewer(options);
+  await monitor.tick(); await monitor.tick();
+  assert.equal(monitor.status().incidents[0].state, 'retrying');
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  now += 100;
+  await restarted.tick();
+  const [row] = restarted.status().incidents;
+  assert.equal(row.state, 'recovered');
+  assert.equal(row.attempts, 2);
+  assert.equal(row.verification.passed, true);
+  assert.equal(row.history[0].outcome, 'failed');
+});
+
+test('a required user action does not launch a code repair', async t => {
+  const directory = await temp(t);
+  let repairs = 0;
+  const monitor = await createHealthReviewer({directory, start: false, idle: () => true, observe: () => [],
+    repair: () => { repairs++; }});
+  t.after(() => monitor.close());
+  await monitor.report({id: 'operation:' + 'b'.repeat(64), title: 'Astra approval', issue: 'Astra needs your approval.',
+    nextAction: 'Open Plan and approve the proposed Astra stages.'});
+  await monitor.tick(); await monitor.tick();
+  assert.equal(repairs, 0);
+  assert.equal(monitor.status().incidents[0].state, 'attention');
+  assert.match(monitor.status().incidents[0].nextAction, /Open Plan/);
+});
+
+test('an unfamiliar blocker can produce a specific in-app action without a patch or restart', async t => {
+  const directory = await temp(t);
+  const monitor = await createHealthReviewer({directory, start: false, idle: () => true, observe: () => [],
+    repair: async () => ({needsAction: true, summary: 'This folder no longer exists.',
+      nextAction: 'Open Projects and choose the folder at its new location.'})});
+  t.after(() => monitor.close());
+  await monitor.report({id: 'operation:' + 'd'.repeat(64), title: 'Open project', issue: 'Unknown project failure.'});
+  await monitor.tick();
+  const [row] = monitor.status().incidents;
+  assert.equal(row.state, 'attention');
+  assert.equal(row.history[0].outcome, 'needs-action');
+  assert.equal(row.files, undefined);
+  assert.equal(row.nextAction, 'Open Projects and choose the folder at its new location.');
+});
+
+test('stopping a preview cancels its active recovery and remains stopped after restart', async t => {
+  const directory = await temp(t);
+  const signal = {owner: 'project', scope: '/fixture', id: 'preview', title: 'Project preview', error: 'Preview failed.'};
+  let recoveries = 0;
+  let started;
+  const working = new Promise(resolve => { started = resolve; });
+  const options = {directory, start: false, idle: () => true, observe: () => [signal],
+    recoverProject: async (_issue, stop) => {
+      recoveries++;
+      started();
+      await new Promise((resolve, reject) => stop.addEventListener('abort', () => reject(stop.reason), {once: true}));
+    }};
+  const monitor = await createHealthReviewer(options);
+  await monitor.tick(); await monitor.tick(false);
+  await working;
+  assert.equal(monitor.status().incidents[0].state, 'repairing');
+  signal.cancelled = true;
+  await monitor.tick();
+  assert.equal(monitor.status().incidents[0].state, 'cancelled');
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  await restarted.tick();
+  assert.equal(recoveries, 1);
+  assert.equal(restarted.status().incidents[0].history[0].outcome, 'cancelled');
+});
+
+test('a reported operation repair cannot apply after the exact operation succeeds', async t => {
+  const directory = await temp(t);
+  const id = 'operation:' + 'e'.repeat(64);
+  let now = 1000, release, started, applicable;
+  const gate = new Promise(resolve => { release = resolve; });
+  const working = new Promise(resolve => { started = resolve; });
+  const signal = {owner: 'host', id, title: 'Open review', error: 'Review failed.', occurredAt: now};
+  const monitor = await createHealthReviewer({directory, start: false, clock: () => now, idle: () => true, observe: () => [signal],
+    repair: async (_row, _directory, _stop, mayApply) => {
+      started(); await gate;
+      applicable = await mayApply();
+      throw Error('The operation already recovered.');
+    }});
+  t.after(() => monitor.close());
+  await monitor.report({id, title: signal.title, issue: signal.error, regression: {kind: 'observation', id}});
+  await monitor.tick(false); await working;
+  signal.error = '';
+  signal.occurredAt = ++now;
+  release(); await monitor.tick();
+  assert.equal(applicable, false);
+  await monitor.tick();
+  assert.equal(monitor.status().incidents[0].state, 'recovered');
+});
+
+test('a host repair waiting for restart does not block a project preview recovery', async t => {
+  const directory = await temp(t);
+  const signals = [];
+  let previewRepairs = 0;
+  const monitor = await createHealthReviewer({directory, start: false, idle: () => true, observe: () => signals,
+    repair: async () => ({summary: 'The host repair is ready.', checks: 'Host check passed.', files: ['server.mjs']}),
+    recoverProject: async () => { previewRepairs++; return {passed: true, detail: 'Project page rendered.'}; }});
+  t.after(() => monitor.close());
+  await monitor.report({title: 'Host dialog', issue: 'Dialog fails.'});
+  await monitor.tick();
+  signals.push({owner: 'project', scope: '/fixture', id: 'preview', title: 'Project preview', error: 'Setup failed.'});
+  await monitor.tick(); await monitor.tick();
+  assert.equal(previewRepairs, 1);
+  assert.equal(monitor.status().incidents.find(row => row.owner === 'project').state, 'recovered');
+  assert.equal(monitor.status().incidents.find(row => row.owner === 'host').state, 'restart-required');
+});
+
+test('project switch preserves other incidents without verifying or blocking the active project', async t => {
+  const directory = await temp(t);
+  const repairs = [];
+  const options = {directory, start: false, idle: () => true, observe: () => [],
+    repair: async row => {
+      repairs.push(row.workspace);
+      return {summary: 'The repair is ready.', checks: 'Focused check passed.', files: ['server.mjs']};
+    }, verifyRegression: () => { throw Error('The inactive project must not be verified.'); }};
+  const first = await createHealthReviewer({...options, workspace: '/first'});
+  await first.report({id: 'first', workspace: '/first', title: 'First settings', issue: 'Settings failed.',
+    regression: operationRegression('operation:' + '1'.repeat(64), '/api/project-settings')});
+  await first.tick();
+  await first.close();
+  const second = await createHealthReviewer({...options, workspace: '/second'});
+  t.after(() => second.close());
+  assert.equal(second.status().incidents.length, 0);
+  await second.report({id: 'second', workspace: '/second', title: 'Second settings', issue: 'Settings failed.'});
+  await second.tick();
+  assert.deepEqual(repairs, ['/first', '/second']);
+  assert.equal(second.status().incidents[0].workspace, '/second');
+  assert.equal(second.status().incidents[0].state, 'restart-required');
+  const saved = JSON.parse(await readFile(path.join(directory, 'incidents.json'), 'utf8'));
+  assert.equal(saved.find(row => row.workspace === '/first').state, 'restart-required');
+});
+
+test('trusted read metadata permits exact JSON replay and keeps query or mutation actions bound', async () => {
+  const id = 'operation:' + '2'.repeat(64);
+  const probe = operationRegression(id, '/api/project-settings');
+  assert.deepEqual(probe, {kind: 'http', path: '/api/project-settings', status: 200, json: true});
+  for (const path of [undefined, '/api/project-settings?project=other', '/api/workspace/design/build', 'https://example.com']) {
+    assert.deepEqual(operationRegression(id, path), {kind: 'observation', id});
+  }
+  for (const [body, passed] of [['{}', true], ['null', true], ['{"error":"Still broken"}', false], ['<html>wrong page</html>', false]]) {
+    const result = await verifyHostHttpRegression({probe, origin: 'http://127.0.0.1:4310',
+      request: async (url, options) => {
+        assert.equal(url, 'http://127.0.0.1:4310/api/project-settings');
+        assert.equal(options.method, 'GET');
+        return new Response(body, {status: 200});
+      }});
+    assert.equal(result.passed, passed);
+  }
 });

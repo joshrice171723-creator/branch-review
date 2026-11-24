@@ -473,6 +473,10 @@ function connectProjectConversation(initial) {
       }
       outgoing = undefined;
       update(next, true);
+      if (next.reviewRun) {
+        close(false);
+        await openReview(next.reviewRun);
+      }
       if (body.preparePlan) {
         const plan = planFromReply(next.messages.at(-1));
         if (plan) edit(plan, true);

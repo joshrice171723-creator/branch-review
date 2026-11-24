@@ -1,4 +1,5 @@
 const {webFrameMain} = require('electron');
+const {createHash} = require('node:crypto');
 
 exports.createRuntimeDiagnostics = function () {
   const events = new Map();
@@ -8,15 +9,25 @@ exports.createRuntimeDiagnostics = function () {
     const url = URL.parse(value);
     return url?.origin === origin ? url : null;
   };
-  function record(id, title, error, evidence) {
+  function record(id, title, error, evidence, extra = {}) {
     if (events.size >= 128 && !events.has(id)) {
       const firstSuccess = [...events.values()].find(row => !row.error);
       if (!firstSuccess && !error) return;
       events.delete(firstSuccess?.id ?? events.keys().next().value);
     }
-    events.set(id, {owner: 'host', id, title, error: String(error || '').slice(0, 1200), evidence});
+    const signal = {owner: 'host', id, title, error: String(error || '').slice(0, 1200), evidence,
+      occurredAt: Date.now(), ...extra};
+    events.set(id, signal);
+    return signal;
   }
   return {
+    async operation(name, identity, error, evidence = '', readPath, workspace) {
+      const id = 'operation:' + createHash('sha256').update(JSON.stringify([name,identity])).digest('hex');
+      const signal = record(id, name, error?.message ?? error, evidence, {source: 'operation', readPath, workspace,
+        nextAction: error?.nextAction || error?.userAction || error?.action});
+      if (signal?.error) await this.onOperationFailure?.(signal);
+    },
+    verifyPreview: require('./preview-health.cjs').verifyPreview,
     attach(target, hostOrigin) {
       window = target;
       origin = hostOrigin;
@@ -26,6 +37,9 @@ exports.createRuntimeDiagnostics = function () {
       contents.on('console-message', event => {
         const url = appUrl(event.frame?.url);
         if (event.level === 'error' && url) {
+          // Chromium also logs our handled API responses to the console. Their server actions already have owners.
+          if (appUrl(event.sourceId)?.pathname.startsWith('/api/') &&
+              /^Failed to load resource: the server responded with a status of 4\d\d\b/.test(event.message)) return;
           record('page:' + url.pathname, 'Page ' + url.pathname, event.message, event.sourceId && 'Source: ' + event.sourceId);
         }
       });
@@ -64,9 +78,9 @@ exports.createRuntimeDiagnostics = function () {
       return unresponsive || window?.webContents.isCrashed();
     },
     async observations() {
-      if (!window || window.isDestroyed()) return [];
+      if (!window || window.isDestroyed()) return [...events.values()];
       const crashed = window.webContents.isCrashed();
-      const rows = [...events.values()];
+      const rows = [...events.values()].map(row => ({...row}));
       const loaded = !crashed && appUrl(window.webContents.mainFrame?.url) && !window.webContents.isLoadingMainFrame();
       if (crashed || loaded) rows.push({owner: 'host', id: 'renderer', title: 'Workspace renderer',
         error: crashed ? 'The workspace renderer crashed.' : '', restart: true});

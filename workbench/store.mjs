@@ -897,11 +897,13 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return issues;
   }
 
-  async function requireAgreement(run) {
+  async function requireAgreement(run, status = 'active') {
     const current = await lifecycle(run);
-    assert(current.status === 'active', 'Resume the task before continuing implementation or checks.');
+    assert(current.status === status, status === 'completed' ? 'Select the completed review task.' :
+      'Resume the task before continuing implementation or checks.');
     const issues = await agreementIssues(run);
     assert(!issues.length, issues.join(' '));
+    return current;
   }
 
   async function pin(run) {
@@ -1163,11 +1165,26 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
   }
 
   async function runConfigured(id, {name, phase, signal, benchmarks = false, reusePassing = false,
-    measure = (_name, run) => run(), report = () => {}} = {}) {
+    measure = (_name, run) => run(), report = () => {}} = {}, reviewTarget) {
     assert(phases.includes(phase), 'Choose baseline or after.');
     return mutate(async home => {
       const run = await selected(id, home);
-      await requireAgreement(run);
+      const lifecycleState = await requireAgreement(run, reviewTarget ? 'completed' : 'active');
+      if (reviewTarget) {
+        const current = await sourceSnapshot(await resolvedRoot, run.task);
+        assert(lifecycleState.head === reviewTarget.sha && current.head === lifecycleState.head &&
+          lifecycleState.branch === 'refs/heads/' + reviewTarget.branch && current.branch === lifecycleState.branch &&
+          current.snapshot_sha256 === lifecycleState.snapshot_sha256, 'Restore the completed review commit and source before retrying verification.');
+        const other = await activeId(home);
+        if (other && other !== id) {
+          const owner = await lifecycle(await selected(other, home));
+          assert(!['active', 'unverified'].includes(owner.status), 'Another task owns this workspace.');
+        }
+        if (reviewTarget.prepareBrowserRecovery && await needsBrowserPreview(id)) {
+          const preview = await reviewTarget.prepareBrowserRecovery({taskId:id, waitForReady:true, signal});
+          if (preview.state !== 'ready') throw Error(preview.message);
+        }
+      }
       const settings = await configurationFor(run);
       const configured = await validateChecks(settings);
       const checks = name ? configured.filter(row => row.name === name) : configured.filter(row =>
@@ -1628,7 +1645,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
           const recordedPreviewLog = Object.hasOwn(files, localPreviewLog);
           delete files[localPreviewLog];
           assert(recordedPreviewLog && fingerprint(prior.files) === expected && fingerprint(files) === snapshot.snapshot_sha256,
-            'Restore the stopped buildâ€™s source before retrying verification.');
+            'Restore the stopped build’s source before retrying verification.');
         }
         const pinned = await pinnedConfiguration(run);
         const current = await effectiveConfig();
@@ -1690,7 +1707,9 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
   }
 
   return {initialize:() => mutate(install), config, setConfig, effectiveConfig, getProfile, setProfile, profileApplied, discover, startTask, questions, answer,
-    freeze, prompt, executionConfig, snapshot, cosmeticSource, runCheck, runChecks:runConfigured, configuredCheckReadiness, needsBrowserPreview, browserCheckUrl: async () => (await browserPreview?.())?.url, restoreBrowserBaseline,
+    freeze, prompt, executionConfig, snapshot, cosmeticSource, runCheck, runChecks:(id, options) => runConfigured(id, options),
+    runReviewChecks:(id, target, signal) => runConfigured(id, {phase:'after', signal, reusePassing:target.reusePassing}, target),
+    configuredCheckReadiness, needsBrowserPreview, browserCheckUrl: async () => (await browserPreview?.())?.url, restoreBrowserBaseline,
     preflightChecks, checkReceiptStatus, evidenceTests, runEvidenceTest,
     benchmark:(id, options) => runConfigured(id, {...options, benchmarks:true}), record, readRunRecord, getRun, listRuns,
     status, verify, repair:(id, reason) => changeLifecycle(id, 'repair', reason),

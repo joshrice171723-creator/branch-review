@@ -71,9 +71,10 @@ async function cleanupEntries(folder) {
   return entries;
 }
 
-export function createEnvironment({repository, store, local, projectId, defaultProfile, isActive, savedPreview, selectedAgent, origin}) {
+export function createEnvironment({repository, store, local, projectId, defaultProfile, isActive, savedPreview, selectedAgent, origin, verifyPreview}) {
   let automaticPreviewStopped = false;
   let rootPromise, directoryWrite, preview, readinessController, queue = Promise.resolve();
+  let renderObservation;
   const repo = () => rootPromise ||= realpath(repository);
   const stateDirectory = path.resolve(local || path.join(repository, '.harness'));
   const id = async () => projectId || stableId(process.platform === 'win32' ? (await repo()).toLowerCase() : await repo());
@@ -284,7 +285,12 @@ export function createEnvironment({repository, store, local, projectId, defaultP
   async function startPreview(app, options = {}) {
     const {taskId, ...settings} = options;
     const snapshot = await store.snapshot?.(taskId, {record: false});
-    return app.start({...settings, source: snapshot?.snapshot_sha256});
+    try { return await app.start({...settings, source: snapshot?.snapshot_sha256}); }
+    catch (error) {
+      const state = await app.status().catch(() => null);
+      if (state?.wanted && !state.stoppedByUser && state.settings?.mode === 'web') error.recoveryOwner = 'project-preview';
+      throw error;
+    }
   }
 
   async function autoPreview(input) {
@@ -292,8 +298,9 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     const current = await app.status();
     if (process.env.BRANCH_REVIEW_PREVIEW_PARENT) return current;
     if (input.retry) automaticPreviewStopped = false;
+    if (input.retry && current.state === 'exited' && current.owned) await app.stop({preserveIntent: true});
     if (["external", "running", "starting"].includes(current.state)) return current;
-    if (automaticPreviewStopped && !input.retry) return current;
+    if ((automaticPreviewStopped || current.stoppedByUser) && !input.retry) return current;
     if (current.state === "exited" && !input.retry) return current;
     if (await savedPreview?.()) return current;
     if (current.settings) {
@@ -328,6 +335,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       let state = await autoPreview({retry: true, id: candidate?.id, taskId, signal});
       async function check() {
         for (let attempt = 0; state.state === 'starting' && (waitForReady || attempt < 10); attempt++) {
+          if (Date.now() - state.startedAt >= 60000) break;
           await delay(500, undefined, {signal});
           state = await app.status();
         }
@@ -351,10 +359,11 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       const expectedSource = (await store.snapshot?.(taskId, {record: false}))?.snapshot_sha256;
       const outdated = state.owned && ((expectedRevision && state.revision !== expectedRevision) ||
         (expectedSource && state.source !== expectedSource));
-      const retrying = result.status >= 500 || Boolean(result.connectionError) || outdated || (rerunSetup && state.owned);
+      const retrying = result.status >= 500 || Boolean(result.connectionError) || outdated ||
+        state.state === 'exited' && state.wanted || (rerunSetup && state.owned);
       if (retrying) {
         const preferredUrl = state.owned ? state.url : undefined;
-        await app.stop();
+        await app.stop({preserveIntent: true});
         state = await startPreview(app, {rerunSetup, taskId, signal, preferredUrl});
         result = await check();
       }
@@ -472,10 +481,10 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         });
       case 'POST design/app-process/stop':
       case 'POST preview/stop': {
+        automaticPreviewStopped = true;
         readinessController?.abort();
         (await getPreview()).cancelSetup();
         return write(async () => {
-          automaticPreviewStopped = true;
           return (await getPreview()).stop();
         });
       }
@@ -483,7 +492,38 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     }
   }
 
-  return {inspect, prepare, prepareBuild,
+  async function observePreview() {
+    const app = await getPreview();
+    const state = await app.status();
+    if (automaticPreviewStopped || state.stoppedByUser) return [{owner: 'project', id: 'preview', scope: await repo(),
+      title: 'Project preview', cancelled: true, occurredAt: Date.now()}];
+    if (!state.wanted || state.settings?.mode !== 'web') return [];
+    let error = '';
+    if (state.state === 'exited') error = state.message || 'The project preview stopped before it was ready.';
+    else if (state.state === 'external') error = 'Another process is using the managed preview address.';
+    else if (state.state === 'starting') {
+      if (Date.now() - state.startedAt < 60000) return [];
+      error = 'The project preview is still starting and cannot accept connections.';
+    } else if (state.state === 'running') {
+      try {
+        const response = await fetch(state.url, {signal: AbortSignal.timeout(5000)});
+        await response.body?.cancel();
+        if (!response.ok) error = 'The project preview returned HTTP ' + response.status + '.';
+        else if (verifyPreview) {
+          const key = state.url + '|' + state.startedAt;
+          if (renderObservation?.key !== key || Date.now() >= renderObservation.nextAt) {
+            renderObservation = {key, nextAt: Date.now() + 60000,
+              result: await verifyPreview(state.url, {embedOrigin: origin})};
+          }
+          if (!renderObservation.result.passed) error = renderObservation.result.detail;
+        }
+      } catch (failure) { error = failure.message; }
+    }
+    return [{owner: 'project', id: 'preview', scope: await repo(), title: 'Project preview', error,
+      url: state.url, evidence: redact(state.log || '').slice(-6000), occurredAt: Date.now()}];
+  }
+
+  return {inspect, prepare, prepareBuild, observePreview,
     async browserPreview() {
       const process = await (await getPreview()).status();
       return {url: process.url || await savedPreview?.(), revision: process.revision, source: process.source, owned: process.owned};
@@ -498,13 +538,34 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         readinessController = null;
       }
     }), cleanupPreview, cleanup, capabilities, exportProfile, importProfile, checkedPreview, dispatch,
-    recoverPreview: () => write(async () => {
-      const app = await getPreview();
-      const state = await app.status();
-      if (automaticPreviewStopped || state.settings?.mode !== 'web' || state.state === 'external' ||
-          (!state.owned && state.state !== 'exited')) throw Error('The managed preview is no longer active.');
-      await app.stop();
-      return startPreview(app);
+    recoverPreview: ({signal, previewId, rerunSetup = true} = {}) => write(async () => {
+      readinessController = new AbortController();
+      try {
+        const stop = signal ? AbortSignal.any([signal, readinessController.signal]) : readinessController.signal;
+        const app = await getPreview();
+        const state = await app.status();
+        if (automaticPreviewStopped || state.stoppedByUser || !state.wanted || state.settings?.mode !== 'web') {
+          return {cancelled: true, passed: false, detail: 'The managed preview was stopped by the user.'};
+        }
+        const inventory = await capabilities({routes: false});
+        await app.stop({preserveIntent: true});
+        if (previewId) {
+          const candidate = inventory.previews.find(item => item.id === previewId && item.mode === 'web');
+          if (!candidate) throw Error('The alternative preview command is no longer available.');
+          await app.setup(candidate);
+        }
+        const result = await previewForPlan(inventory, previewId, inventory.head, {rerunSetup, waitForReady: true, signal: stop});
+        if (result.state !== 'ready') return {passed: false, detail: result.message};
+        if (!verifyPreview) return {passed: false, detail: 'The preview responds. Browser rendering still needs verification.'};
+        const rendered = await verifyPreview(result.url, {signal: stop, embedOrigin: origin});
+        const current = await app.status();
+        renderObservation = {key: current.url + '|' + current.startedAt, nextAt: Date.now() + 60000, result: rendered};
+        return rendered;
+      } catch (error) {
+        if (automaticPreviewStopped) return {cancelled: true, passed: false, detail: 'The managed preview was stopped by the user.'};
+        signal?.throwIfAborted();
+        return {passed: false, detail: redact(error.message)};
+      } finally { readinessController = null; }
     }),
     close: () => {
       readinessController?.abort();

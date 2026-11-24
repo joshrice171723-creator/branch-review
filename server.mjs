@@ -485,13 +485,43 @@ actions.add('/api/release-key-text');actions.add('/api/new-change');actions.add(
 for(const endpoint of ['/api/version-preview','/api/version-latest','/api/version-restore','/api/fix-apply'])actions.add(endpoint);
 longActions.add('/api/version-restore');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
-async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
+async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagnostics}) {
+  let observe;
+  const waitForOperation = async message => {
+    if (observe) {
+      await observe(Object.assign(Error(message), {nextAction:'Let the current operation finish, then select the same action.'}));
+      res.setHeader('X-Branch-Review-Recovery','coordinator');
+    }
+    return json(res,409,{error:message});
+  };
   try {
     if(req.headers.host!==host) return json(res,403,{error:'Invalid host'});
     // Loopback cookies cross ports; retire old revisions before their headers grow too large.
     const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
+    const trustedClient = req.headers['x-review-token'] === token ||
+      (req.method === 'GET' && req.headers['sec-fetch-site'] === 'same-origin');
+    const beginAction = data => {
+      if (!diagnostics?.operation || !trustedClient || req.headers.origin && req.headers.origin !== origin ||
+          !url.pathname.startsWith('/api/') || url.pathname === '/api/workspace/coordinator/health') return;
+      // Hash the resource and arguments in desktop diagnostics. Never save request bodies or credentials in incidents.
+      const identity = JSON.stringify([repo, req.method, url.pathname, url.search, data]);
+      const title = url.pathname.replace(/^\/api\/(?:workspace\/)?/, '').replace(/[/-]+/g,' ');
+      observe = async error => {
+        if (error?.recoveryOwner === 'project-preview' || ['OPERATION_CANCELLED','USER_CANCELLED'].includes(error?.code)) return;
+        try {
+          await diagnostics.operation(title.charAt(0).toUpperCase() + title.slice(1), identity, error,
+            req.method + ' ' + url.pathname, req.method === 'GET' && !url.search ? url.pathname : undefined, repo);
+        } catch(problem) { console.error('Could not record the Branch Review action:', problem.message); }
+      };
+    };
+    if (req.method === 'GET') {
+      beginAction();
+      res.once('finish', () => {
+        if (res.statusCode === 200) void observe?.();
+      });
+    }
     if (url.pathname.startsWith('/api/workspace/')) {
       if (req.headers.origin && req.headers.origin!==origin) return json(res,403,{error:'Invalid origin'});
       const route=url.pathname.slice('/api/workspace/'.length);
@@ -506,7 +536,15 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
         return json(res,403,{error:'Authorize this client to run project route discovery.'});
       if (req.method==='POST' && (!verified || req.headers.origin!==origin))
         return json(res,403,{error:'Reload Branch Review before continuing.'});
-      const result=await workspace.dispatch(req.method,route,req.method==='POST'?await body(req):{},url.searchParams);
+      const data=req.method==='POST'?await body(req):{};
+      if (req.method === 'POST' && route === 'design/review-outcome' && data.opened) {
+        const record = state.recordId && store.get(state.recordId);
+        if (busy || state.status !== 'ready' || record?.identity.workbenchRun !== data.runId ||
+            record.identity.changed !== data.commit) throw Error('The review target changed. Open this build again.');
+      }
+      if (req.method === 'POST') beginAction(data);
+      const result=await workspace.dispatch(req.method,route,data,url.searchParams);
+      if (req.method === 'POST') await observe?.();
       if (Buffer.isBuffer(result?.bytes)) {
         res.writeHead(200,{'Content-Type':result.type,'Content-Length':result.bytes.length,'Cache-Control':'no-store',
           'X-Content-Type-Options':'nosniff',...(result.download && {'Content-Disposition':'attachment; filename="'+result.download+'"'})});
@@ -590,25 +628,43 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
     if(req.method==='GET' && /^\/recordings\/[a-f0-9-]{36}\.webm$/.test(url.pathname)){const clip=await readFile(path.join(local,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':'video/webm','Content-Length':clip.length,'Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'"});return res.end(clip);}
     if(req.method==='POST' && actions.has(url.pathname)) {
       if(req.headers.origin!==origin || req.headers['x-review-token']!==token) return json(res,403,{error:'Reload Branch Review before continuing.'});
-      if(url.pathname==='/api/workbench-open') return json(res,200,{result:await workspace.open()});
-      if(url.pathname==='/api/workbench-prepare') return json(res,200,{result:await workspace.prepare()});
-      if(url.pathname==='/api/workbench-install') {
-        if(busy || jobs.rows.some(job=>job.status==='running')) return json(res,409,{error:'Wait for the active review operation before preparing the project.'});
-        busy=true;
-        try {return json(res,200,{result:await workspace.prepare()});} finally {busy=false;}
+      beginAction();
+      if(url.pathname==='/api/workbench-open' || url.pathname==='/api/workbench-prepare') {
+        const result = url.pathname==='/api/workbench-open' ? await workspace.open() : await workspace.prepare();
+        await observe?.();
+        return json(res,200,{result});
       }
-      if(url.pathname==='/api/job-cancel')return json(res,200,{result:await jobs.cancel((await body(req)).jobId)});
-      if(busy) return json(res,409,{error:'Another operation is still running.'});
+      if(url.pathname==='/api/workbench-install') {
+        if(busy || jobs.rows.some(job=>job.status==='running')) return waitForOperation('Wait for the active review operation before preparing the project.');
+        busy=true;
+        try {const result=await workspace.prepare(); await observe?.(); return json(res,200,{result});} finally {busy=false;}
+      }
+      if(url.pathname==='/api/job-cancel'){
+        const data=await body(req); beginAction(data);
+        const result=await jobs.cancel(data.jobId); await observe?.(); return json(res,200,{result});
+      }
+      if(busy) {
+        beginAction(await body(req));
+        return waitForOperation('Another operation is still running.');
+      }
       busy=true;
       let data; try { data=await body(req); } catch(error) { busy=false; throw error; }
+      beginAction(data);
       state.error=null;
       const operation=async()=>{
         try {
-          if (url.pathname==='/api/workbench-export') return await workspace.exportHandoff(data.runId);
-          return await mutate(url.pathname,data);
+          const result = url.pathname==='/api/workbench-export' ? await workspace.exportHandoff(data.runId) :
+            await mutate(url.pathname,data);
+          await observe?.();
+          return result;
         } catch(error) {
+          if (data.workbenchRun && ['/api/start','/api/retest'].includes(url.pathname)) {
+            await workspace.dispatch('POST','design/review-outcome',
+              {runId:data.workbenchRun,opened:false,error:error.message}).catch(() => {});
+          }
           state.error=error.message;
           if(['preparing','stopping','preview-ready'].includes(state.status)) state.status='error';
+          if (longActions.has(url.pathname)) await observe?.(error);
           throw error;
         } finally {busy=false;}
       };
@@ -621,7 +677,13 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins}) {
     const frameAncestor = /^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(parent) ? parent : "'none'";
     res.writeHead(200,{'Content-Type':types[path.extname(filename)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src 'self' "+[...previewOrigins,'http://127.0.0.1:*','http://localhost:*','https:'].filter(Boolean).join(' ')+"; frame-ancestors "+frameAncestor+"; object-src 'none'; base-uri 'none'"});
     res.end(await readFile(path.join(root,'public',filename)));
-  }catch(error){if(!res.headersSent)json(res,400,{error:error.message});else res.end();}
+  }catch(error){
+    await observe?.(error);
+    if(!res.headersSent) {
+      if(observe) res.setHeader('X-Branch-Review-Recovery','coordinator');
+      json(res,400,{error:error.message, ...(['REVIEW_VERIFICATION_REQUIRED','OPERATION_CANCELLED','USER_CANCELLED'].includes(error.code) && {code:error.code})});
+    }else res.end();
+  }
 }
 
 async function bindLoopback(server, port, allowFallback) {
@@ -689,8 +751,11 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
     state.prepared=JSON.parse(await readFile(path.join(local,'prepared.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return 'null';throw e;}));
     const preparedSlot = slots[state.prepared?.runtime];
     if (preparedSlot && state.prepared.proxy !== undefined) state.prepared.proxy = preparedSlot.proxy;
-    await activate().catch(error=>{state.status='error';state.error=error.message;});
-    context = {origin,host,workspace,previewOrigins};
+    await activate().then(() => state.status === 'ready' && diagnostics?.operation?.('Restore the review workspace',repo)).catch(async error=>{
+      state.status='error';state.error=error.message;
+      await diagnostics?.operation?.('Restore the review workspace',repo,error);
+    });
+    context = {origin,host,workspace,previewOrigins,diagnostics};
     process.once('exit',()=>workspace.close());
     let checkingMuse=false;
     setInterval(async()=>{

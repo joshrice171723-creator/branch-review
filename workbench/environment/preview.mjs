@@ -1,4 +1,5 @@
-import {spawn, spawnSync} from 'node:child_process';
+import {execFile, spawn, spawnSync} from 'node:child_process';
+import {promisify} from 'node:util';
 import {constants} from 'node:fs';
 import {access, lstat} from 'node:fs/promises';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import {literalArguments} from './discovery.mjs';
 
 const localHosts = ['127.0.0.1', 'localhost', '[::1]'];
 const portRequest = '{port}';
+const execute = promisify(execFile);
 
 export function previewAddress(raw, {local = false, template = false} = {}) {
   if (typeof raw !== 'string' || !raw || raw.length > 1500 || /[\s\u0000-\u001f\u007f\\]/.test(raw)) {
@@ -178,19 +180,48 @@ export class PreviewProcess {
     if (!settings) return {settings: null, state: 'unconfigured', owned: false, url: '', log: ''};
     const {mode} = settings;
     const url = this.url || (!settings.url.includes(portRequest) ? settings.url : '');
-    const owned = this.children.some(({live}) => live);
-    let state = this.exitCode != null || this.failure ? 'exited' : 'stopped';
-    if (mode === 'external' || url && await listening(url)) state = owned ? 'running' : 'external';
-    else if (owned) state = mode === 'desktop' ? 'running' : 'starting';
     if (this.log === null) {
       const dir = await this.directory();
       const saved = dir && await boundedText(dir, 'preview-output.json', 512 * 1024).catch(error => {
         if (error.code !== 'ENOENT') throw error;
         return null;
       });
-      this.log ??= saved ? JSON.parse(saved).log : '';
+      const prior = saved ? JSON.parse(saved) : {};
+      this.log ??= prior.log || '';
+      this.wanted ??= prior.wanted === true;
+      this.stoppedByUser ??= prior.stoppedByUser === true;
+      this.startedAt ??= prior.startedAt;
     }
-    return {settings, state, owned, url, revision: owned ? this.launchCommit : undefined, source: owned ? this.launchSource : undefined, log: this.log, startedAt: this.startedAt, exitCode: this.exitCode, message: this.failure || ''};
+    await this.inspectServices();
+    const owned = this.children.some(({live}) => live);
+    let state = this.exitCode != null || this.failure || this.wanted && !owned ? 'exited' : 'stopped';
+    if (!this.failure && (mode === 'external' || url && await listening(url))) state = owned ? 'running' : 'external';
+    else if (!this.failure && owned) state = mode === 'desktop' ? 'running' : 'starting';
+    else if (!this.failure && this.starting) state = 'starting';
+    return {settings, state, owned, wanted: this.wanted === true, stoppedByUser: this.stoppedByUser === true,
+      url, revision: owned ? this.launchCommit : undefined, source: owned ? this.launchSource : undefined,
+      log: this.log, startedAt: this.startedAt, exitCode: this.exitCode, message: this.failure || ''};
+  }
+
+  async inspectServices() {
+    if (this.failure || !this.running() || Date.now() < (this.serviceCheckAt || 0)) return;
+    this.serviceCheckAt = Date.now() + 5000;
+    for (const item of this.children.filter(item => item.live && item.compose)) {
+      try {
+        const {stdout} = await execute(item.command.file, [...item.compose, 'ps', '--all', '--format', 'json'], {
+          cwd: item.cwd, env: item.env, windowsHide: true, timeout: 5000, maxBuffer: 256 * 1024
+        });
+        const output = stdout.trim();
+        const rows = !output ? [] : output.startsWith('[') ? JSON.parse(output) : output.split(/\r?\n/).map(line => JSON.parse(line));
+        const failed = rows.find(row => row.Health === 'unhealthy' || row.State === 'exited' && Number(row.ExitCode) !== 0);
+        if (failed) {
+          this.failure = 'Preview service ' + (failed.Service || failed.Name || 'setup') +
+            (failed.Health === 'unhealthy' ? ' is unhealthy.' : ' exited with code ' + failed.ExitCode + '.');
+          this.exitCode = Number(failed.ExitCode) || null;
+          await this.saveLog();
+        }
+      } catch { /* An unavailable service probe leaves the HTTP and process checks active. */ }
+    }
   }
 
   setup(payload) {
@@ -203,6 +234,8 @@ export class PreviewProcess {
       this.failure = '';
       this.url = '';
       this.log = '';
+      this.wanted = false;
+      this.stoppedByUser = false;
       await this.saveLog();
       return this.status();
     });
@@ -215,7 +248,10 @@ export class PreviewProcess {
     const child = spawn(command.file, command.args, {
       cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe']
     });
-    const item = {child, live: true};
+    const up = command.args.indexOf('up');
+    const compose = /^docker(?:\.exe)?$/i.test(path.basename(command.file)) && command.args[0] === 'compose' && up > 0
+      ? command.args.slice(0, up) : null;
+    const item = {child, live: true, command, cwd, env, compose};
     const record = chunk => { this.log = (this.log + '[' + name + '] ' + chunk).slice(-64000); };
     child.stdout.on('data', record);
     child.stderr.on('data', record);
@@ -254,6 +290,9 @@ export class PreviewProcess {
       this.log = '';
       this.exitCode = null;
       this.failure = '';
+      this.wanted = true;
+      this.stoppedByUser = false;
+      this.serviceCheckAt = 0;
       const stamp = stableId([settings, commit, await lstat(cwd).then(info => info.ino)]);
       this.starting = true;
       this.setupController = new AbortController();
@@ -261,6 +300,7 @@ export class PreviewProcess {
       this.startedAt = Date.now();
       this.launchCommit = commit || undefined;
       this.launchSource = source;
+      await this.saveLog();
       process.once('exit', this.exitHook);
       try {
         const applied = await boundedText(dir, 'preview-setup.json', 80000).then(JSON.parse, error => {
@@ -312,7 +352,8 @@ export class PreviewProcess {
   async saveLog() {
     if (this.log === null) return;
     const dir = await this.directory();
-    if (dir) await atomicJson(dir, 'preview-output.json', {log: this.log});
+    if (dir) await atomicJson(dir, 'preview-output.json', {log: this.log, wanted: this.wanted === true,
+      stoppedByUser: this.stoppedByUser === true, startedAt: this.startedAt});
   }
 
   async stopChildren() {
@@ -339,8 +380,9 @@ export class PreviewProcess {
     this.setupController?.abort();
   }
 
-  stop() {
+  stop({preserveIntent = false} = {}) {
     this.cancelSetup();
+    if (!preserveIntent) { this.wanted = false; this.stoppedByUser = true; }
     return this.edit(async () => {
       await this.stopChildren();
       await this.saveLog();

@@ -13,6 +13,7 @@
     "public/**/*",
     "desktop/main.cjs",
     "desktop/runtime-diagnostics.cjs",
+    "desktop/preview-health.cjs",
     "desktop/local-origin.cjs",
     "desktop/welcome.html",
     "desktop/welcome.js",

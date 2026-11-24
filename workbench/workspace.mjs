@@ -10,7 +10,7 @@ import {probeProvider} from '../providers.mjs';
 import {modelCatalog, WorkbenchProfile, presetDocuments} from './profile.mjs';
 import {toolDescriptions, workspaceMcp} from './mcp.mjs';
 import discovery from '../desktop/project-discovery.cjs';
-import {observeRuntime} from './coordinator/runtime-probes.mjs';
+import {observeWorkspace} from './coordinator/runtime-probes.mjs';
 import {verifyHostHttpRegression} from './coordinator/health-regression.mjs';
 import {repairRuntime} from './coordinator/health-repair.mjs';
 
@@ -30,7 +30,8 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     defaultProfile:()=>WorkbenchProfile.initial(presetDocuments),
     savedPreview:async()=> (await coordinator.dispatch('design')).preview,
     selectedAgent,
-    isActive:()=>coordinator?.busy?.() || false
+    isActive:()=>coordinator?.busy?.() || false,
+    verifyPreview: diagnostics?.verifyPreview?.bind(diagnostics)
   });
   const readEnvironment = (route,params=new URLSearchParams()) => environment.dispatch('GET',route,{},params);
   coordinator = await createCoordinator({
@@ -38,7 +39,26 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     stageToolCall:call, superviseFailures:true, prepareBuild: environment.prepareBuild, prepareBrowserRecovery: environment.prepareBrowserRecovery,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
       directory: diagnostics.healthDirectory,
-      observe: () => observeRuntime(diagnostics),
+      observe: () => observeWorkspace(diagnostics, environment.observePreview),
+      recoverProject: async (incident, signal, history = []) => {
+        const restored = await environment.recoverPreview({signal});
+        if (restored.passed || restored.cancelled) return restored;
+        const evidence = {process: await environment.dispatch('GET', 'design/app-process'),
+          capabilities: await environment.capabilities({routes: false}), lastRecovery: restored};
+        const diagnosis = await coordinator.diagnosePreview({incident, history, evidence, signal});
+        if (diagnosis.action === 'retry-preview' || diagnosis.action === 'select-preview') {
+          const alternatives = evidence.capabilities.previews.filter(item => item.mode === 'web' &&
+            JSON.stringify(item.argv) !== JSON.stringify(evidence.process.settings?.argv));
+          if (diagnosis.action === 'retry-preview' || alternatives.some(item => item.id === diagnosis.previewId)) {
+            const retry = await environment.recoverPreview({signal, rerunSetup: false,
+              previewId: diagnosis.action === 'select-preview' ? diagnosis.previewId : undefined});
+            if (retry.passed || retry.cancelled) return retry;
+            return {...retry, nextAction: diagnosis.nextAction || 'Open Coordinator to resolve the preview dependency described in the repair history.'};
+          }
+        }
+        return {passed: false, detail: diagnosis.summary || restored.detail,
+          nextAction: diagnosis.nextAction || 'Open Coordinator and ask it to resolve the preview dependency described in the repair history.'};
+      },
       verifyRegression: (probe, signal) => verifyHostHttpRegression({probe, origin, signal: AbortSignal.any([signal, AbortSignal.timeout(5000)])}),
       idle: canRepair,
       repair: async (incident, directory, signal, mayApply, prior) => repairRuntime({
@@ -54,6 +74,8 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     qualityDraft:()=>quality.dispatch('GET','quality',{},new URLSearchParams()),
     validateQuality:definition=>quality.dispatch('POST','quality/validate',{definition},new URLSearchParams())
   });
+
+  if (diagnostics) diagnostics.onOperationFailure = coordinator.reportOperation;
 
   async function status() {
     return {engine:'native',project:repository,installed:true,connected:true,mounted:true,
@@ -126,7 +148,21 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   }
 
   return {status,prepare,dispatch,
-    exportHandoff:runId=>exportHandoff(repository,runId,git,{store:tasks}),
+    exportHandoff: async runId => {
+      try { return await exportHandoff(repository,runId,git,{store:tasks}); }
+      catch (error) {
+        if (error.code !== 'REVIEW_VERIFICATION_REQUIRED') {
+          await coordinator.dispatch('design/review-outcome', {runId, opened:false, error:error.message}, {method:'POST'});
+          throw error;
+        }
+        await coordinator.dispatch('design/recover-review', {runId}, {method:'POST'});
+        try { return await exportHandoff(repository,runId,git,{store:tasks}); }
+        catch (blocked) {
+          await coordinator.dispatch('design/review-outcome', {runId, opened:false, error:blocked.message}, {method:'POST'});
+          throw blocked;
+        }
+      }
+    },
     open:async()=>({src:'/workspace/',project:repository,managed:true}),
     cleanupPreview:()=>environment.dispatch('POST','cleanup/preview',{},new URLSearchParams()),
     mcp:(message,verified)=>workspaceMcp(message,{call,getProfile:()=>tasks.getProfile(),verified}),
