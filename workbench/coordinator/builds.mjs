@@ -704,6 +704,8 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
           const report = await store.status(runId);
           if (result.verdict !== 'pass' || report.verdict !== 'pass') throw Error(report.issues.join(' ') || 'Required checks failed.');
           await audit.ensureCleanTarget(target, group.sha);
+          build.reviewRecovery = {runId, status: 'verified',
+            message: 'The checks passed. Waiting for Branch Review to open.', updatedAt: now()};
         });
         return {...state, reviewRun: runId};
       } finally {

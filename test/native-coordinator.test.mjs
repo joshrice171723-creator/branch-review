@@ -322,7 +322,9 @@ test('retries saved checks on the current preview while the same build waits for
   await rm(failure);
   const retried = await guide('fix it');
   assert.equal(retried.reviewRun, runId);
-  assert.deepEqual(retried.builds.at(-1), build);
+  const {reviewRecovery, ...unchangedBuild} = retried.builds.at(-1);
+  assert.equal(reviewRecovery.status, 'verified');
+  assert.deepEqual(unchangedBuild, build);
   assert.equal(edits, 1);
   assert.equal((await handoff()).commit, build.groups[0].sha);
   const receipt = (await store.getRun(runId)).checks.filter(row => row.check === 'browser').at(-1);
@@ -397,7 +399,8 @@ test('opening review automatically refreshes failed evidence on the same complet
   assert.equal((await workspace.dispatch('GET','design')).builds.at(-1).reviewRecovery.status, 'verified');
   await workspace.dispatch('POST', 'design/review-outcome', {runId, commit: first.commit, opened:false, error:'The preview could not start.'});
   assert.equal((await workspace.dispatch('GET','design')).builds.at(-1).reviewRecovery.status, 'blocked');
-  await workspace.dispatch('POST', 'design/recover-review', {runId});
+  await workspace.dispatch('POST', 'design/retry-verification', {build: completed.id, runId});
+  assert.equal((await workspace.dispatch('GET','design')).builds.at(-1).reviewRecovery.status, 'verified');
   await workspace.dispatch('POST', 'design/review-outcome', {runId, commit: first.commit, opened:true});
   assert.equal((await workspace.dispatch('GET','design')).builds.at(-1).reviewRecovery.status, 'recovered');
 });
