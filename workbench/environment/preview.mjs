@@ -231,12 +231,13 @@ export class PreviewProcess {
     return item;
   }
 
-  start({source, rerunSetup = false, signal} = {}) {
+  start({source, rerunSetup = false, signal, preferredUrl} = {}) {
     return this.edit(async () => {
       const settings = await this.settings();
       if (!settings) throw Error('Save the preview command before starting it.');
       if (settings.mode === 'external' || this.running()) return this.status();
-      const port = settings.mode === 'web' ? await portFor(settings.url) : '';
+      const preferred = settings.url.includes(portRequest) && preferredUrl && !await listening(preferredUrl) ? preferredUrl : '';
+      const port = settings.mode === 'web' ? await portFor(preferred || settings.url) : '';
       this.url = settings.url.replaceAll(portRequest, String(port));
       if (this.url && await listening(this.url)) return this.status();
       const dir = await this.directory(true);

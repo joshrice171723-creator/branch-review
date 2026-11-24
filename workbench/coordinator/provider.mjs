@@ -18,12 +18,15 @@ export function reportedUsage(provider, event) {
   let usage;
   if (provider === 'codex' && event.type === 'turn.completed') usage = event.usage;
   if (provider === 'claude' && event.type === 'result') usage = event.usage;
-  if (provider === 'muse' && event.payload_type === 'run.terminal.completed') usage = event.payload?.usage;
+  if (provider === 'muse' && /^run\.(?:terminal\.|usage(?:\.|$))/.test(event.payload_type ?? event.type ?? '')) {
+    usage = event.payload?.usage ?? event.payload?.token_usage ?? event.payload?.result?.usage ?? event.usage;
+  }
   if (!usage) return null;
-  const input = count(usage.input_tokens);
-  const output = count(usage.output_tokens);
+  const input = count(usage.input_tokens ?? usage.inputTokens);
+  const output = count(usage.output_tokens ?? usage.outputTokens);
   if (input === undefined || output === undefined) return null;
-  const cached = count(provider === 'claude' ? usage.cache_read_input_tokens : usage.cached_input_tokens);
+  const cached = count(provider === 'claude' ? usage.cache_read_input_tokens : usage.cached_input_tokens ??
+    usage.cachedInputTokens ?? usage.input_tokens_details?.cached_tokens);
   const written = count(usage.cache_creation_input_tokens);
   return {input: input + (provider === 'claude' ? (cached ?? 0) + (written ?? 0) : 0), output,
     ...(cached !== undefined && {cached}), ...(written !== undefined && {cacheWrite: written}),
@@ -78,7 +81,7 @@ async function stop(child) {
 
 export async function runProvider(options) {
   const {stage, stageLabel = stage, provider, cwd, model, effort, prompt, schema, signal, report, output,
-    images = [], image = false, providerOptions = {}, onUsage, evidenceOnly = false,
+    images = [], image = false, providerOptions = {}, onUsage, onTool, onModel, evidenceOnly = false,
     timeoutMs = null, timeoutCode = 'PROVIDER_CALL_TIMEOUT'} = options;
   const write = !evidenceOnly && (options.write ?? false);
   const shellTools = !evidenceOnly && options.shellTools !== false;
@@ -105,6 +108,7 @@ export async function runProvider(options) {
   let complete = false;
   let answer = '';
   let limit;
+  const toolStarts = new Map();
   const state = {provider: providerId};
   const closed = new Promise(resolve => {
     child.once('error', error => resolve({error}));
@@ -140,10 +144,23 @@ export async function runProvider(options) {
       if (kind === 'item.completed' && event.item?.type === 'agent_message') answer = event.item.text;
       if (kind === 'thread.started') await report?.('Session started');
       if (kind === 'run.model.configured' && /^[a-z0-9_.-]{1,100}$/i.test(event.payload?.model_id ?? '')) {
+        onModel?.(event.payload.model_id);
         await report?.('Model selected · ' + event.payload.model_id);
       }
-      if (kind === 'item.completed' && ['file_change', 'command_execution', 'mcp_tool_call'].includes(event.item?.type)) {
-        await report?.(event.item.type.replaceAll('_', ' ') + ' completed');
+      const item = event.item;
+      if (item && ['file_change', 'command_execution', 'mcp_tool_call'].includes(item.type)) {
+        if (kind === 'item.started') toolStarts.set(item.id, Date.now());
+        if (kind === 'item.completed') {
+          const start = toolStarts.get(item.id);
+          toolStarts.delete(item.id);
+          const name = /^[\w.-]+$/.test(item.tool ?? '') ? item.tool : item.type.replaceAll('_', ' ');
+          const exitCode = Number.isInteger(item.exit_code) ? item.exit_code : undefined;
+          const failed = Boolean(item.error) || item.status === 'failed' || (exitCode !== undefined && exitCode !== 0);
+          const milliseconds = start === undefined ? undefined : Date.now() - start;
+          onTool?.({name, status: failed ? 'failed' : 'completed', milliseconds, exitCode});
+          await report?.(name + (failed ? ' failed' : ' completed') + (milliseconds === undefined ? '' :
+            ' · ' + (milliseconds / 1000).toFixed(1) + ' s'));
+        }
       }
     }
     const {code, error} = await closed;

@@ -1,4 +1,4 @@
-import {workflowProfile} from './workflow.mjs';
+import {isAstra, workflowProfile} from './workflow.mjs';
 import {verifyBrowserPreview} from '../playwright-check.mjs';
 import {redact} from '../../jobs.mjs';
 import {isDeepStrictEqual} from 'node:util';
@@ -6,7 +6,7 @@ import {assetPattern, id, now, runPattern, sentence} from './files.mjs';
 import {checkMode, hash, jsonHash, selectedProfile, workspaceFile} from './design.mjs';
 import {commitment, currentGroup, loopPath, markerPath, statePath} from './audit.mjs';
 import {buildStageRoles, buildTrace, checkRows, gateEvidence, stageEvidence} from './step-evidence.mjs';
-import {legacyProviderMetrics, readMetrics, visitMetrics} from './build-metrics.mjs';
+import {legacyProviderMetrics, readMetrics, usageSummary, visitMetrics} from './build-metrics.mjs';
 import {WorkbenchProfile} from '../profile.mjs';
 import {annotateProviderFailure} from './provider-limit.mjs';
 import {cosmeticCandidate} from '../automatic-route.mjs';
@@ -91,6 +91,29 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     if (!selectedProfile(profile)?.stages?.build) throw Error('Apply a valid workflow profile before building.');
     return profile;
   }
+  async function resolveExecution(state, automaticRouting) {
+    const saved = await ensureProfile();
+    const executionSetup = automaticRouting && prepareWorkflow
+      ? state.executionSetup?.plan === state.plan ? state.executionSetup : await prepareWorkflow(state.plan)
+      : undefined;
+    const profile = executionSetup ? workflowProfile(saved, executionSetup) : saved;
+    const stages = selectedProfile(profile).stages;
+    const astraStages = WorkbenchProfile.roles.filter(role => stages[role.id]?.enabled && isAstra(stages[role.id].model))
+      .map(role => ({name: role.name, model: stages[role.id].model, effort: stages[role.id].effort,
+        reason: executionSetup?.stages[role.id]?.reason}));
+    return {profile, executionSetup, astra: astraStages.length
+      ? {stages: astraStages, approval: jsonHash([state.revision, state.branch, profile])} : null};
+  }
+  async function execution(payload) {
+    let astra;
+    await design.edit(async state => {
+      if (state.revision !== payload.revision) throw Error('The draft changed. Reload the saved revision.');
+      const resolved = await resolveExecution(state, payload.automaticRouting === true);
+      if (resolved.executionSetup) state.executionSetup = resolved.executionSetup;
+      astra = resolved.astra;
+    });
+    return {astra};
+  }
   async function ensureChecks() {
     const config = store.effectiveConfig ? await store.effectiveConfig() : await store.getProfile();
     if (!config.checks?.some(row => row.required || row.benchmark)) {
@@ -113,11 +136,12 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     const folder = loopPath(task);
     const recorded = await readMetrics(files, folder);
     const last = build.attempts.findLast(row => row.task === task);
-    if (recorded.length || !last?.finished) return recorded;
+    if (!last?.finished) return recorded;
     if (legacyMetrics?.attempt !== last.id) {
       legacyMetrics = {attempt: last.id, calls: legacyProviderMetrics(files, folder, visits).catch(() => [])};
     }
-    return legacyMetrics.calls;
+    const ids = new Set(recorded.map(row => row.id));
+    return [...(await legacyMetrics.calls).filter(row => !ids.has(row.id)), ...recorded];
   }
   async function providerLimitFor(attempt, run) {
     if (attempt.providerLimit) return attempt.providerLimit;
@@ -506,12 +530,8 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
       const ownsTask = restart && previousTask?.id === previous.attempts.at(-1)?.task;
       if (previousTask && ['active', 'unverified'].includes(previousTask.lifecycle.status) &&
           !(ownsTask && previousTask.lifecycle.status === 'active')) throw Error('Finish or pause the current task.');
-      let profile = await ensureProfile();
-      let executionSetup;
-      if (payload.automaticRouting === true && prepareWorkflow) {
-        executionSetup = state.executionSetup?.plan === state.plan ? state.executionSetup : await prepareWorkflow(state.plan);
-        profile = workflowProfile(profile, executionSetup);
-      }
+      const {profile, executionSetup, astra} = await resolveExecution(state, payload.automaticRouting === true);
+      if (astra && payload.astraApproval !== astra.approval) throw Error('Approve Astra for this build before starting.');
       const config = await ensureRunnableChecks();
       const visual = payload.automaticRouting === true && state.mode === 'task' &&
         cosmeticCandidate({plan: state.plan, profile, quality: config.quality_revision, checks: config.checks});
@@ -530,7 +550,8 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
       const groups = groupMembers(state, payload).map(slices => ({slices, pending: [...slices], findings: [], reviews: [], sha: null}));
       const build = {id: id(), revision: state.revision, index: 0, branch: state.branch, plan: state.plan, roadmap: state.roadmap,
         attachments: {...state.attachments}, base, decisions: restart ? previous.decisions : payload.decisions ?? {}, status: 'ready', attempts: [],
-        profile: jsonHash(profile), ...(executionSetup && {executionSetup, executionProfile: profile}), groups, ...baseline, ...(state.mode === 'task' ? {mode: 'task', title: state.title} : {})};
+        profile: jsonHash(profile), ...(astra && {astraApproved: true}), ...(executionSetup && {executionSetup, executionProfile: profile}),
+        groups, ...baseline, ...(state.mode === 'task' ? {mode: 'task', title: state.title} : {})};
       if (payload.automaticRouting === true && state.mode === 'task') build.automaticRouting = true;
       if (restart) {
         if (ownsTask && previousTask.lifecycle.status === 'active') await store.pause(previousTask.id, 'Build restarted.');
@@ -1097,6 +1118,8 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     const statuses = evidence => Object.fromEntries(Object.entries(evidence).map(([key, row]) => [key, row.status]));
     const visits = buildTrace(loop.history);
     const metrics = await metricsFor(attempt.task, build, visits);
+    const otherTasks = [...new Set(build.attempts.map(row => row.task))].filter(task => task !== attempt.task);
+    const otherMetrics = await Promise.all(otherTasks.map(task => readMetrics(files, loopPath(task))));
     const windows = build.attempts.filter(row => row.task === attempt.task);
     const attempts = visits.map(visit => {
       const {id, role, stage, time, entry} = visit;
@@ -1128,6 +1151,7 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
       .map(row => ({time: row.timestamp, text: row.activity, actor: row.actor}));
     return {buildStamp, run: {id: attempt.task, title: task.action, stage: loop.stage ?? '', lifecycle: task.lifecycle.status,
       running: pendingStates.includes(build.status), attempts, events: latest, failure,
+      usage: usageSummary([...otherMetrics.flat(), ...metrics], build.attempts, build.status === 'failed'),
       evidenceRequest: loop.stage === 'evidence' ? {role: buildStageRoles[loop.evidenceRequest.stage], text: loop.evidenceRequest.text} : null,
       stages: selectedProfile(task.task.profile)?.stages ?? {}, checks,
       ...(build.automaticRouting && {routing: task.task.cosmetic_route && !loop.fullAudit ? 'visual' :
@@ -1234,7 +1258,7 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
 
   const busy = () => operations > 0 || [...jobs.values()].some(entry => entry.active);
   void refreshRecovery(true).catch(() => {});
-  return {launch, advance, recoverFromConversation, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, archive, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
+  return {launch, execution, advance, recoverFromConversation, retryVerification, verificationAvailable, restartRequired, cancel, reconnect, decision, archive, readiness, chat, live, history, progress, attention, conversationContext, step, events, summary, resumeBlocker, busy,
     suspendRecovery() {
       if (busy() || closing || recoverySuspended) throw Error('Finish or cancel the active build before leaving this project.');
       recoverySuspended = true;

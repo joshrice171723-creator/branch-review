@@ -1,7 +1,7 @@
 import {realpath} from 'node:fs/promises';
 import path from 'node:path';
 import {WorkbenchProfile} from './profile.mjs';
-import {selectWorkflow} from './coordinator/workflow.mjs';
+import {coordinatorModel, isAstra, selectWorkflow} from './coordinator/workflow.mjs';
 import {createAudit} from './coordinator/audit.mjs';
 import {createHealthReviewer} from './coordinator/health.mjs';
 import {createBuilds} from './coordinator/builds.mjs';
@@ -58,13 +58,15 @@ export async function createCoordinator({
   const conversation = new AbortController();
 
   async function agent({profile, folder, stage, prompt, schema, write, signal, report, images, visit, evidenceOnly,
-    toolScope, autoAgent, coordinatorChat = false}) {
+    toolScope, autoAgent, coordinatorChat = false, astraApproved = false, purpose}) {
     if (coordinatorChat) signal = conversation.signal;
     const current = selectedProfile(profile);
     const key = stageKeys[stage];
     const configuration = current?.stages?.[key];
     if (!configuration?.provider) throw Error('Apply a profile with a provider for this step.');
-    const {provider, model, effort} = autoAgent ?? configuration;
+    const selected = autoAgent ?? configuration;
+    const {provider, model, effort} = isAstra(selected.model) && !astraApproved
+      ? coordinatorModel : selected;
     const stageLabel = WorkbenchProfile.roles.find(role => role.id === key)?.name ?? stage;
     signal?.throwIfAborted();
     const timeoutMs = null;
@@ -88,26 +90,28 @@ export async function createCoordinator({
     await report?.('Workbench', (sourceAccess === 'workspace-write' ? 'Workspace writes enabled' : 'Read-only workspace') +
       ' · shell ' + (shellTools ? 'allowed' : 'disabled'));
     if (stageTools.length) await report?.('Workbench', 'Selected MCP tools · ' + stageTools.join(', '));
-    const call = {id: callId, visit, stage, provider, model, effort, startedAt: Date.now(), timeoutMs, sourceAccess, shellTools, stageTools};
-    if (visit !== undefined) await appendMetric(files, folder, call, true);
-    let usage, stageMcp;
+    const call = {id: callId, visit, stage, provider, model, effort, purpose, startedAt: Date.now(), timeoutMs, sourceAccess, shellTools, stageTools};
+    await appendMetric(files, folder, call, true);
+    let usage, stageMcp, actualModel;
+    const toolActivity = [];
     let outcome = 'failed';
     try {
       if (stageTools.length) stageMcp = await openStageMcp(stageToolCall, profile, stageTools, {coordinatorChat});
       const result = await invoke({provider, model, effort, stage, stageLabel, cwd: root, write, signal, output, images,
         evidenceOnly, shellTools, timeoutMs, stageMcp,
         providerOptions: await options(), schema: schema ? await files.path(path + '/reply.schema.json') : undefined,
-        prompt: request, report: message => report?.(provider, message), onUsage: value => { usage = value; }});
+        prompt: request, report: message => report?.(provider, message), onUsage: value => { usage = value; },
+        onTool: entry => toolActivity.push(entry), onModel: value => { actualModel = value; }});
       outcome = 'complete';
-      await files.write(path + '/result.json', {time: now(), ...result});
+      await files.write(path + '/result.json', {time: now(), ...result, ...(usage && {usage}), actualModel, toolActivity});
       return result;
     } catch (error) {
       if (error.code === 'PROVIDER_CALL_TIMEOUT' || error.code === 'PROVIDER_TASK_TIME_BUDGET') outcome = 'timed_out';
       throw annotateProviderFailure(error, {provider, model, stage});
     } finally {
       stageMcp?.close();
-      if (visit !== undefined) await appendMetric(files, folder, {...call, outcome: signal?.aborted ? 'cancelled' : outcome,
-        finishedAt: Date.now(), ...(usage && {usage})}, true);
+      await appendMetric(files, folder, {...call, outcome: signal?.aborted ? 'cancelled' : outcome,
+        finishedAt: Date.now(), ...(usage && {usage}), actualModel, toolActivity}, true);
     }
   }
 
@@ -115,7 +119,7 @@ export async function createCoordinator({
     const profile = await store.getProfile();
     return selectWorkflow({profile, plan, checkProviders, ask: async prompt => objectReply((await agent({
       profile: {...profile, profiles: {...profile.profiles, [profile.active]: {...selectedProfile(profile), stages: {
-        ...selectedProfile(profile).stages, plan: {...selectedProfile(profile).stages.plan, provider:'Codex', model:'gpt-6.2-sol', effort:'low'}
+        ...selectedProfile(profile).stages, plan: {...selectedProfile(profile).stages.plan, ...coordinatorModel}
       }}}}, folder: '.harness/design/workflow/' + id(), stage:'plan', prompt, evidenceOnly:true
     })).text)});
   };
@@ -146,12 +150,8 @@ export async function createCoordinator({
       'Report when a required input, approved change, or external service is missing, or no safe recovery is available. ' +
       'Every stopped stage needs a diagnosis, including failures handled by a built-in recovery. Consider the earlier attempts and configured loop limit. Never bypass build policy or propose overwriting user changes.\n' +
       JSON.stringify({plan: build.plan, stage: attempt.step, failure, evidence});
-    const planner = selectedProfile(profile).stages.plan;
-    const autoAgent = planner.provider === 'Codex'
-      ? {provider: 'Codex', model: 'gpt-6.2-sol', effort: 'low'}
-      : {provider: planner.provider, model: planner.model, effort: 'low'};
     return objectReply((await agent({profile, folder: '.harness/loops/' + attempt.task,
-      stage: 'plan', prompt, signal: conversation.signal, evidenceOnly: true, autoAgent})).text);
+      stage: 'plan', prompt, signal: conversation.signal, evidenceOnly: true, autoAgent: coordinatorModel, purpose: 'Coordinator recovery'})).text);
   });
   const builds = createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders, supervise, prepareBrowserRecovery});
   const idle = () => !pending && !builds.busy() && runtimeHealth.idle();
@@ -197,6 +197,7 @@ export async function createCoordinator({
           const {bytes} = await design.asset(await design.read(), data.id);
           return {bytes, type: 'image/png'};
         }
+        case 'POST design/execution': return await builds.execution(data);
         case 'POST design/build': return await builds.launch(data);
         case 'POST design/restart': return await builds.launch(data, true);
         case 'POST design/archive': return await builds.archive(data);

@@ -94,8 +94,8 @@ function connectProjectConversation(initial) {
   const models = Object.entries(modelCatalog).filter(([, catalog]) => catalog?.models)
     .flatMap(([provider, catalog]) => [["" + provider + ":", provider + " default"],
       ...catalog.models.map(model => [provider + ":" + model, model])]);
-  const model = select("", [["", "Workflow model"], ...models], () => true);
-  const effort = select("", [["", "Workflow level"], ...WorkbenchProfile.efforts.map(level =>
+  const model = select("", [["", "Sol (default)"], ...models], () => true);
+  const effort = select("", [["", "High (default)"], ...WorkbenchProfile.efforts.map(level =>
     [level, level[0].toUpperCase() + level.slice(1)])], () => true);
   byId("conversation-model-controls").append(field("Model", model), field("Thinking level", effort));
   if (embedded) mockupSource.querySelector('option[value="slice"]').remove();
@@ -449,10 +449,11 @@ function connectProjectConversation(initial) {
   async function submit(action, body, submitted) {
     if (busy) return;
     const usePlanner = action === "chat" || action === "guide" || action === "answer";
-    const target = active().stages.plan;
-    const [provider, modelId] = model.value ? model.value.split(":") : [target.provider, target.model];
+    const [provider, modelId] = model.value ? model.value.split(":") : ["Codex", "gpt-6.2-sol"];
+    const astra = usePlanner && /(?:^|-)astra$/i.test(modelId);
+    if (astra && !confirm("Use Astra for this Coordinator message?")) return;
     const conversationModel = usePlanner && (model.value || effort.value)
-      ? {provider, model: modelId, effort: effort.value || target.effort} : undefined;
+      ? {provider, model: modelId, effort: effort.value || "high", ...(astra && {astraApproved:true})} : undefined;
     outgoing = body.message || undefined;
     renderMessages();
     if (outgoing) messages.scrollTop = messages.scrollHeight;

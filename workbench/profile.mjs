@@ -102,7 +102,7 @@ const WorkbenchProfile = (() => {
       stages: Object.fromEntries(roles.map(({id, kind}) => [id, {
         enabled: !(fast && id === "finalReview"),
         provider: kind === "Gate" ? "Workbench" : kind === "Audit" ? "Muse" : "Codex",
-        model: kind === "Agent" ? "gpt-6.2-astra" : "",
+        model: kind === "Agent" ? "gpt-6.2-sol" : "",
         effort: fast ? "medium" : "high",
         instructions: preset[id][0],
         docs: preset[id][1].filter(docId => docs.some(doc => doc.id === docId)),

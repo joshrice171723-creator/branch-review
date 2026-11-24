@@ -256,6 +256,18 @@ function designPanel(initialState) {
     panel.setAttribute("aria-busy", "true");
     status.textContent = options.wait || "Saving…";
     try {
+      if (action === "build" || action === "restart") {
+        const {astra} = await api("design/execution", {revision:state.revision, automaticRouting:payload.automaticRouting});
+        if (astra) {
+          const stages = astra.stages.map(stage => stage.name + " · " + stage.model + " · " + stage.effort +
+            (stage.reason ? "\n" + stage.reason : "")).join("\n\n");
+          if (!confirm("Use Astra for this build?\n\n" + stages)) {
+            status.textContent = "Build paused before launch. Choose a lighter model or approve Astra.";
+            return;
+          }
+          payload = {...payload, astraApproval:astra.approval};
+        }
+      }
       const next = await api("design/" + action, {revision: state.revision, ...(embedded && {mode: "task"}), ...payload});
       state = {...next, checklist: state.checklist};
       if (["approve", "settings"].includes(action)) { readiness = null; readinessKey = null; }
@@ -1185,7 +1197,7 @@ function designPanel(initialState) {
           feedback.textContent = "Checking readiness and restarting…";
           try {
             if (!stateProfileApplied() || byId("apply-profile").textContent === "Apply changes") await saveWorkflowProfile();
-            await change("restart", {build: build.id, stages: active().stages}, {
+            await change("restart", {build: build.id, stages: active().stages, automaticRouting: build.automaticRouting}, {
               wait: "Restarting the build…", done: "New build started.",
               onError: error => { restartError = {build: build.id, message: error.message}; }
             });

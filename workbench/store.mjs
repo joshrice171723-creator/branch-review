@@ -512,7 +512,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
     return {schema_version:1, engine:{version:'generic-2.10.6.3.1-derived-0.2.0', instructions_path:instructions,
       sha256:included[instructions], included_files:included, included_files_sha256:fingerprint(included)},
       checks:[], benchmark:{name:'', version:'', cases:[], workload:'', metrics:[], assertions:[], checks:[], scripts:[]},
-      execution:{max_repair_rounds:3}, agent:{model:'gpt-6.2-astra', effort:'high'}};
+      execution:{max_repair_rounds:3}, agent:{model:'gpt-6.2-sol', effort:'high'}};
   }
 
   async function config() {

@@ -3,6 +3,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {assetPattern, id, now, sentence} from './files.mjs';
 import {objectReply, validPng} from './provider.mjs';
 import {modelCatalog, WorkbenchProfile} from '../profile.mjs';
+import {coordinatorModel, isAstra} from './workflow.mjs';
 
 export const workspaceFile = '.harness/design/workspace.json';
 export const stageKeys = {
@@ -200,18 +201,20 @@ export function createDesign({files, store, git, agent, image, projectName, proj
   }
 
   async function planner(profile, folder, prompt, images, coordinatorChat = false) {
-    return (await agent({profile, folder, stage: 'plan', prompt, images, coordinatorChat})).text;
+    return (await agent({profile, folder, stage: 'plan', prompt, images, coordinatorChat,
+      astraApproved: profile.coordinatorAstraApproved === true})).text;
   }
 
   async function conversationProfile(settings) {
     const profile = await store.getProfile();
-    if (settings === undefined) return profile;
-    const {provider, model, effort} = settings ?? {};
+    const {provider, model, effort, astraApproved} = settings ?? coordinatorModel;
     if (!['Codex', 'Muse'].includes(provider) ||
         (model !== '' && !modelCatalog[provider].models.includes(model)) ||
         !WorkbenchProfile.efforts.includes(effort)) throw Error('Select a conversation model and thinking level.');
+    if (isAstra(model) && astraApproved !== true) throw Error('Approve Astra before using it in Coordinator.');
     const copy = structuredClone(profile);
     Object.assign(selectedProfile(copy).stages.plan, {provider, model, effort});
+    if (isAstra(model)) copy.coordinatorAstraApproved = true;
     return copy;
   }
 
@@ -334,10 +337,15 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     if (result.smoke && !proposal.plan.includes('## Project check\n- Add `' + result.smoke + '`')) proposal.plan += '\n\n## Project check\n- Add `' + result.smoke +
       '` as a focused Node test. Exercise a real behavior from this plan against the selected project. ' +
       'Use isolated fixtures and assert an observable outcome. The required check runs after implementation.';
-    if (proposal.plan.length > 64000) throw Error('Shorten the plan before sending it.');
     const checks = result.checks.map(check => check.name + ' — ' +
       (check.status === 'ready' ? 'command preflight passed' : check.reason ?? 'created during the build'));
     const check = result.smoke ? 'The build will add and run a focused smoke test.' : checks.join('\n');
+    const coverage = result.acceptanceChecks?.map(row => row.criterion + ' → ' +
+      (row.check || 'No runnable project check found')) ?? [];
+    if (coverage.length && !proposal.plan.includes('## Acceptance checks\n')) {
+      proposal.plan += '\n\n## Acceptance checks\n' + coverage.map(line => '- ' + line).join('\n');
+    }
+    if (proposal.plan.length > 64000) throw Error('Shorten the plan before sending it.');
     const preview = result.preview.revision ? result.previewMessage + ' Launch revision ' +
       result.preview.revision.slice(0, 12) + '.' : result.previewMessage;
     const executionSetup = proposal.plan && prepareWorkflow ? await prepareWorkflow(proposal.plan) : undefined;
@@ -490,6 +498,8 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         'Include a roadmap only for an existing roadmap workflow. Start Build implements the plan in the selected project. ' +
         'For an explicit request to prepare the workspace or its preview and required checks, return proposal {kind:"project-setup",title}. ' +
         'For a plan or project-setup you can include checkId and previewId from projectEvidence in the proposal. ' +
+        'For each acceptance criterion include acceptanceChecks entries {criterion,checkId}. Use a discovered test ID when it verifies the behavior, or null for missing coverage. ' +
+        'Cover both browser and backend behavior when the request spans them. Carry any known setup failures into the verification steps. ' +
         'For a request to change a workspace branch or saved preview address, return a settings proposal with kind=settings, title, branch or preview. ' +
         'For Quality, return kind=quality, title and complete definition. Preserve unrelated fields and use literal argv supported by project evidence. ' +
         'Set apply=true on a settings or Quality proposal only when the user explicitly asks to make the change. Quality changes are saved as a draft. ' +
@@ -513,6 +523,10 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         if (['plan', 'project-setup'].includes(value.kind)) {
           setup = Object.fromEntries(['checkId', 'previewId'].filter(key => typeof value[key] === 'string')
             .map(key => [key, value[key].slice(0, 120)]));
+          if (Array.isArray(value.acceptanceChecks)) setup.acceptanceChecks = value.acceptanceChecks
+            .filter(row => typeof row?.criterion === 'string' && row.criterion.trim())
+            .map(row => ({criterion: row.criterion.trim().replace(/\s+/g, ' ').slice(0, 400),
+              checkId: typeof row.checkId === 'string' ? row.checkId.slice(0, 120) : null}));
         }
         if (value.kind === 'build-recovery' && !payload.preparePlan && recoverBuild) {
           return recover();

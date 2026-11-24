@@ -120,6 +120,11 @@ function providerMetrics(calls) {
       }
       details.append(counts);
     }
+    if (call.tools?.length) details.append(element("details", "", element("summary", "", "Tool activity"),
+      element("ul", "", ...call.tools.map(tool => element("li", "", [
+        tool.name, tool.status, tool.milliseconds != null && durationText(tool.milliseconds),
+        tool.exitCode != null && "Exit code " + tool.exitCode
+      ].filter(Boolean).join(" · "))))));
     list.append(details);
   }
   return list;
@@ -223,6 +228,8 @@ function progressPanel(openBuild, onProgress) {
   const coordinatorInfo=element("details","run-map-coordinator",
     element("summary","",element("strong","","Workbench coordinator"),document.createTextNode(" · "),coordinatorStatus),
     element("p","stage-meta","Starts stages, runs project checks, and saves where the build can resume. Select a stage to see its agent, checks, and recovery activity."));
+  const usageDetails=element("div","design-stack");
+  coordinatorInfo.append(usageDetails);
   const grid=element("div","run-map-grid");
   const detail=element("section","run-map-detail");
   const mode=button("Preview next build",()=>{previewNext=!previewNext; selectedStage=null; draw();});
@@ -246,6 +253,16 @@ function progressPanel(openBuild, onProgress) {
     const evidenceFocus=detail.contains(focused)?focused.dataset.evidenceFocus:null;
     const expanded=detail.querySelector("details[open]")?detail.dataset.stageKey:null;
     const current=previewNext?null:run;
+    const usage=current?.usage;
+    if (usage?.calls) {
+      const values = [["Cached input", usage.cached], ["Uncached input", usage.uncached], ["Output", usage.output],
+        ["Input with unknown cache status", usage.unclassifiedInput]];
+      usageDetails.replaceChildren(element("h3","","Build token usage"), element("dl","step-evidence-fields",
+        ...values.flatMap(([label,value]) => [element("dt","",label),element("dd","",tokenNumber.format(value))])),
+        ...(usage.unknown ? [element("p","stage-meta",usage.unknown + " calls have no reported usage. Totals are partial.")] : []),
+        element("p","stage-meta","Time stopped · ",elapsedLabel({milliseconds:usage.stoppedMs,runningSince:usage.stoppedSince})),
+        ...(usage.recovery.length ? [element("h3","","Coordinator recovery calls"),providerMetrics(usage.recovery)] : []));
+    } else usageDetails.replaceChildren();
     const history=current?.attempts || [];
     const last=history.at(-1);
     const failure=current?.failure;

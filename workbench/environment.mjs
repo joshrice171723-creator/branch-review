@@ -313,11 +313,19 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     return startPreview(app, {taskId: input.taskId, signal: input.signal});
   }
 
-  async function previewForPlan(inventory, previewId, expectedRevision, {rerunSetup = false, taskId, signal, waitForReady = false} = {}) {
+  async function previewForPlan(inventory, previewId, expectedRevision, {
+    rerunSetup = false, taskId, signal, waitForReady = false, requireSetup = false
+  } = {}) {
     try {
       const candidate = inventory.previews.find(row => row.id === previewId && row.url && ['web', 'external'].includes(row.mode));
-      let state = await autoPreview({retry: true, id: candidate?.id, taskId, signal});
       const app = await getPreview();
+      if (requireSetup) {
+        const settings = await app.settings();
+        if (!settings?.setup?.length && !settings?.services?.length) {
+          return {state: 'blocked', message: 'This project has no declared setup commands for the test environment.'};
+        }
+      }
+      let state = await autoPreview({retry: true, id: candidate?.id, taskId, signal});
       async function check() {
         for (let attempt = 0; state.state === 'starting' && (waitForReady || attempt < 10); attempt++) {
           await delay(500, undefined, {signal});
@@ -345,8 +353,9 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         (expectedSource && state.source !== expectedSource));
       const retrying = result.status >= 500 || Boolean(result.connectionError) || outdated || (rerunSetup && state.owned);
       if (retrying) {
+        const preferredUrl = state.owned ? state.url : undefined;
         await app.stop();
-        state = await startPreview(app, {rerunSetup, taskId, signal});
+        state = await startPreview(app, {rerunSetup, taskId, signal, preferredUrl});
         result = await check();
       }
       const report = (stateName, message) => ({state: stateName, message, url: state.url || '', revision: state.revision ?? null, source: state.source ?? null});
@@ -371,12 +380,12 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     }
   }
 
-  function prepareBuild({checkId, previewId} = {}) {
+  function prepareBuild({checkId, previewId, acceptanceChecks = []} = {}) {
     return write(async () => {
       const active = await activeTask();
       if (active?.status === 'active') throw Error('An active build owns the project settings. Use Coordinator to recover that build.');
       const root = await repo();
-      const profile = await store.getProfile();
+      let profile = await store.getProfile();
       const config = await store.effectiveConfig();
       const inventory = await capabilities({routes: false});
       if (!config.checks.some(row => row.required || row.benchmark)) {
@@ -393,8 +402,24 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         const required = discovered ? checkDefinition(discovered) : smokeCheck;
         const checks = profile.checks.filter(row => row.name !== required.name);
         await store.setProfile({...profile, checks: [...checks, required]});
+        profile = await store.getProfile();
       } else if (!await store.profileApplied()) {
         await store.setProfile(profile);
+      }
+      const mapped = (Array.isArray(acceptanceChecks) ? acceptanceChecks : [])
+        .filter(row => typeof row?.criterion === 'string')
+        .map(row => ({criterion: row.criterion, candidate: inventory.checks.find(item => item.id === row.checkId && item.kind === 'test')}));
+      const configured = await store.effectiveConfig();
+      if (!configured.quality_revision) {
+        const additions = [];
+        for (const candidate of new Set(mapped.map(row => row.candidate).filter(Boolean))) {
+          if ([...configured.checks, ...additions].some(check => check.cwd === candidate.cwd &&
+              JSON.stringify(check.argv) === JSON.stringify(candidate.argv))) continue;
+          const check = {...checkDefinition(candidate), phases: ['after']};
+          const [readiness] = await store.configuredCheckReadiness({checks: [check]});
+          if (readiness.status === 'ready') additions.push(check);
+        }
+        if (additions.length) await store.setProfile({...profile, checks: [...profile.checks, ...additions]});
       }
       const effective = await store.effectiveConfig();
       const smoke = !effective.quality_revision && effective.checks.some(row => row.name === smokeCheck.name &&
@@ -406,7 +431,10 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       const rerunSetup = Boolean(settings?.setup?.length && checks.some(row => row.status === 'blocked'));
       const preview = await previewForPlan(inventory, previewId, inventory.head, {rerunSetup});
       if (preview.state === 'ready') checks = await store.configuredCheckReadiness(effective);
-      return {checks, smoke, previewMessage: preview.message, preview};
+      return {checks, smoke, previewMessage: preview.message, preview, acceptanceChecks: mapped.map(({criterion, candidate}) => ({
+        criterion, check: candidate && effective.checks.find(check => check.cwd === candidate.cwd &&
+          JSON.stringify(check.argv) === JSON.stringify(candidate.argv))?.name
+      }))};
     });
   }
 

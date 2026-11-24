@@ -3,7 +3,7 @@ import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
-import {providerSpend, visitMetrics} from '../workbench/coordinator/build-metrics.mjs';
+import {providerSpend, usageSummary, visitMetrics} from '../workbench/coordinator/build-metrics.mjs';
 import {reportedUsage, runProvider} from '../workbench/coordinator/provider.mjs';
 import {WorkbenchProfile} from '../workbench/profile.mjs';
 
@@ -29,7 +29,28 @@ test('accepts only reported provider counts and preserves cache and reasoning su
     input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 50, cache_creation_input_tokens: 5
   }}), {input: 65, output: 0, cached: 50, cacheWrite: 5});
   assert.equal(reportedUsage('muse', {payload_type: 'run.terminal.completed', payload: {text: 'Done'}}), null);
+  assert.deepEqual(reportedUsage('muse', {payload_type: 'run.terminal.completed', payload: {result: {usage: {
+    inputTokens: 100, outputTokens: 20, cachedInputTokens: 30
+  }}}}), {input: 100, output: 20, cached: 30});
   assert.equal(reportedUsage('codex', {type: 'turn.completed', usage: {input_tokens: 100}}), null);
+});
+
+test('counts Coordinator usage and keeps missing cache data out of uncached input', () => {
+  const calls = [
+    {provider:'Codex', purpose:'Coordinator recovery', startedAt:2000, finishedAt:2500, usage:{input:100, cached:70, output:15}},
+    {provider:'Muse', usage:{input:20, output:2}},
+    {provider:'Muse'}
+  ];
+  const totals = usageSummary(calls, [
+    {outcome:'failed', finished:'2026-11-23T16:00:00Z'}, {started:'2026-11-23T16:00:05Z'}
+  ]);
+  assert.equal(totals.uncached, 30);
+  assert.equal(totals.cached, 70);
+  assert.equal(totals.unclassifiedInput, 20);
+  assert.equal(totals.output, 17);
+  assert.equal(totals.unknown, 1);
+  assert.equal(totals.stoppedMs, 5000);
+  assert.equal(totals.recovery[0].time.milliseconds, 500);
 });
 
 test('charges reported usage and preserves cache reads and unknown calls', () => {

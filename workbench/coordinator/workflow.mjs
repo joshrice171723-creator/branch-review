@@ -1,6 +1,9 @@
 import {WorkbenchProfile, modelCatalog} from '../profile.mjs';
 import {toolDescriptions, selectStageTools} from '../mcp.mjs';
 
+export const coordinatorModel = {provider: 'Codex', model: 'gpt-6.2-sol', effort: 'high'};
+export const isAstra = model => /(?:^|-)astra$/i.test(model ?? '');
+
 export function workflowProfile(profile, setup) {
   const copy = structuredClone(profile);
   const stages = copy.profiles[copy.active].stages;
@@ -40,8 +43,11 @@ export async function selectWorkflow({profile, plan, ask, checkProviders}) {
   if (!availableModels.Codex) throw Error('Codex must be available to build this project.');
   const prompt = 'Choose execution settings for every stage of this approved project change. Return JSON with stages keyed by ' +
     roles.map(role => role.id).join(', ') + '. Each stage has provider, model, effort, shellTools, toolHints, and reason. ' +
-    'Select from the supplied models and tools. Build must use Codex. Prefer gpt-6.2-sol with low or medium effort for routine work. ' +
-    'Use Astra and high effort only for demonstrated complexity or risk. Keep audits independent and read-only. ' +
+    'Select from the supplied models and tools. Build must use Codex. Choose each stage independently. ' +
+    'Use Luna at low for narrow, mechanical work or targeted reviews. Use Terra for bounded cross-file work or visual inspection. ' +
+    'Use Sol at low or medium for normal implementation and independent audits. Use Sol at high for complex work. ' +
+    'Use Astra only when you can name a concrete risk or reasoning need Sol at high cannot cover. Astra requires user approval. ' +
+    'Treat running or collecting tests as Workbench work. Keep audits independent and read-only. ' +
     'Select only useful tools. Give one short plain-English reason per stage. Keep existing audit routes, enabled stages, and loop limits.\n' +
     JSON.stringify({plan, models: availableModels, tools, stages: profile.profiles[profile.active].stages});
   const reply = await ask(prompt);

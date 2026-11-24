@@ -334,7 +334,7 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
     };
     const ask = ({stage, prompt, schema, write = false, images = [], evidenceOnly = false}) =>
       agent({profile, folder, stage, prompt, schema, write, images, evidenceOnly, signal,
-        toolScope: build.plan, autoAgent: automaticAgent(stage),
+        toolScope: build.plan, autoAgent: automaticAgent(stage), astraApproved: build.astraApproved === true,
         visit: state.history.length - 1,
         report: (actor, message) => activity(run, stage, actor, message)}).then(reply => reply.text);
     const context = {
@@ -398,9 +398,9 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
         await store.repair(run, reason);
         if (confirmedDefect && build.executionSetup && state.repairBuilderRan && !state.repairAgent &&
             state.lastRepairSource && state.lastRepairSource !== source && action('build', profile).provider === 'Codex' &&
-            action('build', profile).model !== 'gpt-6.2-astra') {
-          state.repairAgent = {provider: 'Codex', model: 'gpt-6.2-astra', effort: 'high'};
-          await activity(run, stage, 'Coordinator', 'A code repair ran, but the audit still found a defect. Using Astra for the next repair.');
+            ['low', 'medium'].includes(action('build', profile).effort)) {
+          state.repairAgent = {provider: 'Codex', model: 'gpt-6.2-sol', effort: 'high'};
+          await activity(run, stage, 'Coordinator', 'A code repair ran, but the audit still found a defect. Using Sol with high effort.');
         }
         state.lastRepairSource = source;
         state.lastRepairChecks = checkResults;
@@ -421,7 +421,7 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
       throw Error(reason);
     }
 
-    async function checkStage(phase) {
+    async function checkStage(phase, setupRetried = false) {
       const stage = phase === 'after' ? 'checks' : 'baseline';
       await activity(run, stage, 'Workbench', 'Started configured ' + phase + ' checks');
       if (prepareBrowserRecovery && await store.needsBrowserPreview(run)) {
@@ -439,6 +439,13 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
           report: message => activity(run, stage, 'Workbench', message)}),
         report: message => activity(run, stage, 'Workbench', message), signal});
       if (blocked) return block(stage, 'Project source changed during checks. ' + blocked, 'source_changed');
+      const failedSetup = (await checkPacket(result.checks.filter(row => row.exit_code !== 0 && !row.source_changed && !row.inputs_changed)))
+        .find(row => failedBeforeTests(row));
+      if (failedSetup && result.verdict !== 'pass') {
+        if (!setupRetried && await restoreTestSetup(stage)) return checkStage(phase, true);
+        return block(stage, 'A test could not start. The project environment still needs setup. Open the test result for details.',
+          'check_environment', failedSetup.check);
+      }
       for (const row of result.checks) {
         await activity(run, stage, 'Workbench', (row.reused ? 'Reused passing receipt for ' :
           row.exit_code === 0 && !row.source_changed ? 'Passed ' : 'Failed ') + row.check);
@@ -475,6 +482,21 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
           inputs_changed: row.inputs_changed, timed_out: row.timed_out, spawn_error: row.spawn_error, evidence_path: row.evidence_path,
           stdout: await output('stdout'), stderr: await output('stderr')};
       }));
+    }
+
+    function failedBeforeTests(row) {
+      if (row.spawn_error) return true;
+      const output = row.stdout + '\n' + row.stderr;
+      return !/\b[1-9]\d*\s+(?:runs|tests|examples|assertions)\b/i.test(output) &&
+        /ActiveRecord::(?:ConnectionNotEstablished|NoDatabaseError|PendingMigrationError)|PG::ConnectionBad|could not (?:connect to|discover)|no migrations (?:found|available)|database .*does not exist|connection refused|ECONNREFUSED|could not find gem|module not found|cannot find module/i.test(output);
+    }
+
+    async function restoreTestSetup(stage) {
+      if (!prepareBrowserRecovery) return false;
+      await activity(run, stage, 'Coordinator', 'A test could not start. Checking the project’s declared setup.');
+      const setup = await measure('@preview', () => prepareBrowserRecovery({taskId: run, signal, rerunSetup: true,
+        waitForReady: true, requireSetup: true}));
+      return setup.state === 'ready';
     }
 
     async function audit(stage) {
@@ -806,18 +828,26 @@ export function createAudit({repository, files, git, store, agent, prepareBrowse
         if (state.pendingEvidenceTest) {
           const request = state.pendingEvidenceTest;
           await activity(run, 'checks', 'Workbench', 'Running the project test needed by the audit.');
-          const receipt = await measure('evidence-' + request.id,
+          let receipt = await measure('evidence-' + request.id,
             () => store.runEvidenceTest(run, request.id, request.source, {signal}));
+          let [result] = await checkPacket([receipt]);
+          if (receipt.exit_code !== 0 && !receipt.source_changed && !receipt.inputs_changed &&
+              failedBeforeTests(result) && await restoreTestSetup('checks')) {
+            receipt = await measure('evidence-' + request.id, () => store.runEvidenceTest(run, request.id, request.source, {signal}));
+            [result] = await checkPacket([receipt]);
+          }
           delete state.pendingEvidenceTest;
           if (receipt.source_changed || receipt.inputs_changed) {
             return block(request.stage, 'The evidence test changed project files or inputs.', 'source_changed');
           }
-          if (receipt.spawn_error) return block(request.stage, receipt.spawn_error, 'check_launch', receipt.check);
+          if (receipt.exit_code !== 0 && failedBeforeTests(result)) return block(request.stage,
+            'The requested test could not start after checking the declared environment setup.', 'check_environment', receipt.check);
+          if (receipt.timed_out) return block(request.stage, 'The requested test did not finish.', 'check_timeout', receipt.check);
           (state.acceptanceEvidence ??= []).push({stage: request.stage, request: request.reason,
-            snapshot: request.source, receipt: receipt.id, note: JSON.stringify((await checkPacket([receipt]))[0]), time: now()});
+            snapshot: request.source, receipt: receipt.id, note: JSON.stringify(result), time: now()});
           await activity(run, 'checks', 'Workbench', receipt.exit_code === 0 ? 'The missing test passed.' : 'The missing test found a failure.');
           if (receipt.exit_code !== 0) {
-            state.finding = request.reason + '\nThe evidence test failed. ' + JSON.stringify((await checkPacket([receipt]))[0]);
+            state.finding = request.reason + '\nThe evidence test failed. ' + JSON.stringify(result);
             state.checked_pass = false;
             await checkpoint('build', state.finding);
           } else await checkpoint(request.stage, 'Recorded the missing test result on the checked source.');

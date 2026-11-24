@@ -4,6 +4,7 @@ import {copyFile, lstat, mkdir, mkdtemp, readdir, rm} from 'node:fs/promises';
 import {gitRead, plainPath, relativePath} from '../environment/paths.mjs';
 import {objectReply, runProvider} from './provider.mjs';
 import {healthRegression} from './health-regression.mjs';
+import {coordinatorModel, isAstra} from './workflow.mjs';
 
 // Windows packages ship unpacked application source. Snapshot those files without copying runtimes or user data.
 async function packagedSource(root, cwd) {
@@ -73,7 +74,8 @@ export async function repairRuntime({repository, incident, directory, profile, p
   const head = () => gitRead(repository, 'rev-parse', 'HEAD');
   let [base, ref] = packaged ? [] : await Promise.all([head(), branch()]);
   const selected = profile.profiles[profile.active];
-  const {provider, model, effort} = selected.stages.build;
+  const settings = selected.stages.build;
+  const {provider, model, effort} = isAstra(settings.model) ? coordinatorModel : settings;
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'branch-review-health-'));
   await mkdir(directory, {recursive: true});
   const patch = path.resolve(directory, 'repair.patch');

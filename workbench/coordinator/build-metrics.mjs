@@ -44,6 +44,35 @@ export function providerSpend(metrics) {
   return {tokens, cached, unknown, milliseconds};
 }
 
+export function usageSummary(metrics, attempts, stopped = false) {
+  const calls = metrics.filter(row => row.provider);
+  let cached = 0, uncached = 0, unclassifiedInput = 0, output = 0, stoppedMs = 0;
+  for (const {usage} of calls) {
+    if (!usage) continue;
+    output += usage.output;
+    if (usage.cached == null) {
+      unclassifiedInput += usage.input;
+    } else {
+      const reads = Math.min(usage.input, usage.cached);
+      cached += reads;
+      uncached += usage.input - reads;
+    }
+  }
+  for (const [index, attempt] of attempts.entries()) {
+    const next = attempts[index + 1];
+    if (attempt.outcome === 'failed' && attempt.finished && next) {
+      stoppedMs += Math.max(0, Date.parse(next.started) - Date.parse(attempt.finished));
+    }
+  }
+  const stoppedSince = stopped ? Date.parse(attempts.at(-1)?.finished) : NaN;
+  return {cached, uncached, unclassifiedInput, output, stoppedMs, stoppedSince: Number.isFinite(stoppedSince) ? stoppedSince : null, calls: calls.length,
+    unknown: calls.filter(call => !call.usage).length,
+    recovery: calls.filter(call => call.purpose === 'Coordinator recovery').map(call => ({
+      provider: call.provider, model: call.actualModel || call.model, effort: call.effort, outcome: call.outcome, usage: call.usage,
+      time: {milliseconds: call.finishedAt ? call.finishedAt - call.startedAt : 0, runningSince: call.finishedAt ? null : call.startedAt}
+    }))};
+}
+
 export async function legacyProviderMetrics(files, folder, visits) {
   const prefix = folder + '/provider-calls';
   const calls = await readdir(await files.path(prefix), {withFileTypes: true}).catch(() => []);
@@ -54,10 +83,12 @@ export async function legacyProviderMetrics(files, folder, visits) {
     const startedAt = Date.parse(request?.time);
     const finishedAt = Date.parse(result?.time);
     if (!request?.provider || !Number.isFinite(startedAt) || !Number.isFinite(finishedAt) || finishedAt < startedAt) return null;
+    const recovery = request.prompt?.startsWith('Supervise this stopped Branch Review build');
     const visit = visits.find(item => item.entry.stage === request.stage && startedAt >= item.time * 1000 &&
       (!item.next || startedAt < item.next.time * 1000));
-    return visit ? {id: row.name, visit: Number(visit.id), provider: request.provider, model: request.model,
-      startedAt, finishedAt, outcome: 'complete'} : null;
+    return visit || recovery ? {id: row.name, visit: visit ? Number(visit.id) : undefined, provider: request.provider,
+      model: request.model, effort: request.effort, actualModel:result.actualModel, usage:result.usage,
+      ...(recovery && {purpose:'Coordinator recovery'}), startedAt, finishedAt, outcome: 'complete'} : null;
   }));
   return rows.filter(Boolean).sort((a, b) => a.startedAt - b.startedAt);
 }
@@ -87,9 +118,9 @@ export function visitMetrics(visit, attempts, metrics, receipts) {
     const step = steps[key] ??= {milliseconds: 0, runningSince: null};
     step.milliseconds += duration.milliseconds;
     if (duration.runningSince !== null) step.runningSince = duration.runningSince;
-    if (metric.provider) providers.push({provider: metric.provider, model: metric.model, effort: metric.effort, outcome: metric.outcome,
+    if (metric.provider) providers.push({provider: metric.provider, model: metric.actualModel || metric.model, effort: metric.effort, outcome: metric.outcome,
       time: duration, usage: metric.usage ?? null, sourceAccess: metric.sourceAccess, shellTools: metric.shellTools,
-      timeoutMs: metric.timeoutMs});
+      timeoutMs: metric.timeoutMs, tools: metric.toolActivity});
   }
   const recordedChecks = new Map();
   for (const receipt of receipts) if (Number.isFinite(receipt.duration_seconds)) {
