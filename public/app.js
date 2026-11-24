@@ -113,7 +113,8 @@ document.body.append($('change-composer'));
 const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,workflow:reviewWorkflow,toggle,reopen:()=>mountFrames(currentState,true),poll});
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
-coordinatorHealth(api);
+// Health controls must remain available while another action is still running.
+coordinatorHealth(requestApi);
 const projectWorkbench=apexPanel({api, getState:()=>currentState, openBranch, flush:reviewWorkflow.flush,
   reportError:error, refreshBranches:()=>loadBranches()});
 const openReviewConversation = async () => {
