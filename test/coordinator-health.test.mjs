@@ -17,6 +17,163 @@ async function temp(t) {
   return dir;
 }
 
+test('pausing aborts an active repair and remains paused after restart', async t => {
+  const directory = await temp(t);
+  let attempts = 0, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const options = {directory, start:false, automatic:false, interval:10, idle:()=>true, observe:()=>[],
+    repair:async (_row, _directory, signal) => {
+      attempts++;
+      if (attempts > 1) return {summary:'Fixed.', checks:'Checked.', files:['server.mjs']};
+      started();
+      await new Promise((resolve, reject) => {
+        if (signal.aborted) return reject(signal.reason);
+        signal.addEventListener('abort', () => reject(signal.reason), {once:true});
+      });
+    }};
+  const monitor = await createHealthReviewer(options);
+  await monitor.report({id:'pause-test', title:'Review', issue:'Failed.', explicit:true});
+  await monitor.tick(false);
+  await ready;
+  await monitor.setPaused(true);
+  assert.equal(monitor.status().paused, true);
+  assert.equal(monitor.status().incidents[0].state, 'paused');
+  assert.equal(monitor.status().incidents[0].history[0].outcome, 'paused');
+  await monitor.tick();
+  assert.equal(attempts, 1);
+  await monitor.close();
+
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  assert.equal(restarted.status().paused, true);
+  await restarted.tick();
+  assert.equal(attempts, 1);
+  await restarted.setPaused(false);
+  await restarted.tick();
+  assert.equal(attempts, 2);
+  assert.equal(restarted.status().incidents[0].state, 'restart-required');
+});
+
+test('pausing waits for a repair already being applied', async t => {
+  const directory = await temp(t);
+  let started, release, signal;
+  const ready = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const monitor = await createHealthReviewer({directory, start:false, idle:()=>true, observe:()=>[],
+    repair:async (_row, _directory, stop, mayApply) => {
+      signal = stop;
+      assert.equal(await mayApply(), true);
+      started();
+      await gate;
+      return {summary:'Applied.', checks:'Checked.', files:['server.mjs']};
+    }});
+  t.after(() => { release(); return monitor.close(); });
+  await monitor.report({title:'Apply', issue:'Failed.'});
+  await monitor.tick(false);
+  await ready;
+  let finished = false;
+  const pause = monitor.setPaused(true).then(() => { finished = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false);
+  assert.equal(signal.aborted, false);
+  release();
+  await pause;
+  assert.equal(monitor.status().paused, true);
+  assert.equal(monitor.status().incidents[0].state, 'restart-required');
+});
+
+test('pausing stops a running regression probe without recording a failure', async t => {
+  const directory = await temp(t);
+  await writeFile(path.join(directory, 'incidents.json'), JSON.stringify([{
+    id:'probe', key:'host/probe', owner:'host', title:'Probe', error:'Failed.',
+    state:'verifying', reported:true, attempts:1, detectedAt:1,
+    regression:{kind:'http',path:'/api/workspace/design',status:200}, history:[{number:1,outcome:'restart-required'}]
+  }]));
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const monitor = await createHealthReviewer({directory, start:false, idle:()=>true, observe:()=>[],
+    verifyRegression:async (_check, signal) => {
+      started();
+      await new Promise((resolve, reject) => {
+        if (signal.aborted) return reject(signal.reason);
+        signal.addEventListener('abort', () => reject(signal.reason), {once:true});
+      });
+    }});
+  t.after(() => monitor.close());
+  const check = monitor.tick(false);
+  await ready;
+  await monitor.setPaused(true);
+  await check;
+  assert.equal(monitor.status().paused, true);
+  assert.equal(monitor.status().incidents[0].state, 'verifying');
+  assert.equal(monitor.status().incidents[0].verification, undefined);
+});
+
+test('automatic repair stays off until the user explicitly requests repair', async t => {
+  const directory = await temp(t);
+  let attempts = 0;
+  const monitor = await createHealthReviewer({directory, start:false, automatic:false, idle:()=>true, observe:()=>[],
+    repair:async () => {
+      attempts++;
+      return {summary:'Fixed.', checks:'Checked.', files:['server.mjs']};
+    }});
+  t.after(() => monitor.close());
+  await monitor.report({id:'operation:fixture', title:'Review', issue:'Failed.'});
+  await monitor.tick();
+  await monitor.tick();
+  assert.equal(attempts, 0);
+  await monitor.report({id:'operation:fixture', title:'Review', issue:'Failed.', explicit:true});
+  await monitor.tick();
+  assert.equal(attempts, 1);
+});
+
+test('an explicit project retry runs when automatic repair is off', async t => {
+  const directory = await temp(t);
+  let attempts = 0;
+  const observation = {owner:'project', scope:'/fixture', id:'preview', title:'Preview', error:'Failed.',
+    nextAction:'Retry the preview.'};
+  const monitor = await createHealthReviewer({directory, start:false, automatic:false, idle:()=>true,
+    observe:()=>[observation], recoverProject:async () => {
+      attempts++;
+      return {passed:true, detail:'Preview loaded.'};
+    }});
+  t.after(() => monitor.close());
+  await monitor.tick();
+  const row = monitor.status().incidents[0];
+  assert.equal(row.state, 'attention');
+  delete observation.nextAction;
+  await monitor.retryProject(row.id);
+  await monitor.tick();
+  assert.equal(attempts, 1);
+  assert.equal(monitor.status().incidents[0].state, 'recovered');
+});
+
+test('stopping a Health repair cancels it and prevents retry after restart', async t => {
+  const directory = await temp(t);
+  let attempts = 0, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const options = {directory, start:false, idle:()=>true,
+    observe:()=>[{owner:'host', id:'report:start', title:'Start', error:'Preview timed out.'}],
+    repair:async (_row, _directory, signal) => {
+      attempts++;
+      started();
+      await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), {once:true}));
+    }};
+  const monitor = await createHealthReviewer(options);
+  const incident = await monitor.report({title:'Start', issue:'Preview timed out.', request:'Open review.'});
+  const ticking = monitor.tick();
+  await ready;
+  await monitor.cancel(incident.id);
+  await ticking;
+  assert.equal(monitor.status().incidents[0].state, 'cancelled');
+  await monitor.close();
+  const restarted = await createHealthReviewer(options);
+  t.after(() => restarted.close());
+  await restarted.tick();
+  assert.equal(restarted.status().incidents[0].state, 'cancelled');
+  assert.equal(attempts, 1);
+});
+
 test('a reported repair runs its saved HTTP regression only after manual restart', async t => {
   const directory = await temp(t);
   let probes = 0;

@@ -10,10 +10,32 @@ export function coordinatorHealth(api) {
   const dialog = document.createElement('dialog');
   dialog.className = 'health-dialog';
   dialog.setAttribute('aria-labelledby', 'health-title');
-  dialog.innerHTML = `<header class="dialog-heading health-heading"><div><span class="health-eyebrow">COORDINATOR</span><h2 id="health-title">App health</h2><p>Monitor checks and repair activity.</p></div><button type="button" class="quiet">Close</button></header><div class="health-content"><div class="health-summary" role="status"></div><div class="health-list"></div></div>`;
+  dialog.innerHTML = `<header class="dialog-heading health-heading"><div><span class="health-eyebrow">COORDINATOR</span><h2 id="health-title">App health</h2><p>Monitor checks and repair activity.</p></div><button type="button" class="quiet">Close</button></header><div class="health-content"><div class="health-summary" role="status"></div><button type="button" class="secondary health-pause">Pause Health</button><p class="health-pause-status" role="status"></p><div class="health-list"></div></div>`;
   document.body.append(dialog);
   const summary = dialog.querySelector('.health-summary');
   const list = dialog.querySelector('.health-list');
+  const pauseButton = dialog.querySelector('.health-pause');
+  const pauseStatus = dialog.querySelector('.health-pause-status');
+  let isPaused = false, pausePending = false, pauseError = '';
+  pauseButton.onclick = async () => {
+    if (pausePending) return;
+    pausePending = true;
+    pauseButton.disabled = true;
+    pauseError = '';
+    pauseStatus.textContent = isPaused ? 'Resuming Health…' : 'Pausing Health. An active repair is stopping…';
+    try {
+      const result = await api('/api/workspace/coordinator/health/pause', {paused: !isPaused});
+      isPaused = result.paused;
+      pauseStatus.textContent = isPaused ? 'Health is paused. Errors remain available.' : 'Health is active. Automatic repairs remain off.';
+      await refresh();
+    } catch (error) {
+      pauseError = error.message;
+      pauseStatus.textContent = pauseError;
+    } finally {
+      pausePending = false;
+      pauseButton.disabled = false;
+    }
+  };
   dialog.querySelector('button').onclick = () => dialog.close();
   const notice = document.createElement('aside');
   notice.className = 'health-notice';
@@ -39,12 +61,12 @@ export function coordinatorHealth(api) {
     try { localStorage.setItem(dismissalKey, JSON.stringify(dismissed)); } catch {}
     notice.hidden = true;
   };
-  function showNotice(incidents, maxAttempts) {
+  function showNotice(incidents, maxAttempts, paused, automatic) {
     const key = row => row.id + (row.state === 'attention' ? ':failed' : row.state === 'restart-required' ? ':restart' : row.state === 'awaiting-observation' ? ':observing' : ':active');
     const row = incidents.find(row => row.state === 'attention' && !dismissed.includes(key(row))) ||
       incidents.find(row => !['recovered', 'cancelled'].includes(row.state) && !dismissed.includes(key(row)));
-    notice.hidden = !row;
-    if (!row) return;
+    notice.hidden = paused || !row;
+    if (paused || !row) return;
     visibleNotice = key(row);
     restart.hidden = row.state !== 'restart-required';
     const heading = row.state === 'attention' ? 'Coordinator needs your attention' :
@@ -55,8 +77,8 @@ export function coordinatorHealth(api) {
       row.state === 'restart-required' ? `${row.note || ''} Select Restart to load the repair.` :
       row.state === 'verifying' ? row.note :
       row.state === 'awaiting-observation' ? row.note :
-      row.state === 'retrying' ? `Attempt ${row.attempts} of ${maxAttempts} failed. App Health will try another approach.` :
-      row.note || 'App Health will investigate and repair it automatically.';
+      row.state === 'retrying' ? `Attempt ${row.attempts} of ${maxAttempts} failed. ${paused ? 'Health is paused.' : automatic || row.explicit ? 'Health will retry.' : 'Automatic repair is off.'}` :
+      row.note || (paused ? 'Health is paused.' : automatic ? 'App Health will investigate and repair it automatically.' : 'Automatic repair is off.');
     const message = row.title;
     const title = notice.querySelector('strong');
     if (title.textContent !== heading) title.textContent = heading;
@@ -66,15 +88,20 @@ export function coordinatorHealth(api) {
   let displayed;
   async function refresh() {
     try {
-      const {incidents, error, disabled, checkedAt, maxAttempts} = await api('/api/workspace/coordinator/health');
+      const {incidents, error, disabled, checkedAt, maxAttempts, paused, automatic} = await api('/api/workspace/coordinator/health');
       button.hidden = Boolean(disabled);
       const count = incidents.filter(row => !['recovered', 'cancelled'].includes(row.state)).length;
-      button.textContent = count ? 'Health (' + count + ')' : 'Health';
-      showNotice(incidents, maxAttempts);
+      isPaused = Boolean(paused);
+      button.textContent = isPaused ? 'Health paused' : count ? 'Health (' + count + ')' : 'Health';
+      pauseButton.textContent = isPaused ? 'Resume Health' : 'Pause Health';
+      if (!pausePending) {
+        pauseStatus.textContent = pauseError || (isPaused ? 'Health is paused. Errors remain available.' : automatic ? 'Health can repair issues automatically.' : 'Automatic repairs are off.');
+      }
+      showNotice(incidents, maxAttempts, isPaused, automatic);
       if (!dialog.open) return;
       summary.replaceChildren();
       const overview = document.createElement('strong');
-      overview.textContent = error ? 'Health check unavailable' : count ? `${count} active ${count === 1 ? 'issue' : 'issues'}` : 'No active issues';
+      overview.textContent = error ? 'Health check unavailable' : isPaused ? 'Health paused' : count ? `${count} active ${count === 1 ? 'issue' : 'issues'}` : 'No active issues';
       const timestamp = document.createElement('span');
       timestamp.textContent = error || (checkedAt ? 'Last check ' + new Date(checkedAt).toLocaleTimeString() : 'Waiting for the first check.');
       summary.append(overview, timestamp);
@@ -121,6 +148,23 @@ export function coordinatorHealth(api) {
           apply.classList.add('health-apply');
           apply.onclick = restart.onclick;
           item.append(apply);
+        }
+        if (['detected', 'repairing', 'retrying', 'paused'].includes(row.state)) {
+          const stop = document.createElement('button');
+          stop.type = 'button';
+          stop.className = 'secondary';
+          stop.textContent = 'Stop repair';
+          stop.onclick = async () => {
+            stop.disabled = true;
+            try {
+              await api('/api/workspace/coordinator/health/cancel', {id: row.id});
+              await refresh();
+            } catch (error) {
+              summary.textContent = error.message;
+              stop.disabled = false;
+            }
+          };
+          item.append(stop);
         }
         if (row.history?.length) {
           const history = document.createElement('details');

@@ -136,7 +136,7 @@ export async function createCoordinator({
       (!row.scope || row.scope === root) && (!row.workspace || row.workspace === root))),
     activeIncidents: runtimeHealth && (() => health.status().incidents.filter(row => !['recovered','cancelled'].includes(row.state) &&
       (!row.scope || row.scope === root) && (!row.workspace || row.workspace === root))),
-    repairApp: runtimeHealth && (issue => health.report(issue)),
+    repairApp: runtimeHealth && (issue => health.report({...issue, explicit:true})),
     buildContext: build => builds.conversationContext(build),
     recoverBuild: build => builds.recoverFromConversation(build),
     retryBuildVerification: (build, runId) => builds.retryVerification({build, runId}),
@@ -168,7 +168,7 @@ export async function createCoordinator({
   const builds = createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders, supervise, prepareBrowserRecovery, refreshPreviewAfterBuild,
     signal: conversation.signal});
   const idle = () => !pending && !builds.busy() && runtimeHealth.idle();
-  const health = runtimeHealth ? await createHealthReviewer({...runtimeHealth, workspace:root, idle}) : null;
+  const health = runtimeHealth ? await createHealthReviewer({...runtimeHealth, workspace:root, idle, automatic:false}) : null;
   async function readDesign() {
     const [state, layout] = await Promise.all([design.read(), design.layout()]);
     const current = state.builds.at(-1);
@@ -187,6 +187,14 @@ export async function createCoordinator({
     try {
       switch (request) {
         case 'GET coordinator/health': return health?.status() || {disabled: true, incidents: []};
+        case 'POST coordinator/health/pause': {
+          if (!health) throw Error('Health is unavailable.');
+          return await health.setPaused(data.paused);
+        }
+        case 'POST coordinator/health/cancel': {
+          if (!health) throw Error('Health is unavailable.');
+          return await health.cancel(data.id);
+        }
         case 'GET design': return await readDesign();
         case 'GET design/layout': return await design.layout();
         case 'GET design/readiness': return await builds.readiness(data);

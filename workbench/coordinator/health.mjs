@@ -14,12 +14,17 @@ const legacyComparisonActions = new Map([
 ]);
 
 export async function createHealthReviewer({directory, workspace, observe, repair, recoverProject, verifyRegression, restartRequired, idle, interval = 3000,
-  clock = Date.now, start = true}) {
+  clock = Date.now, start = true, automatic = true}) {
   await mkdir(directory, {recursive: true});
   const savedRows = await readFile(path.join(directory, 'incidents.json'), 'utf8').then(JSON.parse, error => {
     if (error.code === 'ENOENT') return [];
     throw error;
   });
+  const settings = await readFile(path.join(directory, 'settings.json'), 'utf8').then(JSON.parse, error => {
+    if (error.code === 'ENOENT') return {};
+    throw error;
+  });
+  let userPaused = settings.paused === true;
   const rows = savedRows.filter(row => row.owner === 'host' || row.owner === 'project');
   const active = row => (!workspace || !(row.workspace || row.scope) || (row.workspace || row.scope) === workspace) &&
     (row.owner === 'host' && row.repairOwner !== 'project' || recoverProject && row.owner === 'project');
@@ -48,7 +53,19 @@ export async function createHealthReviewer({directory, workspace, observe, repai
       finishAttempt(row, 'needs-action', row.note);
       continue;
     }
-    if (row.state === 'repairing') failed(row, 'Branch Review closed before the attempt finished.');
+    if (row.state === 'repairing') {
+      if (userPaused) {
+        row.state = 'paused';
+        row.note = 'Health repair paused.';
+        row.explicit = true;
+        finishAttempt(row, 'paused', row.note);
+      } else failed(row, 'Branch Review closed before the attempt finished.');
+    }
+    if (row.state === 'paused' && !userPaused) {
+      row.state = 'retrying';
+      row.actionAt = clock() - interval * 2;
+      row.note = 'Health repair is ready to resume.';
+    }
     if (row.owner === 'project' && row.state === 'attention' && row.attempts < maxAttempts &&
         /(?:ask|request|tell).*coordinator|coordinator.*(?:ask|request|tell)/i.test(row.nextAction || '')) {
       row.state = 'retrying';
@@ -64,7 +81,7 @@ export async function createHealthReviewer({directory, workspace, observe, repai
         'Branch Review restarted. Waiting for a fresh runtime check.';
     }
   }
-  let timer, running, paused = false, action, attemptController, applying = false, lastError = '', saved, checkedAt;
+  let timer, running, paused = false, action, attemptController, probeController, applying = false, lastError = '', saved, checkedAt;
   let writes = Promise.resolve();
   const controller = new AbortController();
   const persist = async () => {
@@ -75,7 +92,7 @@ export async function createHealthReviewer({directory, workspace, observe, repai
     }
     await writes.catch(error => { saved = undefined; throw error; });
   };
-  async function report({id, title, issue, request, regression, nextAction, workspace: reportedWorkspace}) {
+  async function report({id, title, issue, request, regression, nextAction, workspace: reportedWorkspace, explicit = false}) {
     const key = 'host/' + (id ? clean(id) : 'report:' + clean(title).toLowerCase().replace(/[^a-z0-9]+/g, '-'));
     let row = rows.find(item => item.key === key && item.workspace === reportedWorkspace && item.state !== 'recovered');
     if (!row) {
@@ -88,6 +105,14 @@ export async function createHealthReviewer({directory, workspace, observe, repai
       row.evidence = clean(request);
     }
     row.reported = true;
+    if (explicit) {
+      row.explicit = true;
+      if (['cancelled', 'attention'].includes(row.state)) {
+        row.state = 'detected';
+        row.attempts = 0;
+        row.observations = 1;
+      }
+    }
     if (regression) {
       row.regression = healthRegression(regression);
       row.boundRegression = true;
@@ -100,19 +125,21 @@ export async function createHealthReviewer({directory, workspace, observe, repai
     const row = currentRows().find(item => item.id === id && item.owner === 'project' &&
       !['recovered', 'cancelled'].includes(item.state));
     if (!row) throw Error('There is no active project preview issue.');
+    row.explicit = true;
     if (row.state === 'attention') {
       if (row.attempts >= maxAttempts) row.attempts = 0;
       row.state = 'retrying';
       row.actionAt = clock() - interval * 2;
       row.note = 'Coordinator is continuing the preview repair.';
       row.nextAction = '';
-      await persist();
     }
+    await persist();
     return {id: row.id, state: row.state};
   }
   async function run() {
-    if (paused || controller.signal.aborted) return;
+    if (paused || userPaused || controller.signal.aborted) return;
     const observed = (await observe()).filter(active);
+    if (paused || userPaused || controller.signal.aborted) return;
     const verified = [];
     for (const row of currentRows().filter(row => row.reported && ['verifying', 'awaiting-observation'].includes(row.state))) {
       const check = row.regression;
@@ -126,9 +153,10 @@ export async function createHealthReviewer({directory, workspace, observe, repai
         const signal = observed.find(item => item.owner === 'host' && item.id === check.id && fresh(item, row));
         if (signal) result = {passed: !signal.error, detail: signal.error || 'The affected interaction passed its runtime check.'};
       } else if (verifyRegression) {
-        try { result = await verifyRegression(check, controller.signal); }
+        try { result = await verifyRegression(check, AbortSignal.any([controller.signal, probeController.signal])); }
         catch (error) { result = {passed: false, detail: error.message}; }
       }
+      if (paused || userPaused || controller.signal.aborted) return;
       if (!result) {
         row.state = 'awaiting-observation';
         row.note = 'The repair loaded. Retry ' + row.title + ' so Coordinator can check the result.';
@@ -150,7 +178,9 @@ export async function createHealthReviewer({directory, workspace, observe, repai
     for (const signal of signals.filter(item => item.owner === 'host' || recoverProject && item.owner === 'project')) {
       const key = signalKey(signal);
       seen.add(key);
-      let row = currentRows().find(item => item.key === key && !['recovered', 'cancelled'].includes(item.state));
+      const stopped = currentRows().some(item => item.key === key && item.state === 'cancelled');
+      if (stopped && !currentRows().some(item => item.key === key && item.explicit && item.state !== 'cancelled')) continue;
+      let row = currentRows().find(item => item.key === key && item.state !== 'recovered');
       if (signal.cancelled) {
         if (row) {
           const repairing = row.state === 'repairing';
@@ -191,7 +221,7 @@ export async function createHealthReviewer({directory, workspace, observe, repai
       if (['verifying', 'awaiting-observation'].includes(row.state)) failed(row, 'The runtime check still fails after restart. ' + error);
       if (row.state === 'retrying' && clock() - row.actionAt < interval * 2) continue;
       if (row.attempts >= maxAttempts) row.state = 'attention';
-      else if (!next && (row.owner === 'project' || !awaitingRestart)) next = {row, signal};
+      else if ((automatic || row.explicit) && !next && (row.owner === 'project' || !awaitingRestart)) next = {row, signal};
     }
     for (const row of currentRows()) {
       if (!seen.has(row.key) && row.state === 'detected') row.observations = 0;
@@ -202,7 +232,8 @@ export async function createHealthReviewer({directory, workspace, observe, repai
       rows.splice(old, 1);
     }
     await persist();
-    if (!next || action || paused || !await idle()) return;
+    if (!next || action || paused || userPaused || !await idle()) return;
+    if (paused || userPaused || controller.signal.aborted) return;
     action = perform(next.row, next.signal.restart && !next.row.attempts)
       .catch(error => { lastError = clean(error.message); }).finally(() => { action = null; });
   }
@@ -249,14 +280,14 @@ export async function createHealthReviewer({directory, workspace, observe, repai
       }
       if (!restartOnly) {
         const stillFailing = async () => {
-          if (paused || stop.aborted || !await idle()) return false;
+          if (paused || userPaused || stop.aborted || !await idle()) return false;
           const observations = (await observe()).filter(active);
           const latest = observations.find(item => signalKey(item) === row.key);
           const regression = row.boundRegression && row.regression?.kind === 'observation' &&
             observations.find(item => item.owner === 'host' && item.id === row.regression.id && fresh(item, row));
           const resolved = regression && !regression.error || latest && fresh(latest, row) && !latest.error;
           applying = Boolean(!resolved && (row.reported || latest && clean(latest.error) === row.error) &&
-            await idle() && !paused && !stop.aborted);
+            await idle() && !paused && !userPaused && !stop.aborted);
           return applying;
         };
         const prior = rows.filter(item => item.files).flatMap(item =>
@@ -265,6 +296,7 @@ export async function createHealthReviewer({directory, workspace, observe, repai
           }))).sort((a, b) => a.time - b.time);
         const artifact = randomUUID();
         const result = await repair(row, path.join(directory, row.id, artifact), stop, stillFailing, prior);
+        stop.throwIfAborted();
         if (result.needsAction) {
           row.state = 'attention';
           row.note = clean(result.summary);
@@ -291,15 +323,24 @@ export async function createHealthReviewer({directory, workspace, observe, repai
       restartRequired?.(row);
     } catch (error) {
       if (typeof error.checks === 'string') row.history.at(-1).checks = clean(error.checks);
-      if (row.state !== 'cancelled') failed(row, error.message);
+      if (row.state !== 'cancelled' && userPaused && stop.aborted) {
+        row.state = 'paused';
+        row.note = 'Health repair paused.';
+        row.explicit = true;
+        row.actionAt = clock();
+        finishAttempt(row, 'paused', row.note);
+      } else if (row.state !== 'cancelled') failed(row, error.message);
     } finally {
       try { await persist(); }
       finally { applying = false; attemptController = null; }
     }
   }
   async function tick(waitForRepair = true) {
-    if (!running) running = run().then(() => { lastError = ''; }, error => { lastError = clean(error.message); })
-      .finally(() => { running = null; });
+    if (!running) {
+      probeController = new AbortController();
+      running = run().then(() => { lastError = ''; }, error => { lastError = clean(error.message); })
+        .finally(() => { running = null; probeController = null; });
+    }
     await running;
     if (waitForRepair) await action;
   }
@@ -309,10 +350,53 @@ export async function createHealthReviewer({directory, workspace, observe, repai
     timer.unref();
   }
   if (start) schedule();
-  return {tick, report, retryProject, busy: () => applying,
-    status: () => ({error: lastError, checkedAt, maxAttempts, incidents: structuredClone(currentRows())}),
+  let changingPause = false;
+  async function setPaused(value) {
+    if (typeof value !== 'boolean') throw Error('Choose whether to pause Health.');
+    if (changingPause) throw Error('Health is already changing its pause state.');
+    changingPause = true;
+    try {
+      userPaused = value;
+      if (value) {
+        probeController?.abort(Error('Health paused.'));
+        if (!applying) attemptController?.abort(Error('Health repair paused.'));
+      }
+      await atomicJson(directory, 'settings.json', {...settings, paused: value});
+      settings.paused = value;
+      if (value && action) await action;
+      if (value && running) await running;
+      if (!value) {
+        for (const row of currentRows().filter(item => item.state === 'paused')) {
+          row.state = 'retrying';
+          row.actionAt = clock() - interval * 2;
+          row.note = 'Health repair is ready to resume.';
+        }
+        await persist();
+      }
+      return {paused: userPaused};
+    } finally {
+      changingPause = false;
+    }
+  }
+  async function cancel(id) {
+    const row = currentRows().find(item => item.id === id && !['recovered', 'cancelled'].includes(item.state));
+    if (!row) throw Error('That Health issue is no longer active.');
+    if (applying) throw Error('The repair is being applied. Wait for it to finish.');
+    const repairing = row.state === 'repairing';
+    row.state = 'cancelled';
+    row.note = 'Health repair stopped.';
+    row.actionAt = clock();
+    finishAttempt(row, 'cancelled', row.note);
+    if (repairing) attemptController?.abort(Error(row.note));
+    await persist();
+    if (repairing && action) await action;
+    return {id: row.id, state: row.state};
+  }
+  return {tick, report, retryProject, cancel, setPaused, busy: () => applying,
+    status: () => ({error: lastError, checkedAt, maxAttempts, paused: userPaused, automatic, incidents: structuredClone(currentRows())}),
     suspend() {
       paused = true;
+      probeController?.abort(Error('The workspace is closing or switching projects.'));
       attemptController?.abort(Error('The workspace is closing or switching projects.'));
       return () => { paused = false; };
     },
