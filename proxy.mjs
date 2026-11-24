@@ -125,8 +125,11 @@ export function previewProxy(side, slot, getState, appOrigin) {
           response.on('end', () => {
             const observer = `<script>(${reviewToolsBridge.toString()})(${escapeJSON(appOrigin)})</script>`;
             res.writeHead(response.statusCode, result);
-        const scrolling = `<script>(${scrollBridge.toString()})(${escapeJSON(appOrigin)},${reviewShortcut.toString()})</script>`;
-            res.end(Buffer.concat(chunks).toString().replace('</head>', observer + scrolling + '</head>'));
+            const scrolling = `<script>(${scrollBridge.toString()})(${escapeJSON(appOrigin)},${reviewShortcut.toString()})</script>`;
+            const document = Buffer.concat(chunks).toString();
+            const bridge = observer + scrolling;
+            const closing = /<\/head\s*>/i.test(document) ? /<\/head\s*>/i : /<\/body\s*>/i;
+            res.end(closing.test(document) ? document.replace(closing, match => bridge + match) : document + bridge);
           });
           response.on('error', () => res.destroy());
         } else { res.writeHead(response.statusCode, result); response.pipe(res); }

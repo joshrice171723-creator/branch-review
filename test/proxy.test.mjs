@@ -33,6 +33,9 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
     captured = req.headers;
     res.setHeader("Set-Cookie", "_apply_session=returned; Path=/; HttpOnly");
     if (req.url === '/document') { res.setHeader('Content-Type','text/html'); res.end('<html><head></head><body>Clinic</body></html>'); return; }
+    if (req.url === '/minimal') { res.setHeader('Content-Type','text/html'); res.end('<h1>Clinic</h1>'); return; }
+    if (req.url === '/uppercase') { res.setHeader('Content-Type','text/html'); res.end('<HTML><HEAD></HEAD><BODY>Clinic</BODY></HTML>'); return; }
+    if (req.url === '/body-only') { res.setHeader('Content-Type','text/html'); res.end('<BODY>Clinic</BODY>'); return; }
     res.end("preview");
   });
   await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
@@ -93,6 +96,12 @@ test("preview gateway rejects outside origins and forwards only its own cookies"
   assert.equal((await fetch(origin+'/__review/start?scenario=unknown')).status,400);
   const document=await fetch(origin+'/document').then(r=>r.text());
   assert.match(document,/review:context/);assert.match(document,/<body>Clinic<\/body>/);
+  for (const route of ['/minimal','/uppercase','/body-only']) {
+    const html = await fetch(origin + route).then(response => response.text());
+    assert.match(html, /review:context/, route + ' receives the preview bridge');
+    assert.equal(html.match(/function reviewToolsBridge/g).length, 1);
+    assert.match(html, /Clinic/);
+  }
   state.original.web=upstream.address().port;
   slot.web=1;
   assert.equal(await fetch(origin).then(r=>r.text()),'preview','promoted preview uses its own runtime port');
