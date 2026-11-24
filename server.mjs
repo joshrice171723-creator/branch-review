@@ -758,7 +758,9 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
     const host = `127.0.0.1:${port}`;
     const origin = `http://${host}`;
     setReviewPreviewOrigin(origin);
+    let projectView;
     workspace = await createWorkspace({repository:repo,local,git,origin,token,selectedAgent,projectKind:project.kind,
+      beforeBrowserRecovery: async () => { await projectView?.stop(); },
       configureReviewPreviews: async data => {
         if (busy) throw Error('Wait for the running review or job before changing setup.');
         busy = true;
@@ -776,7 +778,7 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
         finally {busy=false;}
       }
     });
-    const projectView = createProjectView({
+    projectView = createProjectView({
       getTarget:async () => {
         if (project.kind === 'meta-clinic') return null;
         const design = await workspace.dispatch('GET','design',{},new URLSearchParams());

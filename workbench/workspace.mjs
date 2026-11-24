@@ -44,7 +44,7 @@ export async function recoverProjectPreview({incident, signal, history = [], env
   return {passed: false, detail: diagnosis.summary || restored.detail, ...(needsUser && {nextAction})};
 }
 
-export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair,configureReviewPreviews,projectKind}) {
+export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair,configureReviewPreviews,projectKind,beforeBrowserRecovery}) {
   const quality = await createQuality({repository});
   const tasks = await createStore(repository,{qualityPin:quality.pin,qualityCheck:quality.taskCheck,
     browserPreview: () => environment.browserPreview(), browserArtifacts: local && path.join(local, 'browser-checks')});
@@ -60,7 +60,11 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   const readEnvironment = (route,params=new URLSearchParams()) => environment.dispatch('GET',route,{},params);
   coordinator = await createCoordinator({
     repository,store:tasks,git,review,push,providerOptions,
-    stageToolCall:call, superviseFailures:true, prepareBuild: environment.prepareBuild, prepareBrowserRecovery: environment.prepareBrowserRecovery,
+    stageToolCall:call, superviseFailures:true, prepareBuild: environment.prepareBuild,
+    prepareBrowserRecovery: async options => {
+      await beforeBrowserRecovery?.();
+      return environment.prepareBrowserRecovery(options);
+    },
     refreshPreviewAfterBuild: environment.refreshAfterBuild,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
       directory: diagnostics.healthDirectory,
