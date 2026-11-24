@@ -8,6 +8,7 @@ import path from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import {createEnvironment} from '../workbench/environment.mjs';
+import {PreviewProcess} from '../workbench/environment/preview.mjs';
 
 const execute = promisify(execFile);
 
@@ -111,6 +112,36 @@ async function until(callback) {
   }
   throw Error('The preview did not reach the expected state.');
 }
+
+test('passes the workspace origin and its port to a managed web preview', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branch-review-parent-'));
+  const parent = 'http://127.0.0.1:43719';
+  const app = new PreviewProcess(root, root, async () => root, parent);
+  t.after(async () => {
+    await app.close();
+    await rm(root, {recursive: true, force: true});
+  });
+  await writeFile(path.join(root, 'server.cjs'), `
+    const http = require('node:http');
+    const {PORT, BRANCH_REVIEW_PREVIEW_PARENT, PREVIEW_PARENT_PORT} = process.env;
+    http.createServer((req, res) => {
+      res.end(JSON.stringify({parent: BRANCH_REVIEW_PREVIEW_PARENT, parentPort: PREVIEW_PARENT_PORT, port: PORT}));
+    }).listen(PORT, '127.0.0.1');
+  `);
+  for (const env of [{}, {PREVIEW_PARENT_PORT: ''}]) {
+    await app.setup({mode: 'web', argv: ['node', 'server.cjs'], url: 'http://127.0.0.1:{port}', env});
+    await app.start();
+    const preview = await until(async () => {
+      const state = await app.status();
+      return state.state === 'running' && state;
+    });
+    const response = await fetch(preview.url);
+    assert.deepEqual(await response.json(), {
+      parent, parentPort: env.PREVIEW_PARENT_PORT ?? '43719', port: new URL(preview.url).port
+    });
+    await app.stop();
+  }
+});
 
 test('starts a web preview, captures desktop output, and leaves external previews running', async t => {
   const {environment} = await fixture(t, {

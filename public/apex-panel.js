@@ -179,6 +179,7 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
   }
   async function inspect(runId) {
     let handoff;
+    message('Coordinator is checking the saved results and opening the review.');
     try {
       const {result} = await api('/api/workbench-export', {runId});
       handoff = result;

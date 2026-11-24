@@ -1,5 +1,6 @@
 import {readFile,access,writeFile,mkdir,realpath} from 'node:fs/promises';
-import {reviewRecipe,expandRecipe,validateRecipe} from './project-settings.mjs';
+import {reviewRecipe,expandRecipe,validateRecipe,previewComposeStop} from './project-settings.mjs';
+import {isolateComposeImages} from './compose-preview.mjs';
 import {spawn,spawnSync} from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
@@ -51,7 +52,7 @@ async function freePort(){
   const port=server.address().port;await new Promise(resolve=>server.close(resolve));return port;
 }
 export class WebPreviews{
-  constructor({run,progress,local,parentOrigin}){Object.assign(this,{run,progress,local,parentOrigin});this.running=new Map();
+  constructor({run,progress,local,parentOrigin,recipeFallback}){Object.assign(this,{run,progress,local,parentOrigin,recipeFallback});this.running=new Map();
     process.once('exit',()=>{for(const entry of this.running.values())for(const child of entry.children || [entry.child])if(child.pid && child.exitCode===null){if(process.platform==='win32')spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});else child.kill();}});
   }
   async stop(side){
@@ -60,6 +61,7 @@ export class WebPreviews{
       if(process.platform==='win32')await this.run('taskkill',['/PID',String(child.pid),'/T','/F']).catch(error=>{if(child.exitCode===null)throw error;});
       else child.kill();
     }
+    for(const stop of entry.composeStops || []) await this.run(stop.file,stop.args,{cwd:entry.cwd,env:entry.env});
     this.running.delete(side);
   }
   async healthy(side,sha){
@@ -81,7 +83,7 @@ export class WebPreviews{
     await this.stop(side);await checkout();
     const project=await detectProject(cwd);
     if(project.kind==='meta-clinic')throw Error('This branch changed project type. Reopen the repository.');
-    const recipe=await reviewRecipe(this.local,cwd);
+    const recipe=await reviewRecipe(this.local,cwd) || await this.recipeFallback?.();
     if(recipe)return this.custom(side,sha,cwd,recipe);
     if(project.kind==='static')return this.custom(side,sha,cwd,validateRecipe({start:['branch-review-static','{root}','{port}']}));
     if(project.needsSetup)throw Error('Set up this project in More tools → Workspace. Enter its setup and start commands.');
@@ -114,16 +116,25 @@ export class WebPreviews{
     await mkdir(data,{recursive:true});
     const cwd=await realpath(path.resolve(root,recipe.directory)),base=await realpath(root);
     if(cwd!==base && !cwd.startsWith(base+path.sep))throw Error('Preview directory resolves outside its checkout.');
-    const config=expandRecipe(recipe,{port,root,side,commit:sha,data});
+    const config=expandRecipe(recipe,{port,root,side,commit:sha,data,namespace:this.local});
     const env={...process.env,...config.env,ELECTRON_RUN_AS_NODE:'1',PORT:String(port),BRANCH_REVIEW_DATA:data,BRANCH_REVIEW_REVISION:sha,BRANCH_REVIEW_SIDE:side,
-      ...(this.parentOrigin && {BRANCH_REVIEW_PREVIEW_PARENT:this.parentOrigin})};
-    const launch=args=>projectCommand(args,env);
+      ...(this.parentOrigin && {BRANCH_REVIEW_PREVIEW_PARENT:this.parentOrigin,
+        ...(!Object.hasOwn(config.env,'PREVIEW_PARENT_PORT') && {PREVIEW_PARENT_PORT:new URL(this.parentOrigin).port || '80'})})};
+    const launch=async args=>{
+      const command=await projectCommand(args,env);
+      return (await isolateComposeImages({command,cwd,env,directory:path.join(this.local,'preview-data',side)})).command;
+    };
     const stamp=JSON.stringify({sha,recipe});
     this[side+'-setup'] ||= await readFile(path.join(this.local,side+'-setup.json'),'utf8').catch(()=>null);
     if(this[side+'-setup']!==stamp){for(const args of config.setup){this.progress(`${side} · ${args[0]} setup`);const command=await launch(args);await this.run(command.file,command.args,{cwd,env});}this[side+'-setup']=stamp;await writeFile(path.join(this.local,side+'-setup.json'),stamp);}
     let output='',failure;const children=[];
     const preview={side,sha,web:port,runtime:side,directory:root,kind:'custom',scenario:{public:true,path:'/'}};
-    this.running.set(side,{children,sha,port,preview,readyPath:config.readyPath});
+    const composeStops=[];
+    for(const command of [config.start,...config.services.map(service=>service.args)]) {
+      const stop=previewComposeStop(command);
+      if(stop) composeStops.push(await projectCommand(stop,env));
+    }
+    this.running.set(side,{children,sha,port,preview,readyPath:config.readyPath,composeStops,cwd,env});
     try{
       for(const service of [...config.services,{name:'preview',args:config.start}]){
         const command=await launch(service.args);

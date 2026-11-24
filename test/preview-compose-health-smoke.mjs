@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import {PreviewProcess} from '../workbench/environment/preview.mjs';
+import {previewComposeName} from '../project-settings.mjs';
 
 const execute = promisify(execFile);
 const root = await mkdtemp(path.join(os.tmpdir(), 'branch-review-compose-health-'));
@@ -32,6 +33,6 @@ try {
   console.log('PASS: a failed Compose setup service reaches preview health while its parent and another service stay alive.');
 } finally {
   await preview.close();
-  await execute('docker', ['compose', '--project-name', name, '--file', file, 'down'], {windowsHide: true});
+  await execute('docker', ['compose', '--project-name', previewComposeName(root, 'workspace'), '--file', file, 'down'], {windowsHide: true});
   await rm(root, {recursive: true, force: true, maxRetries: 3});
 }

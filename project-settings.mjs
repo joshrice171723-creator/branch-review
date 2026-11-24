@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {readFile,writeFile,rename,lstat} from 'node:fs/promises';
 
 export function validateRecipe(value){
@@ -47,7 +48,55 @@ export async function saveRecipe(local,value){
   const recipe=validateRecipe(value),file=path.join(local,'project-settings.json');
   await writeFile(file+'.tmp',JSON.stringify(recipe,null,2));await rename(file+'.tmp',file);return recipe;
 }
+
+export function previewComposeName(namespace, side) {
+  const absolute = path.resolve(namespace);
+  const identity = process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+  const hash = createHash('sha256').update(identity).digest('hex').slice(0, 16);
+  const slot = String(side).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'preview';
+  return 'branchreview-' + hash + '-' + slot;
+}
+
+function isolateCompose(args, name) {
+  const executable = path.basename(args[0]).toLowerCase();
+  const compose = executable === 'docker' || executable === 'docker.exe' ? args.indexOf('compose', 1) :
+    /^docker-compose(?:\.exe)?$/.test(executable) ? 0 : -1;
+  if (compose < 0) return args;
+  const result = [...args];
+  for (let index = compose + 1; index < result.length; index++) {
+    if (result[index] === '--project-name' || result[index] === '-p') {
+      if (index + 1 < result.length) result.splice(index, 2, '--project-name', name);
+      return result;
+    }
+    if (/^(?:--project-name|-p)=/.test(result[index])) {
+      result.splice(index, 1, '--project-name', name);
+      return result;
+    }
+    if (/^-p[^-].*/.test(result[index])) {
+      result.splice(index, 1, '--project-name', name);
+      return result;
+    }
+  }
+  result.splice(compose + 1, 0, '--project-name', name);
+  return result;
+}
+
+export function previewComposeStop(args) {
+  const executable = path.basename(args[0]).toLowerCase();
+  const compose = executable === 'docker' || executable === 'docker.exe' ? args.indexOf('compose', 1) :
+    /^docker-compose(?:\.exe)?$/.test(executable) ? 0 : -1;
+  if (compose < 0) return null;
+  const index = args.indexOf('up', compose + 1);
+  const name = args.indexOf('--project-name', compose + 1);
+  if (index < 0 || name < 0 || !/^branchreview-[a-f0-9]{16}-[a-z0-9_-]+$/.test(args[name + 1] || '')) return null;
+  return [...args.slice(0, index), 'stop'];
+}
+
 export function expandRecipe(value,context){
   const expand=text=>text.replace(/\{(port|root|side|commit|data)\}/g,(_,key)=>String(context[key]));
-  return {...value,start:value.start.map(expand),setup:value.setup.map(args=>args.map(expand)),services:value.services.map(service=>({...service,args:service.args.map(expand)})),env:Object.fromEntries(Object.entries(value.env).map(([key,v])=>[key,expand(v)]))};
+  const name=context.namespace && previewComposeName(context.namespace,context.side);
+  const command=args=>{const expanded=args.map(expand);return name ? isolateCompose(expanded,name) : expanded;};
+  return {...value,start:command(value.start),setup:value.setup.map(command),
+    services:value.services.map(service=>({...service,args:command(service.args)})),
+    env:Object.fromEntries(Object.entries(value.env).map(([key,v])=>[key,expand(v)]))};
 }

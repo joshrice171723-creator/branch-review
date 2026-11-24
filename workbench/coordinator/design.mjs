@@ -100,7 +100,8 @@ function contextOf(state) {
 }
 
 export function createDesign({files, store, git, agent, image, projectName, projectEvidence, qualityDraft, validateQuality,
-  prepareWorkflow, buildContext, retryBuildVerification, recoverBuild, prepareBuild, repairApp, appIncident, activeIncident, saveQualityDraft}) {
+  prepareWorkflow, buildContext, retryBuildVerification, recoverBuild, prepareBuild, repairApp, appIncident, activeIncident,
+  retryProjectIncident, activeIncidents, saveQualityDraft}) {
   async function read() {
     const saved = await files.read(workspaceFile);
     if (saved) {
@@ -200,7 +201,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     }
   }
 
-  async function planner(profile, folder, prompt, images, coordinatorChat = false) {
+  async function planner(profile, folder, prompt, images, coordinatorChat = true) {
     return (await agent({profile, folder, stage: 'plan', prompt, images, coordinatorChat,
       astraApproved: profile.coordinatorAstraApproved === true})).text;
   }
@@ -382,7 +383,9 @@ export function createDesign({files, store, git, agent, image, projectName, proj
       const command = !payload.preparePlan ? text.trim().toLowerCase().replace(/[?.!]+$/, '') : '';
       const previous = state.messages.findLast(message => message.author === 'agent');
       const followUp = /^(?:please )?(?:(?:do it[,.]? )?fix it|unblock it|do it|try again|retry|resume|continue)$/.test(command);
-      const incident = activeIncident?.();
+      const incidents = activeIncidents?.() ?? [];
+      const incident = (/\bpreview\b/i.test(text) && incidents.find(item => item.owner === 'project')) ||
+        incidents[0] || activeIncident?.();
       const binding = previous?.coordinatorAction ??
         (previous?.buildAttention && {kind: 'build-status', target: previous.buildAttention.buildId ?? build?.id});
       async function runRecordedAction(kind, target, run) {
@@ -418,6 +421,15 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         if (build?.state !== 'failed') throw Error('There is no stopped build to resume.');
         return {text: await recoverBuild(build.id)};
       });
+      const repairProject = () => runRecordedAction('project-recovery', incident?.id, async () => {
+        if (!incident || incident.owner !== 'project' || !retryProjectIncident) {
+          throw Error('There is no active project preview issue.');
+        }
+        await retryProjectIncident(incident.id);
+        return {text: 'Coordinator is working on the project preview.', target: incident.id};
+      });
+      const previewRepair = /\bpreview\b/i.test(text) && /\b(?:fix|repair|recover|restore|resolve|unblock)\b/i.test(text);
+      if ((followUp || previewRepair) && incident?.owner === 'project' && !payload.preparePlan) return repairProject();
       if (followUp && binding?.kind === 'app-repair' && binding.target === incident?.id && incident.state !== 'attention') {
         return runRecordedAction('app-repair', binding.target, async () => {
           const issue = await appIncident?.(binding.target);
@@ -505,11 +517,12 @@ export function createDesign({files, store, git, agent, image, projectName, proj
         'For a direct repair request, use the active issue and current screen. Perform available workspace actions, ' +
         'including setup and starting the managed preview. Confirm the original action after recovery. ' +
         'Keep required checks, loop limits, explicit cancellation, Astra approval and manual restart in effect. ' +
-        'Change saved policy settings or clean managed files only when the user asks for that change. ' +
-        'Never infer a completed action. Do not edit project source during chat or planning. ' +
+        'Set up the workspace and its tools as needed to complete the user’s request. ' +
+        'Never infer a completed action. Use the configured build workflow for changes in an active project build. ' +
         'For a clear request to fix or change Branch Review itself, return proposal {kind:"app-repair",title,issue} with the observed failure and desired behavior. ' +
         'Use app-repair only for a user-requested Branch Review source change. Do not use it for project source changes or to change a workspace setting. ' +
         'When the user asks to retry verification or unblock a build waiting for review, return proposal {kind:"retry-verification",title}. ' +
+        'When the user asks to repair the active project preview, return proposal {kind:"project-recovery",title}. ' +
         'When the user asks to fix, unblock, or resume the stopped build, return proposal {kind:"build-recovery",title}. ' +
         'Carry out the recovery on the existing build instead of asking the user to start another build. ' +
         'An unrelated project change returns a plan proposal with kind=plan, title, and complete plan with observable acceptance bullets. ' +
@@ -546,7 +559,9 @@ export function createDesign({files, store, git, agent, image, projectName, proj
             .map(row => ({criterion: row.criterion.trim().replace(/\s+/g, ' ').slice(0, 400),
               checkId: typeof row.checkId === 'string' ? row.checkId.slice(0, 120) : null}));
         }
-        if (value.kind === 'retry-verification' && !payload.preparePlan) {
+        if (value.kind === 'project-recovery' && !payload.preparePlan) {
+          return repairProject();
+        } else if (value.kind === 'retry-verification' && !payload.preparePlan) {
           return verify();
         } else if (value.kind === 'build-recovery' && !payload.preparePlan && recoverBuild) {
           return recover();

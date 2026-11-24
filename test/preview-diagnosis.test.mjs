@@ -16,16 +16,29 @@ test('Coordinator diagnoses an unfamiliar preview failure using its failed appro
   await gitRead(repository, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'Fixture');
   const store = createStore(repository);
   let calls = 0;
+  const toolCalls = [];
   const coordinator = await createCoordinator({repository, store, git: (...args) => gitRead(repository, ...args),
+    stageToolCall: async (name, values) => {
+      toolCalls.push({name, values});
+      return {started: true};
+    },
     invoke: async request => {
       calls++;
       assert.equal(request.model, 'gpt-6.2-sol');
       assert.equal(request.effort, 'high');
-      assert.equal(request.write, false);
+      assert.equal(request.write, true);
+      assert.equal(request.fullAccess, true);
       assert.equal(request.shellTools, true);
       assert.equal(request.timeoutMs, null);
       assert.match(request.prompt, /foxtrot spooler/);
       assert.match(request.prompt, /declared setup failed twice/);
+      for (let index = 0; index < 10; index++) {
+        const result = await fetch(request.stageMcp.url, {method: 'POST', body: JSON.stringify({
+          jsonrpc: '2.0', id: index, method: 'tools/call',
+          params: {name: 'start_project_preview', arguments: {id: 'fixture'}}
+        })}).then(response => response.json());
+        assert.equal(result.result.structuredContent.started, true);
+      }
       request.onUsage({input: 90, output: 20, cached: 10});
       return {text: JSON.stringify({action: 'report', summary: 'The preview needs its local spooler.',
         nextAction: 'Ask Coordinator to configure the local spooler for this project.'})};
@@ -37,4 +50,5 @@ test('Coordinator diagnoses an unfamiliar preview failure using its failed appro
   assert.equal(result.action, 'report');
   assert.match(result.nextAction, /local spooler/);
   assert.equal(calls, 1);
+  assert.equal(toolCalls.length, 10);
 });

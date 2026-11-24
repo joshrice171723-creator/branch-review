@@ -6,7 +6,8 @@ import path from 'node:path';
 import net from 'node:net';
 import {projectCommand} from '../../web-project.mjs';
 import {executable as agentExecutable} from '../../providers.mjs';
-import {expandRecipe, readRecipe, validateRecipe} from '../../project-settings.mjs';
+import {expandRecipe, readRecipe, validateRecipe, previewComposeStop} from '../../project-settings.mjs';
+import {isolateComposeImages} from '../../compose-preview.mjs';
 import {atomicJson, boundedText, gitRead, plainPath, relativePath, stableId} from './paths.mjs';
 import {literalArguments} from './discovery.mjs';
 
@@ -281,11 +282,19 @@ export class PreviewProcess {
       const data = await plainPath(dir, 'scratch/preview-data', {directory: true, create: true});
       const recipe = validateRecipe({start: settings.argv, setup: settings.setup, services: settings.services, env: settings.env});
       const commit = await gitRead(this.root, 'rev-parse', 'HEAD').then(value => value.trim(), () => '');
-      const expanded = expandRecipe(recipe, {port, root: this.root, side: 'workspace', data, commit});
+      const expanded = expandRecipe(recipe, {port, root: this.root, side: 'workspace', data, commit, namespace: this.local});
       const env = {...process.env, ...expanded.env, BRANCH_REVIEW_DATA: data};
-      if (this.parentOrigin) env.BRANCH_REVIEW_PREVIEW_PARENT = this.parentOrigin;
+      if (this.parentOrigin) {
+        env.BRANCH_REVIEW_PREVIEW_PARENT = this.parentOrigin;
+        if (settings.mode === 'web' && !Object.hasOwn(expanded.env, 'PREVIEW_PARENT_PORT')) {
+          env.PREVIEW_PARENT_PORT = new URL(this.parentOrigin).port || '80';
+        }
+      }
       if (port) env.PORT = String(port);
-      const command = argv => resolveProjectCommand(argv, {cwd, env, desktop: settings.mode === 'desktop'});
+      const command = async argv => {
+        const resolved = await resolveProjectCommand(argv, {cwd, env, desktop: settings.mode === 'desktop'});
+        return (await isolateComposeImages({command: resolved, cwd, env, directory: data, signal: stop})).command;
+      };
       this.children = [];
       this.log = '';
       this.exitCode = null;
@@ -361,6 +370,10 @@ export class PreviewProcess {
     const children = this.children;
     this.children = [];
     for (const {child, live} of children) if (live || process.platform !== 'win32') killTree(child);
+    for (const item of children) {
+      const argv = previewComposeStop([item.command.file, ...item.command.args]);
+      if (argv) await execute(argv[0], argv.slice(1), {cwd: item.cwd, env: item.env, windowsHide: true});
+    }
     if (!children.some(({live}) => live)) return;
     let timer;
     try {

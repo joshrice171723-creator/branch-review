@@ -6,6 +6,7 @@ import { scenarioRecipe } from './reviews.mjs';
 import { loadPlan } from './plans.mjs';
 import {createHash} from 'node:crypto';
 import {detectProject,WebPreviews} from './web-project.mjs';
+import {reviewRecipe} from './project-settings.mjs';
 import {frontendOnly} from './fix-review.mjs';
 import {previewHealth} from './health.mjs';
 import {recoverPreviewPorts} from './preview-ports.mjs';
@@ -101,7 +102,7 @@ async function assertOwner() {
     await writeFile(marker, JSON.stringify({ app: "branch-review/v1", repository: repo }));
   }
 }
-const webPreviews=new WebPreviews({run,progress,local});
+const webPreviews=new WebPreviews({run,progress,local,recipeFallback:()=>reviewRecipe(local,repo)});
 export const setReviewPreviewOrigin = origin => { webPreviews.parentOrigin = origin; };
 export const webHealthy=preview=>webPreviews.healthy(preview.runtime || preview.side,preview.sha);
 export async function defaultBranch(){

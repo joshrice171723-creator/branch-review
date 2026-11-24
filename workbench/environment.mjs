@@ -334,33 +334,39 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       }
       let state = await autoPreview({retry: true, id: candidate?.id, taskId, signal});
       async function check() {
-        for (let attempt = 0; state.state === 'starting' && (waitForReady || attempt < 10); attempt++) {
-          if (Date.now() - state.startedAt >= 60000) break;
+        let connectionError, status, progress = '', lastProgress = Date.now(), attempts = 0;
+        while (state.owned && ['starting', 'running'].includes(state.state) && state.settings?.mode === 'web') {
+          const currentProgress = state.state + '\n' + (state.log || '');
+          if (currentProgress !== progress) {
+            progress = currentProgress;
+            lastProgress = Date.now();
+          }
+          if (state.state === 'running') {
+            const deadline = AbortSignal.timeout(5000);
+            try {
+              const response = await fetch(state.url, {redirect: 'manual', signal: signal ? AbortSignal.any([signal, deadline]) : deadline});
+              await response.body?.cancel();
+              status = response.status;
+              connectionError = undefined;
+              if (status < 500 || !waitForReady) return {status};
+            } catch (error) {
+              signal?.throwIfAborted();
+              connectionError = error.cause?.code || error.message;
+            }
+          }
+          if (!waitForReady && ++attempts >= 10) break;
+          if (waitForReady && Date.now() - lastProgress >= 60000) return {status, connectionError, stalled: true};
           await delay(500, undefined, {signal});
           state = await app.status();
         }
-        if (!state.owned || state.state !== 'running' || state.settings?.mode !== 'web') return {};
-        let connectionError;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const deadline = AbortSignal.timeout(5000);
-          try {
-            const response = await fetch(state.url, {redirect: 'manual', signal: signal ? AbortSignal.any([signal, deadline]) : deadline});
-            await response.body?.cancel();
-            return {status: response.status};
-          } catch (error) {
-            signal?.throwIfAborted();
-            connectionError = error.cause?.code || error.message;
-            if (attempt < 2) await delay(500, undefined, {signal});
-          }
-        }
-        return {connectionError};
+        return {status, connectionError};
       }
       let result = await check();
       const expectedSource = (await store.snapshot?.(taskId, {record: false}))?.snapshot_sha256;
       const outdated = state.owned && ((expectedRevision && state.revision !== expectedRevision) ||
         (expectedSource && state.source !== expectedSource));
-      const retrying = result.status >= 500 || Boolean(result.connectionError) || outdated ||
-        state.state === 'exited' && state.wanted || (rerunSetup && state.owned);
+      const retrying = !result.stalled && (result.status >= 500 || Boolean(result.connectionError) || outdated ||
+        state.state === 'exited' && state.wanted || (rerunSetup && state.owned));
       if (retrying) {
         const preferredUrl = state.owned ? state.url : undefined;
         await app.stop({preserveIntent: true});
@@ -369,6 +375,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       }
       const report = (stateName, message) => ({state: stateName, message, url: state.url || '', revision: state.revision ?? null, source: state.source ?? null});
       const {status, connectionError} = result;
+      if (result.stalled) return report('blocked', 'The project preview stopped making progress. Coordinator needs to inspect its current state.');
       if (connectionError) return report('blocked', 'The managed preview could not answer at ' + state.url +
         (retrying ? ' after restart. ' : '. ') + redact(connectionError));
       if (status >= 400) return report('blocked', ['The managed preview responded with HTTP ' + status +
@@ -523,7 +530,47 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       url: state.url, evidence: redact(state.log || '').slice(-6000), occurredAt: Date.now()}];
   }
 
-  return {inspect, prepare, prepareBuild, observePreview,
+  async function verifyCurrentPreview({signal} = {}) {
+    signal?.throwIfAborted();
+    const app = await getPreview();
+    let progress = '', lastProgress = Date.now(), detail = 'The managed preview is not ready.';
+    for (;;) {
+      const state = await app.status();
+      if (automaticPreviewStopped || state.stoppedByUser) {
+        return {cancelled: true, passed: false, detail: 'The managed preview was stopped by the user.'};
+      }
+      if (!state.owned || !['starting', 'running'].includes(state.state) || !state.url) {
+        return {passed: false, detail: state.message || detail};
+      }
+      const currentProgress = state.state + '\n' + (state.log || '');
+      if (currentProgress !== progress) {
+        progress = currentProgress;
+        lastProgress = Date.now();
+      }
+      if (state.state === 'running') {
+        try {
+          const deadline = AbortSignal.timeout(5000);
+          const response = await fetch(state.url, {signal: signal ? AbortSignal.any([signal, deadline]) : deadline});
+          await response.body?.cancel();
+          if (response.ok) {
+            if (!verifyPreview) return {passed: false, detail: 'The preview responds. Browser rendering still needs verification.'};
+            const rendered = await verifyPreview(state.url, {signal, embedOrigin: origin});
+            renderObservation = {key: state.url + '|' + state.startedAt, nextAt: Date.now() + 60000, result: rendered};
+            return rendered;
+          }
+          detail = 'The project preview returned HTTP ' + response.status + '.';
+          if (response.status < 500) return {passed: false, detail};
+        } catch (error) {
+          signal?.throwIfAborted();
+          detail = redact(error.message);
+        }
+      }
+      if (Date.now() - lastProgress >= 60000) return {passed: false, detail: 'The project preview stopped making progress. ' + detail};
+      await delay(500, undefined, {signal});
+    }
+  }
+
+  return {inspect, prepare, prepareBuild, observePreview, verifyCurrentPreview,
     async browserPreview() {
       const process = await (await getPreview()).status();
       return {url: process.url || await savedPreview?.(), revision: process.revision, source: process.source, owned: process.owned};

@@ -52,15 +52,17 @@ function environment() {
   return env;
 }
 
-function codexArgs({cwd, write, model, effort, output, schema, images, image, shellTools, stageMcp}) {
+function codexArgs({cwd, write, fullAccess, model, effort, output, schema, images, image, shellTools, stageMcp}) {
   return [
-    'exec', '--json', '--color', 'never', '--ignore-user-config', '--skip-git-repo-check',
-    '--sandbox', write ? 'workspace-write' : 'read-only', '-C', cwd,
-    '-c', 'approval_policy="never"', '--disable', 'hooks', '--disable', 'memories', '--disable', 'plugins', '--disable', 'apps',
-    '-c', 'memories.use_memories=false', '-c', 'memories.generate_memories=false',
-    ...(process.platform === 'win32' ? ['-c', 'windows.sandbox="elevated"'] : []),
+    'exec', '--json', '--color', 'never', '--skip-git-repo-check',
+    ...(fullAccess ? ['--ignore-rules'] : ['--ignore-user-config']),
+    '--sandbox', fullAccess ? 'danger-full-access' : write ? 'workspace-write' : 'read-only', '-C', cwd,
+    '-c', 'approval_policy="never"',
+    ...(fullAccess ? [] : ['--disable', 'hooks', '--disable', 'memories', '--disable', 'plugins', '--disable', 'apps',
+      '-c', 'memories.use_memories=false', '-c', 'memories.generate_memories=false']),
+    ...(!fullAccess && process.platform === 'win32' ? ['-c', 'windows.sandbox="elevated"'] : []),
     ...(model ? ['--model', model] : []), ...(effort ? ['-c', 'model_reasoning_effort=' + JSON.stringify(effort)] : []),
-    '--ephemeral', '--output-last-message', output, ...(schema ? ['--output-schema', schema] : []),
+    ...(fullAccess ? [] : ['--ephemeral']), '--output-last-message', output, ...(schema ? ['--output-schema', schema] : []),
     ...(image || shellTools === false ? ['--disable', 'shell_tool'] : []),
     ...(stageMcp ? ['-c', 'mcp_servers.workbench_stage.url=' + JSON.stringify(stageMcp.url),
       '-c', 'mcp_servers.workbench_stage.enabled_tools=' + JSON.stringify(stageMcp.names)] : []),
@@ -93,7 +95,7 @@ export async function runProvider(options) {
     (providerOptions.provider === providerId && providerOptions.executable || undefined);
   const file = await executable(providerId, override);
   const args = providerId === 'codex'
-    ? codexArgs({cwd, write, model, effort, output, schema, images, image, shellTools, stageMcp: options.stageMcp})
+    ? codexArgs({cwd, write, fullAccess: options.fullAccess === true, model, effort, output, schema, images, image, shellTools, stageMcp: options.stageMcp})
     : [
         ...agentArgs(providerId, {kind: 'plan', cwd, output, images}),
         ...(model ? ['--model', model] : []), ...(effort ? ['--reasoning-effort', effort] : []),

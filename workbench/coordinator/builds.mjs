@@ -1235,7 +1235,8 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
     const attempt = build?.attempts.at(-1);
     const group = build && currentGroup(build);
     const buildStamp = {revision: state.revision, approved: state.approved, build: build?.id ?? null,
-      status: build?.status ?? null, index: build?.index ?? null, error: build?.error ?? null, attempt: attempt ?? null, recovery: build?.recovery ?? null,
+      status: build?.status ?? null, index: build?.index ?? null, error: build?.error ?? null, attempt: attempt ?? null,
+      recovery: build?.recovery ?? null, reviewRecovery: build?.reviewRecovery ?? null,
       groups: (build?.groups ?? []).map(row => ({sha: row.sha, approval: row.reviews.at(-1) ?? null, pushed: row.pushed ?? null}))};
     if (!attempt || build.status === 'retired') return {run: null, review: null, buildStamp};
     const task = await store.getRun(attempt.task);
@@ -1283,7 +1284,8 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
       ...(build.automaticRouting && {routing: task.task.cosmetic_route && !loop.fullAudit ? 'visual' :
         loop.fullAudit ? 'expanded' : 'full'}),
       question: ['question', 'question_retry'].includes(loop.stage) ? loop.question : ''},
-      review: {waiting: build.status === 'review', approved: !!group.sha && group.reviews.at(-1)?.sha === group.sha,
+      review: {waiting: build.status === 'review', recovery: build.reviewRecovery ?? null,
+        approved: !!group.sha && group.reviews.at(-1)?.sha === group.sha,
         ...(group.sha && !group.pending.length && {target: {build: build.id, group: build.index}}),
         pushed: !!group.sha && group.pushed?.sha === group.sha,
         pushMs: group.pushed?.sha === group.sha ? group.pushed?.milliseconds : undefined,

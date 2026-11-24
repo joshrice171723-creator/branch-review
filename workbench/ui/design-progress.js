@@ -267,6 +267,7 @@ function progressPanel(openBuild, onProgress) {
     const last=history.at(-1);
     const failure=current?.failure;
     const gate=previewNext?null:group;
+    const reviewChecking=gate?.recovery?.status === "verifying";
     const pick=selectedStage || failure?.role || current?.evidenceRequest?.role || (gate?.waiting?"humanReview":last?.role || "plan");
     mode.hidden=!run;
     log.hidden=!run;
@@ -282,6 +283,7 @@ function progressPanel(openBuild, onProgress) {
       quotaWait ? "Waiting for provider quota to reset" : failure ? "Stopped at " +
         ((extra[failure.role] || definitions.find(role=>role.id===failure.role))?.name || "current stage") :
       current?.question || current?.evidenceRequest ? "Waiting for a response" :
+      reviewChecking ? "Checking the saved results before opening Branch Review" :
       gate?.waiting ? "Waiting for Branch Review" : current?.stage==="completed" ? "Build complete" : "Waiting to start";
     grid.replaceChildren();
     for(const [key,steps] of Object.entries(designStageSteps)){
@@ -306,12 +308,14 @@ function progressPanel(openBuild, onProgress) {
         (isRecovery(attempt.reason) ? attempt.reason : ""));
       const budgetStopped=failed && /^PROVIDER_(?:CALL_TIMEOUT|(?:TASK_TIME|USAGE)_BUDGET)$/.test(failure.errorCode || "");
       const status=failed?(recovering?"Recovering":limited?"Quota reached":budgetStopped?"Limit reached":failure.repairLimit?"Repair limit reached":"Stopped"):
-        needsEvidence?"Needs evidence":skipped?"Skipped":waiting?"Waiting for you":live?(recovery?"Recovering":"Running"):isReturn?"Returned":
+        needsEvidence?"Needs evidence":skipped?"Skipped":waiting?(reviewChecking?"Checking results":"Waiting for you"):live?(recovery?"Recovering":"Running"):isReturn?"Returned":
         completed?"Complete":key==="repair"&&!attempt?"If requested":key==="push"?"On request":attempt?"Paused":"Upcoming";
       const reviewTarget=key==="humanReview" && gate?.target;
       const card=button("",async()=>{
         if (!reviewTarget) { selectedStage=key; draw(); return; }
         card.disabled=true;
+        coordinatorStatus.textContent="Checking the saved results before opening Branch Review";
+        card.querySelector(".stage-meta").textContent="Opening review";
         try {
           const review=await api("design/group?" + new URLSearchParams(reviewTarget));
           if(!review.runId || ["branch-changed","design-stale","different-preview"].includes(review.status)) {

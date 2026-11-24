@@ -21,6 +21,29 @@ const environmentRoutes = new Set([
   'capabilities','preview','preview/setup','preview/start','preview/stop'
 ]);
 
+export async function recoverProjectPreview({incident, signal, history = [], environment, coordinator}) {
+  const previous = history.filter(attempt => attempt.outcome !== 'running');
+  const restored = previous.length ? await environment.verifyCurrentPreview({signal}) :
+    await environment.recoverPreview({signal});
+  if (restored.passed || restored.cancelled) return restored;
+  const evidence = {process: await environment.dispatch('GET', 'design/app-process'),
+    capabilities: await environment.capabilities({routes: false}), lastRecovery: restored};
+  const diagnosis = await coordinator.diagnosePreview({incident, history, evidence, signal});
+  if (diagnosis.action === 'handled') return environment.verifyCurrentPreview({signal});
+  if (diagnosis.action === 'retry-preview' || diagnosis.action === 'select-preview') {
+    const alternatives = evidence.capabilities.previews.filter(item => item.mode === 'web' &&
+      JSON.stringify(item.argv) !== JSON.stringify(evidence.process.settings?.argv));
+    if (diagnosis.action === 'retry-preview' || alternatives.some(item => item.id === diagnosis.previewId)) {
+      return environment.recoverPreview({signal, rerunSetup: false,
+        previewId: diagnosis.action === 'select-preview' ? diagnosis.previewId : undefined});
+    }
+  }
+  const nextAction = typeof diagnosis.nextAction === 'string' && diagnosis.nextAction.trim();
+  const asksCoordinator = /(?:ask|request|tell).*coordinator|coordinator.*(?:ask|request|tell)/i.test(nextAction || '');
+  const needsUser = diagnosis.requiresUser === true && nextAction && !asksCoordinator;
+  return {passed: false, detail: diagnosis.summary || restored.detail, ...(needsUser && {nextAction})};
+}
+
 export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair}) {
   const quality = await createQuality({repository});
   const tasks = await createStore(repository,{qualityPin:quality.pin,qualityCheck:quality.taskCheck,
@@ -40,25 +63,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
       directory: diagnostics.healthDirectory,
       observe: () => observeWorkspace(diagnostics, environment.observePreview),
-      recoverProject: async (incident, signal, history = []) => {
-        const restored = await environment.recoverPreview({signal});
-        if (restored.passed || restored.cancelled) return restored;
-        const evidence = {process: await environment.dispatch('GET', 'design/app-process'),
-          capabilities: await environment.capabilities({routes: false}), lastRecovery: restored};
-        const diagnosis = await coordinator.diagnosePreview({incident, history, evidence, signal});
-        if (diagnosis.action === 'retry-preview' || diagnosis.action === 'select-preview') {
-          const alternatives = evidence.capabilities.previews.filter(item => item.mode === 'web' &&
-            JSON.stringify(item.argv) !== JSON.stringify(evidence.process.settings?.argv));
-          if (diagnosis.action === 'retry-preview' || alternatives.some(item => item.id === diagnosis.previewId)) {
-            const retry = await environment.recoverPreview({signal, rerunSetup: false,
-              previewId: diagnosis.action === 'select-preview' ? diagnosis.previewId : undefined});
-            if (retry.passed || retry.cancelled) return retry;
-            return {...retry, nextAction: diagnosis.nextAction || 'Open Coordinator to resolve the preview dependency described in the repair history.'};
-          }
-        }
-        return {passed: false, detail: diagnosis.summary || restored.detail,
-          nextAction: diagnosis.nextAction || 'Open Coordinator and ask it to resolve the preview dependency described in the repair history.'};
-      },
+      recoverProject: (incident, signal, history) => recoverProjectPreview({incident, signal, history, environment, coordinator}),
       verifyRegression: (probe, signal) => verifyHostHttpRegression({probe, origin, signal: AbortSignal.any([signal, AbortSignal.timeout(5000)])}),
       idle: canRepair,
       repair: async (incident, directory, signal, mayApply, prior) => repairRuntime({
@@ -102,7 +107,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   const qualityCall = (method,operation,data={},params=new URLSearchParams()) =>
     quality.dispatch(method,operation,data,params);
 
-  async function call(name,values) {
+  async function call(name,values,{signal} = {}) {
     if (name.startsWith('quality_')) return quality.mcp(name,values);
     switch(name) {
       case 'find_local_projects': return {projects:await discovery.findLocalProjects(values.query)};
@@ -112,7 +117,8 @@ export async function createWorkspace({repository,local,git,origin,token,review,
       case 'inspect_environment': return readEnvironment('environment');
       case 'prepare_environment': return prepare();
       case 'start_project_preview': return environment.dispatch('POST','design/app-process/auto',
-        {...values,retry:true},new URLSearchParams());
+        {...values,retry:true,signal},new URLSearchParams());
+      case 'restart_project_preview': return environment.recoverPreview({signal, previewId:values.id});
       case 'preview_cleanup': return environment.dispatch('POST','cleanup/preview',{},new URLSearchParams());
       case 'clean_environment': return environment.dispatch('POST','cleanup',values,new URLSearchParams());
       case 'set_repair_budget':

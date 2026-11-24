@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {validateRecipe,saveRecipe,expandRecipe} from '../project-settings.mjs';
+import {validateRecipe,saveRecipe,expandRecipe,previewComposeName,previewComposeStop} from '../project-settings.mjs';
 import {WebPreviews} from '../web-project.mjs';
 import {browserChecks,beginBrowserQa,browserQaResult} from '../browser-qa.mjs';
 import {validateDelivery,saveDelivery,deployProject} from '../project-delivery.mjs';
@@ -17,6 +17,23 @@ test('custom project recipes validate commands and isolate substitutions',()=>{
   const expanded=expandRecipe(recipe,{port:1234,side:'original',commit:'abc',data:'/private',root:'/repo'});
   assert.equal(expanded.start.at(-1),'1234');assert.equal(expanded.env.DB,'test_original_abc');assert.equal(expanded.env.DATA,'/private');
   for(const value of [{start:'python server.py'},{start:['node'],directory:'../outside'},{start:['node'],readyPath:'//outside'},{start:['node'],env:{BAD:1}}])assert.throws(()=>validateRecipe(value));
+});
+
+test('Compose project names stay isolated across workspace and review slots', () => {
+  for (const flag of [['--project-name', 'shared'], ['--project-name=shared'], ['-p', 'shared'], ['-pshared'], []]) {
+    const recipe = validateRecipe({start:['docker', 'compose', ...flag, 'up', '--build']});
+    const context = {port:1234,root:'/repo',side:'original',commit:'abc',data:'/private',namespace:'/fixture'};
+    const original = expandRecipe(recipe, context);
+    const changed = expandRecipe(recipe, {...context,side:'changed'});
+    const workspace = expandRecipe(recipe, {...context,side:'workspace'});
+    const name = previewComposeName('/fixture','original');
+    assert.equal(original.start[original.start.indexOf('--project-name')+1],name);
+    assert.notEqual(name,changed.start[changed.start.indexOf('--project-name')+1]);
+    assert.notEqual(name,workspace.start[workspace.start.indexOf('--project-name')+1]);
+    assert.deepEqual(previewComposeStop(original.start), ['docker','compose','--project-name',name,'stop']);
+    assert.deepEqual(expandRecipe(recipe, context).start,original.start);
+  }
+  assert.equal(previewComposeStop(['docker','compose','--project-name','unowned','up']), null);
 });
 
 test('custom stack runs two real isolated previews, reuses live version and stops owned processes',async()=>{

@@ -23,6 +23,7 @@ const tools = [
   tool('inspect_environment','Inspect the selected project environment.'),
   tool('prepare_environment','Prepare the selected project environment.',{},[],true),
   tool('start_project_preview','Start the detected web preview for the selected project.',{id:string},[],true),
+  tool('restart_project_preview','Restart and verify the managed project preview.',{id:string},[],true),
   tool('preview_cleanup','List managed files that can be cleaned.',{},[],true),
   tool('clean_environment','Clean the managed files in the confirmed preview.',{previewId:string},['previewId'],true),
   tool('set_repair_budget','Set the repair limit in a workflow profile.',{profile,value:{type:'integer',minimum:1,maximum:20}},['profile','value'],true),
@@ -72,8 +73,8 @@ export async function workspaceMcp(message,{call,getProfile,verified,stageTools,
   }
   if (method==='ping') return reply({});
   const allowed = (await getProfile())?.permittedTools || [];
-  const visible = tools.filter(item=>(!item.name.startsWith('app_') || allowed.includes(item.name)) &&
-    (!item.local || verified && !stageTools) &&
+  const visible = tools.filter(item=>(coordinatorChat || !item.name.startsWith('app_') || allowed.includes(item.name)) &&
+    (!item.local || verified && (!stageTools || coordinatorChat)) &&
     (!stageTools || stageTools.includes(item.name) && (!item.write || coordinatorChat && verified)));
   if (method==='tools/list') return reply({tools:visible.map(({write,local,...definition})=>definition)});
   if (method!=='tools/call') return error(-32601,'Unknown method.');
@@ -110,12 +111,12 @@ export function selectStageTools(stage, selections, {scope = '', evidenceOnly = 
   return [...selected];
 }
 
-export function coordinatorTools(diagnosisOnly) {
-  return tools.filter(item => !item.local && (!item.write || !diagnosisOnly))
-    .map(item => item.name);
+export function coordinatorTools(diagnosisOnly, fullCoordinator = false) {
+  return tools.filter(item => fullCoordinator || !item.local && (!item.write || !diagnosisOnly)).map(item => item.name);
 }
 
-export async function openStageMcp(call, profile, names, {coordinatorChat = false, coordinatorDiagnosis = false} = {}) {
+export async function openStageMcp(call, profile, names, {coordinatorChat = false, coordinatorDiagnosis = false,
+  previewRecovery = false, signal} = {}) {
   if (!names.length) return null;
   const token = '/' + randomUUID();
   let calls = 0;
@@ -129,16 +130,18 @@ export async function openStageMcp(call, profile, names, {coordinatorChat = fals
       let size = 0;
       for await (const chunk of req) {
         size += chunk.length;
-        if (size > 65536) throw Error('The tool request is too large.');
+        if (!coordinatorChat && !coordinatorDiagnosis && size > 65536) throw Error('The tool request is too large.');
         chunks.push(chunk);
       }
       const request = JSON.parse(Buffer.concat(chunks));
-      const result = await workspaceMcp(request, {getProfile: () => profile, stageTools: names, verified: coordinatorChat, coordinatorChat,
+      const result = await workspaceMcp(request, {getProfile: () => profile, stageTools: names,
+        verified: coordinatorChat || coordinatorDiagnosis, coordinatorChat: coordinatorChat || coordinatorDiagnosis,
         call: async (name, values) => {
           if (!coordinatorChat && !coordinatorDiagnosis && ++calls > 8) throw Error('This stage reached its tool call limit.');
-          const data = await call(name, values);
+          const data = await call(name, values, {signal});
           const serialized = JSON.stringify(data) ?? '';
-          return serialized.length > 20000 ? {preview: serialized.slice(0, 20000), truncated: true} : data;
+          return !coordinatorChat && !coordinatorDiagnosis && serialized.length > 20000
+            ? {preview: serialized.slice(0, 20000), truncated: true} : data;
         }});
       if (result === null) res.writeHead(202).end();
       else res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(result));

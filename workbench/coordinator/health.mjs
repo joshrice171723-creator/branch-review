@@ -7,6 +7,7 @@ import {healthRegression} from './health-regression.mjs';
 
 const maxAttempts = 5;
 const clean = value => redact(String(value || '')).slice(0, 2000);
+const evidenceText = value => redact(String(value || ''));
 
 export async function createHealthReviewer({directory, workspace, observe, repair, recoverProject, verifyRegression, restartRequired, idle, interval = 3000,
   clock = Date.now, start = true}) {
@@ -29,13 +30,20 @@ export async function createHealthReviewer({directory, workspace, observe, repai
     row.state = row.attempts >= maxAttempts ? 'attention' : 'retrying';
     row.actionAt = clock();
     row.note = clean(detail);
-    row.nextAction = row.state === 'attention' ? 'Open Coordinator and describe what you need to do next. The repair history is saved here.' : '';
+    row.nextAction = row.state === 'attention' ? 'Open Health to see what Coordinator tried.' : '';
     finishAttempt(row, 'failed', detail);
   }
   for (const row of currentRows()) {
     try { row.regression = healthRegression(row.regression); }
     catch { row.regression = null; }
     if (row.state === 'repairing') failed(row, 'Branch Review closed before the attempt finished.');
+    if (row.owner === 'project' && row.state === 'attention' && row.attempts < maxAttempts &&
+        /(?:ask|request|tell).*coordinator|coordinator.*(?:ask|request|tell)/i.test(row.nextAction || '')) {
+      row.state = 'retrying';
+      row.actionAt = clock() - interval * 2;
+      row.note = 'Coordinator is continuing the preview repair.';
+      row.nextAction = '';
+    }
     if (row.state === 'restart-required') {
       row.state = row.reported ? 'awaiting-observation' : 'verifying';
       row.observations = 0;
@@ -74,6 +82,20 @@ export async function createHealthReviewer({directory, workspace, observe, repai
     }
     if (nextAction) Object.assign(row, {state: 'attention', note: clean(issue), nextAction: clean(nextAction)});
     await persist();
+    return {id: row.id, state: row.state};
+  }
+  async function retryProject(id) {
+    const row = currentRows().find(item => item.id === id && item.owner === 'project' &&
+      !['recovered', 'cancelled'].includes(item.state));
+    if (!row) throw Error('There is no active project preview issue.');
+    if (row.state === 'attention') {
+      if (row.attempts >= maxAttempts) row.attempts = 0;
+      row.state = 'retrying';
+      row.actionAt = clock() - interval * 2;
+      row.note = 'Coordinator is continuing the preview repair.';
+      row.nextAction = '';
+      await persist();
+    }
     return {id: row.id, state: row.state};
   }
   async function run() {
@@ -150,8 +172,8 @@ export async function createHealthReviewer({directory, workspace, observe, repai
       row.error = error;
       if (signal.nextAction) Object.assign(row, {state: 'attention', note: error, nextAction: clean(signal.nextAction)});
       row.signal = {owner: signal.owner, id: signal.id, scope: signal.scope, title: clean(signal.title), error,
-        evidence: clean(signal.evidence), occurredAt: signal.occurredAt};
-      row.evidence = clean(signal.evidence);
+        evidence: evidenceText(signal.evidence), occurredAt: signal.occurredAt};
+      row.evidence = evidenceText(signal.evidence);
       row.observations = Math.min(10, row.observations + 1);
       if (row.observations < 2 || row.state === 'attention') continue;
       if (['verifying', 'awaiting-observation'].includes(row.state)) failed(row, 'The runtime check still fails after restart. ' + error);
@@ -275,7 +297,7 @@ export async function createHealthReviewer({directory, workspace, observe, repai
     timer.unref();
   }
   if (start) schedule();
-  return {tick, report, busy: () => applying,
+  return {tick, report, retryProject, busy: () => applying,
     status: () => ({error: lastError, checkedAt, maxAttempts, incidents: structuredClone(currentRows())}),
     suspend() {
       paused = true;
