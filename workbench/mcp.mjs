@@ -8,7 +8,8 @@ const revision = {type:['string','null']};
 const args = {definition:object, base_revision:revision, expected_revision:revision};
 
 function tool(name,description,properties={},required=[],write=false) {
-  return {name,description,inputSchema:{type:'object',properties,required,additionalProperties:false},write};
+  return {name,description,inputSchema:{type:'object',properties,required,additionalProperties:false},
+    ...(!write && name !== 'quality_routes' ? {annotations:{readOnlyHint:true}} : {}),write};
 }
 
 const localProjectSearch = {
@@ -18,12 +19,30 @@ const localProjectSearch = {
 const tools = [
   localProjectSearch,
   tool('get_profile','Read the applied workflow profile.'),
-  tool('inspect_run','Read the stage transitions, checks, and original receipts for a run.',{runId:{...string,pattern:'^\\d{8}T\\d{12}-[a-f0-9]{8}$'}}),
+  tool('inspect_run','Read a recorded run. For a large result, request a section and use nextOffset to read subsequent pages. Each entry points to its original record.',{
+    runId:{...string,pattern:'^\\d{8}T\\d{12}-[a-f0-9]{8}$'},
+    section:{type:'string',enum:['checks','events','transitions']},
+    offset:{type:'integer',minimum:0,maximum:1000000},
+    limit:{type:'integer',minimum:1,maximum:5}
+  }),
   tool('project_capabilities','Discover checks, preview commands, files, and Git references.'),
   tool('inspect_environment','Inspect the selected project environment.'),
   tool('prepare_environment','Prepare the selected project environment.',{},[],true),
-  tool('start_project_preview','Start the detected web preview for the selected project.',{id:string},[],true),
+  tool('configure_project_preview','Configure the selected project preview using a command supported by project evidence. For a local web preview use a URL such as http://127.0.0.1:{port}. Stop a running preview before changing it.',{
+    id:string, mode:{type:'string',enum:['web','desktop','external']}, cwd:string, url:string, readyPath:string,
+    argv:{type:'array',items:string,minItems:1,maxItems:100},
+    setup:{type:'array',items:{type:'array',items:string,minItems:1,maxItems:100},minItems:0,maxItems:10},
+    services:{type:'array',items:object,minItems:0,maxItems:6}, env:object
+  },[],true),
+  tool('start_project_preview','Start the saved or detected web preview for the selected project.',{id:string},[],true),
   tool('restart_project_preview','Restart and verify the managed project preview.',{id:string},[],true),
+  tool('stop_project_preview','Stop the managed project preview.',{},[],true),
+  tool('configure_review_previews','Configure isolated Original and Changed review previews. Commands and environment values can use {port}, {root}, {side}, {commit}, and {data}. Use separate ports and isolated data. Use this only when project evidence supports the commands and isolation.',{
+    directory:string, start:{type:'array',items:string,minItems:1,maxItems:100}, readyPath:string,
+    setup:{type:'array',items:{type:'array',items:string,minItems:1,maxItems:100},minItems:0,maxItems:10},
+    services:{type:'array',items:object,minItems:0,maxItems:6}, env:object,
+    checks:{type:'array',items:object,minItems:0,maxItems:30}
+  },['start'],true),
   tool('preview_cleanup','List managed files that can be cleaned.',{},[],true),
   tool('clean_environment','Clean the managed files in the confirmed preview.',{previewId:string},['previewId'],true),
   tool('set_repair_budget','Set the repair limit in a workflow profile.',{profile,value:{type:'integer',minimum:1,maximum:20}},['profile','value'],true),
@@ -138,7 +157,7 @@ export async function openStageMcp(call, profile, names, {coordinatorChat = fals
         verified: coordinatorChat || coordinatorDiagnosis, coordinatorChat: coordinatorChat || coordinatorDiagnosis,
         call: async (name, values) => {
           if (!coordinatorChat && !coordinatorDiagnosis && ++calls > 8) throw Error('This stage reached its tool call limit.');
-          const data = await call(name, values, {signal});
+          const data = await call(name, values, {signal, coordinator: coordinatorChat || coordinatorDiagnosis});
           const serialized = JSON.stringify(data) ?? '';
           return !coordinatorChat && !coordinatorDiagnosis && serialized.length > 20000
             ? {preview: serialized.slice(0, 20000), truncated: true} : data;

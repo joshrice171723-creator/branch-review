@@ -114,7 +114,8 @@ const evidence=evidenceTools({api,getState:()=>currentState,getSide:()=>active,w
 projectSetup({api,getState:()=>currentState,poll});
 const activityView=activity({api,getState:()=>currentState,navigate:reviewWorkflow.navigate,flush:reviewWorkflow.flush,poll});
 coordinatorHealth(api);
-const projectWorkbench=apexPanel({api, getState:()=>currentState, openBranch, flush:reviewWorkflow.flush, reportError:error});
+const projectWorkbench=apexPanel({api, getState:()=>currentState, openBranch, flush:reviewWorkflow.flush,
+  reportError:error, refreshBranches:()=>loadBranches()});
 const openReviewConversation = async () => {
   if(!await reviewWorkflow.flush()) return;
   const record=currentState.record;
@@ -345,6 +346,8 @@ async function select(branch,reveal=false) {
         : `${result.base.slice(0, 7)} → ${result.branch.sha.slice(0, 7)} · ${result.files.length} changed files`;
   } catch (e) {
     if(generation!==selectionGeneration)return;
+    $('comparison-note').textContent=e.message;
+    $('plan-count').textContent='Review plan';
     $('plan-summary').textContent=e.message;
     error(e.message);
   }
@@ -576,7 +579,7 @@ async function poll() {
     if(Date.now()-lastHealth>15000)void checkHealth();
     const reviewChanged=ready && !!currentState.record && currentState.record.id!==previousReview;
     if(reviewChanged){delete $('branch-brief').dataset.selecting;selected=null;$('baseline').value=currentState.record.comparisonMode?.baseline || 'parent';$('commit-choice').hidden=$('baseline').value!=='commit';commitBranchSha='';}
-    if (reviewChanged || previousBusy && !currentState.busy) await loadBranches();
+    if (!$('review-workspace').hidden && (reviewChanged || previousBusy && !currentState.busy)) await loadBranches();
     if(previousBusy!==currentState.busy || previousReview!==currentState.record?.id)branchList();
     batch.render(currentState);
     acknowledgeReview();
@@ -682,6 +685,5 @@ const linkedRun = new URLSearchParams(location.search).get('workbenchRun');
 void projectWorkbench.open().then(async () => {
   if (linkedRun) await projectWorkbench.inspect(linkedRun);
 }).catch(issue=>error(issue.message));
-await loadBranches().catch((e) => error(e.message));
 setInterval(poll, 2000);
-setInterval(()=>{if(!currentState.busy)void loadBranches(false).catch(e=>error(e.message));},30000);
+setInterval(()=>{if(!currentState.busy && !$('review-workspace').hidden)void loadBranches(false).catch(e=>error(e.message));},30000);

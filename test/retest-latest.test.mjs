@@ -26,7 +26,14 @@ test('existing retests replace unrelated instructions and reset old checks witho
  const old={id:'heading',title:'Heading spacing',path:'/demo',focus:'Heading',steps:['Inspect letter spacing']};
  const r={retestVersion:1,fixComparison:{before:'old',after:'new'},manifest:{scenarios:[old]},checks:{'heading:0':true},items:{heading:{notes:'Keep my note'}},issues:[{id:'shadow',scenario:'heading',status:'needs-retest',location:'/meta-clinic',expected:'Blue button has no brown shadow',actual:'Brown shadow'}]};
  prepareRetest(r);
- assert.equal(old.path,'/meta-clinic');assert.match(old.steps[0],/Brown shadow/);assert.equal(old.focus,'');
+ assert.equal(old.path,'/meta-clinic');assert.equal(old.description,'Brown shadow');assert.equal(old.expected,'Blue button has no brown shadow');assert.equal(old.steps[0],'The page matches the expected result above.');assert.equal(old.focus,'');
  assert.deepEqual(r.checks,{});assert.equal(r.items.heading.notes,'Keep my note');assert.equal(r.retestOriginals.heading.title,'Heading spacing');
+ r.checks['heading:0']=true;prepareRetest(r);assert.equal(r.checks['heading:0'],true);
+});
+
+test('corrects the old generated expectation without carrying its checks forward',()=>{
+ const r={retestVersion:4,fixComparison:{before:'old',after:'new'},manifest:{scenarios:[{id:'heading',expected:'Brown shadow',steps:['Check result']}]},retestOriginals:{heading:{id:'heading'}},checks:{'heading:0':true,'other:0':true},items:{heading:{notes:'Keep my note'}},issues:[{scenario:'heading',status:'needs-retest',expected:'No brown shadow',actual:'Brown shadow'}]};
+ prepareRetest(r);
+ assert.equal(r.manifest.scenarios[0].expected,'No brown shadow');assert.deepEqual(r.checks,{'other:0':true});assert.equal(r.items.heading.notes,'Keep my note');
  r.checks['heading:0']=true;prepareRetest(r);assert.equal(r.checks['heading:0'],true);
 });

@@ -1,4 +1,4 @@
-export function apexPanel({api, getState, openBranch, flush, reportError,
+export function apexPanel({api, getState, openBranch, flush, reportError, refreshBranches,
     loadPanel = source => import(source)}) {
   const byId = id => document.getElementById(id);
   const workspace = byId('change-workspace');
@@ -50,6 +50,7 @@ export function apexPanel({api, getState, openBranch, flush, reportError,
     if (qa) {
       recovery.hidden = true;
       recoveryToggle.setAttribute('aria-expanded', 'false');
+      if (refreshBranches) void refreshBranches().catch(error => reportError(error.message));
     }
     workspace.dataset.qa = String(qa);
     panel?.setVisible?.(!qa);

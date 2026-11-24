@@ -417,8 +417,8 @@ test('recovers planning evidence and reuses a current audit receipt without user
       await writeFile(path.join(repository, 'public', 'greeting.css'), '.greeting { color: green; }');
       reply = 'Updated greeting style.';
     } else if (stage === 'plan_review' && !prompt.includes('Use the registered greeting check')) {
-      assert.ok(JSON.parse(await readFile(schema, 'utf8')).properties.verdict.enum.includes('needs_evidence'));
-      reply = {verdict: 'needs_evidence', reason: 'Name a check for the desktop layout.'};
+      assert.ok(JSON.parse(await readFile(schema, 'utf8')).properties.verdict.enum.includes('needs_method'));
+      reply = {verdict: 'needs_method', reason: 'Name a check for the desktop layout.'};
     } else if (stage === 'build_review' && calls.filter(item => item === 'build_review').length === 1) {
       assert.equal(evidenceOnly, true);
       assert.match(prompt, /greeting\.css/);
@@ -463,6 +463,10 @@ test('pins a checked commit, returns a failed check, and repairs the same approv
   const invoke = async ({stage, provider, write, prompt, onUsage}) => {
     stages.push(stage);
     if (provider === 'Codex') onUsage(usage);
+    if (edits === 2 && ['plan', 'plan_review', 'build'].includes(stage)) {
+      assert.match(prompt, /selected reviewedFindings are user-requested corrections/i);
+      assert.match(prompt, /Repaired greeting/);
+    }
     if (stage === 'plan') return {text: JSON.stringify({plan: ['Edit the greeting.', 'Inspect the configured check.']})};
     if (stage === 'build') {
       assert.equal(write, true);

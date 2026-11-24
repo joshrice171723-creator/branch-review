@@ -74,7 +74,7 @@ function groupMembers(state, payload) {
   return frequency === 'plan' ? [selected.flat()] : selected;
 }
 
-export function createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders = async () => [], supervise, prepareBrowserRecovery, signal}) {
+export function createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders = async () => [], supervise, prepareBrowserRecovery, refreshPreviewAfterBuild, signal}) {
   const jobs = new Map();
   const recovering = new Set();
   const recoveryControllers = new Map();
@@ -465,6 +465,12 @@ export function createBuilds({prepareWorkflow, files, git, store, design, audit,
         try {
           await files.write(loopPath(task.id) + '/jobs/' + job.id + '.json', job);
           if (!build.standalone) await recordResult(build.id, job, loop);
+          if (!build.standalone && job.state === 'completed' && loop?.stage === 'completed' && loop.design_sha && refreshPreviewAfterBuild) {
+            try { await refreshPreviewAfterBuild({revision: loop.design_sha, signal}); }
+            catch (error) {
+              await audit.activity(task.id, 'finish', 'Workbench', 'Could not refresh the project preview: ' + redact(error.message)).catch(() => {});
+            }
+          }
         } catch (error) {
           job.state = 'failed';
           job.error = error.message;

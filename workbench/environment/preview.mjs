@@ -191,11 +191,12 @@ export class PreviewProcess {
       this.log ??= prior.log || '';
       this.wanted ??= prior.wanted === true;
       this.stoppedByUser ??= prior.stoppedByUser === true;
+      this.suspended ??= prior.suspended === true;
       this.startedAt ??= prior.startedAt;
     }
     await this.inspectServices();
     const owned = this.children.some(({live}) => live);
-    let state = this.exitCode != null || this.failure || this.wanted && !owned ? 'exited' : 'stopped';
+    let state = this.exitCode != null || this.failure || this.wanted && !owned && !this.suspended ? 'exited' : 'stopped';
     if (!this.failure && (mode === 'external' || url && await listening(url))) state = owned ? 'running' : 'external';
     else if (!this.failure && owned) state = mode === 'desktop' ? 'running' : 'starting';
     else if (!this.failure && this.starting) state = 'starting';
@@ -237,6 +238,7 @@ export class PreviewProcess {
       this.log = '';
       this.wanted = false;
       this.stoppedByUser = false;
+      this.suspended = false;
       await this.saveLog();
       return this.status();
     });
@@ -301,6 +303,7 @@ export class PreviewProcess {
       this.failure = '';
       this.wanted = true;
       this.stoppedByUser = false;
+      this.suspended = false;
       this.serviceCheckAt = 0;
       const stamp = stableId([settings, commit, await lstat(cwd).then(info => info.ino)]);
       this.starting = true;
@@ -362,7 +365,7 @@ export class PreviewProcess {
     if (this.log === null) return;
     const dir = await this.directory();
     if (dir) await atomicJson(dir, 'preview-output.json', {log: this.log, wanted: this.wanted === true,
-      stoppedByUser: this.stoppedByUser === true, startedAt: this.startedAt});
+      stoppedByUser: this.stoppedByUser === true, suspended: this.suspended === true, startedAt: this.startedAt});
   }
 
   async stopChildren() {
@@ -395,7 +398,8 @@ export class PreviewProcess {
 
   stop({preserveIntent = false} = {}) {
     this.cancelSetup();
-    if (!preserveIntent) { this.wanted = false; this.stoppedByUser = true; }
+    if (!preserveIntent) { this.wanted = false; this.stoppedByUser = true; this.suspended = false; }
+    else this.suspended = this.wanted === true;
     return this.edit(async () => {
       await this.stopChildren();
       await this.saveLog();
@@ -409,6 +413,7 @@ export class PreviewProcess {
     this.cancelSetup();
     return this.edit(async () => {
       await this.stopChildren();
+      this.suspended = true;
       await this.saveLog();
     });
   }

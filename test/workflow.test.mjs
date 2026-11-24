@@ -4,6 +4,7 @@ import { workflow } from '../public/workflow.js';
 import { apexPanel } from '../public/apex-panel.js';
 import { findingKey, loadDraft, saveDraft } from '../public/drafts.js';
 import { defaultManifest } from '../reviews.mjs';
+import { prepareRetest } from '../fix-review.mjs';
 
 function harness(t, options = {}) {
   class Element {
@@ -158,17 +159,16 @@ test('retest drafts recover after remount and failed item saves block approval',
   assert.equal(h.calls.some(call=>call.path==='/api/approve'),false);
 });
 
-test('returning to an item restores its screen after navigating elsewhere',async t=>{
+test('returning to an item restores its screen without a repeated prompt',async t=>{
   const reopened=[];const h=harness(t,{reopen:force=>reopened.push(force)});
   h.state.original=h.state.changed={scenario:{path:'/clinic/patients/3/encounters/1'}};
   h.view.context('changed',{location:'/clinic/schedule',errors:[]});
-  globalThis.confirm=()=>false;
+  let prompts=0;globalThis.confirm=()=>{prompts++;return false;};
   h.elements['scenario-select'].value='intake';await h.elements['scenario-select'].onchange();
-  assert.equal(h.calls.some(call=>call.path==='/api/cursor'),false);
-  globalThis.confirm=()=>true;await h.elements['scenario-select'].onchange();
-  assert.equal(reopened.at(-1),true);
+  assert.equal(h.calls.some(call=>call.path==='/api/cursor'),true);
+  assert.equal(reopened.at(-1),true);assert.equal(prompts,0);
   h.view.context('changed',{location:'/clinic/patients/3/encounters/1',errors:[]});
-  await h.elements['scenario-select'].onchange();assert.equal(reopened.at(-1),false);
+  await h.elements['scenario-select'].onchange();assert.equal(reopened.at(-1),false);assert.equal(prompts,0);
 });
 
 test('findings filter without losing retest drafts and screenshot viewer retains exact evidence context',t=>{
@@ -290,16 +290,27 @@ test('a saved Workbench approval returns to its exact plan once',async t=>{
   assert.equal(h.elements['change-workspace'].dataset.qa,'false');
 });
 
-test('latest fix opens a retest panel and requires completed checks before explicit verification',async t=>{
- const h=harness(t),r=h.state.record,item=r.manifest.scenarios[0],e=h.elements;
+test('latest fix shows its expected result and requires checks before verification',async t=>{
+ const h=harness(t),r=h.state.record,e=h.elements;r.manifest=structuredClone(r.manifest);const item=r.manifest.scenarios[0];
  r.fixComparison={before:'aaaaaaa',after:'bbbbbbb'};r.cursor={itemId:item.id,view:'item'};
  r.issues=[{id:'latest',status:'needs-retest',expected:'Restore rust',actual:'Pink',side:'changed',commit:'aaaaaaa',scenario:item.id,consoleErrors:[]}];
+ prepareRetest(r);
  h.view.render(h.state);
- assert.equal(e['guided-item'].hidden,false);assert.equal(e['guided-results'].hidden,true);assert.equal(e['item-status'].textContent,'Fix ready to verify');assert.equal(e['latest-fix-expected'].textContent,'Restore rust');assert.equal(e['verify-fix'].disabled,true);
- await e['verify-fix'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,0);
- item.steps.forEach((_,i)=>r.checks[`${item.id}:${i}`]=true);h.view.render(h.state);assert.equal(e['verify-fix'].disabled,false);
- await e['verify-fix'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,1);assert.equal(h.calls.find(c=>c.path==='/api/resolve').data.issueId,'latest');
+ assert.equal(e['guided-item'].hidden,false);assert.equal(e['guided-results'].hidden,true);assert.equal(e['item-status'].textContent,'Fix ready to verify');assert.equal(e['item-expected'].textContent,'Restore rust');assert.match(e['item-next'].textContent,/Verify fix/);
+ await e['item-next'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,0);
+ item.steps.forEach((_,i)=>r.checks[`${item.id}:${i}`]=true);h.view.render(h.state);
+ await e['item-next'].onclick();assert.equal(h.calls.filter(c=>c.path==='/api/resolve').length,1);assert.equal(h.calls.find(c=>c.path==='/api/resolve').data.issueId,'latest');
  assert.equal(e['prepare-handoff'].hidden,true);
+});
+
+test('review corrections remain visible beside the original criterion', t=>{
+ const h=harness(t),r=h.state.record;r.manifest=structuredClone(r.manifest);
+ r.manifest.scenarios[0].expected='Show the original greeting.';
+ r.issues=[{id:'fix',status:'needs-retest',expected:'Show the reviewed greeting.',actual:'Original greeting',
+   side:'changed',commit:'aaaaaaa',scenario:'intake',carriedFrom:'previous-review',consoleErrors:[]}];
+ h.view.render(h.state);
+ assert.match(h.elements['item-expected'].textContent,/Review correction: Show the reviewed greeting/);
+ assert.match(h.elements['item-expected'].textContent,/Original criterion: Show the original greeting/);
 });
 
 

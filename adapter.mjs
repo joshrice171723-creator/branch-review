@@ -109,7 +109,10 @@ export async function defaultBranch(){
   const ref=await git('symbolic-ref','--quiet','refs/remotes/origin/HEAD').catch(()=> '');
   if(ref.startsWith('refs/remotes/origin/'))return ref.slice('refs/remotes/origin/'.length);
   for(const name of ['main','master'])if(await git('rev-parse','--verify','refs/remotes/origin/'+name).then(()=>true,()=>false))return name;
-  throw Error('Fetch origin and set its default branch before reviewing this repository.');
+  throw Object.assign(Error('Configure the origin remote and fetch its default branch before opening a review.'), {
+    code: 'MISSING_DEFAULT_BRANCH',
+    recoveryOwner: 'user-input'
+  });
 }
 const branchFileLabels = new Map();
 export async function branches() {
@@ -163,12 +166,19 @@ export async function comparison(ref, baseline, baselineCommit) {
   const branch = entry && {...entry, ref};
   if (!branch)
     throw new Error("Branch no longer exists. Refresh the branch list.");
-  const main = await git("rev-parse", "refs/remotes/origin/"+await defaultBranch());
+  const main = await defaultBranch().then(name => git("rev-parse", "refs/remotes/origin/" + name)).catch(error => {
+    if (error.code === 'MISSING_DEFAULT_BRANCH' && ['parent', 'commit'].includes(baseline)) return null;
+    throw error;
+  });
   if(baseline==='commit' && !/^[a-f0-9]{40}$/.test(baselineCommit || ''))throw new Error('Choose a full commit from history.');
-  const base = baseline==='main'? main : baseline==='commit'? await git('rev-parse','--verify',`${baselineCommit}^{commit}`) :
-    baseline === "parent"
-      ? await git("rev-parse", `${branch.sha}^`).catch(()=>{throw new Error('This is the first commit. Choose another comparison baseline.');})
-      : await git("merge-base", main, branch.sha);
+  let base;
+  if (baseline === 'main') base = main;
+  else if (baseline === 'commit') base = await git('rev-parse','--verify',`${baselineCommit}^{commit}`);
+  else if (baseline === 'parent') {
+    const parents = (await git('rev-list', '--parents', '-n', '1', branch.sha)).split(/\s+/);
+    if (!parents[1]) throw Object.assign(Error('This is the first commit. Choose another comparison baseline.'), {recoveryOwner:'user-input'});
+    base = parents[1];
+  } else base = await git('merge-base', main, branch.sha);
   const files = (await git("diff", "--name-only", '-z', base, branch.sha,'--'))
     .split("\0")
     .filter(Boolean);

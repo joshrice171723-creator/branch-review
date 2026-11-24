@@ -6,6 +6,7 @@ import {workspaceRenderer} from '../workbench/renderer.mjs';
 test('the project workspace mounts once and retains conversation during Branch Review', async t => {
   const origin='http://127.0.0.1:4310';
   const calls=[], mounts=[], messages=[], visibility=[];
+  let branchRefreshes=0;
   const nodes=new Map();
   function element(id) {
     if (!nodes.has(id)) nodes.set(id,{hidden:true,dataset:{},setAttribute(){},replaceChildren(){},append(){}});
@@ -16,6 +17,7 @@ test('the project workspace mounts once and retains conversation during Branch R
   globalThis.window={};
   t.after(()=>{delete globalThis.document;delete globalThis.window;delete globalThis.location;});
   const panel=apexPanel({getState:()=>({}),openBranch:async()=>true,flush:async()=>true,
+    refreshBranches:async()=>{branchRefreshes++;},
     loadPanel:async(source)=>({mount:async(node,options)=>{
       mounts.push({node,options,source});
       return {setVisible:value=>visibility.push(value),openConversation:input=>messages.push(input)};
@@ -33,8 +35,10 @@ test('the project workspace mounts once and retains conversation during Branch R
   assert.equal(mounts[0].source,origin+'/workspace.js');
   assert.deepEqual(messages,[context]);
   assert.equal(element('review-workspace').hidden,true);
+  assert.equal(branchRefreshes,0);
   element('open-project-qa').onclick();
   assert.equal(element('review-workspace').hidden,false);
+  assert.equal(branchRefreshes,1);
   await panel.openChat(context);
   await panel.open();
   assert.equal(mounts.length,1);

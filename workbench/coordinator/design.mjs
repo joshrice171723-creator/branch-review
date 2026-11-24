@@ -332,15 +332,16 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     } finally { await release(); }
   }
 
-  async function prepareProposal(proposal, setup) {
-    const result = await prepareBuild?.(setup);
+  async function prepareProposal(proposal, setup, {forBuild = true} = {}) {
+    const result = await prepareBuild?.({...setup, forBuild});
     if (!result) return '';
     if (result.smoke && !proposal.plan.includes('## Project check\n- Add `' + result.smoke + '`')) proposal.plan += '\n\n## Project check\n- Add `' + result.smoke +
       '` as a focused Node test. Exercise a real behavior from this plan against the selected project. ' +
       'Use isolated fixtures and assert an observable outcome. The required check runs after implementation.';
     const checks = result.checks.map(check => check.name + ' — ' +
       (check.status === 'ready' ? 'command preflight passed' : check.reason ?? 'created during the build'));
-    const check = result.smoke ? 'The build will add and run a focused smoke test.' : checks.join('\n');
+    const check = result.smoke ? 'The build will add and run a focused smoke test.' :
+      checks.join('\n') || 'No runnable project checks were found.';
     const coverage = result.acceptanceChecks?.map(row => row.criterion + ' → ' +
       (row.check || 'No runnable project check found')) ?? [];
     if (coverage.length && !proposal.plan.includes('## Acceptance checks\n')) {
@@ -349,7 +350,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
     if (proposal.plan.length > 64000) throw Error('Shorten the plan before sending it.');
     const preview = result.preview.revision ? result.previewMessage + ' Launch revision ' +
       result.preview.revision.slice(0, 12) + '.' : result.previewMessage;
-    const executionSetup = proposal.plan && prepareWorkflow ? await prepareWorkflow(proposal.plan) : undefined;
+    const executionSetup = forBuild && proposal.plan && prepareWorkflow ? await prepareWorkflow(proposal.plan) : undefined;
     return {message: [check, preview].filter(Boolean).join('\n\n'), checks: result.checks, preview: result.preview, executionSetup};
   }
 
@@ -577,7 +578,7 @@ export function createDesign({files, store, git, agent, image, projectName, proj
           });
         } else if (value.kind === 'project-setup') {
           action = async () => {
-            projectSetup = await prepareProposal({plan: ''}, setup);
+            projectSetup = await prepareProposal({plan: ''}, setup, {forBuild: false});
             projectPrepared = Boolean(projectSetup);
             return projectSetup?.message || 'Project setup is unavailable in this workspace.';
           };

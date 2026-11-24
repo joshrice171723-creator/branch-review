@@ -43,6 +43,24 @@ async function fixture(t, files, options = {}) {
 
 const plan = {kind: 'plan', title: 'Update greeting', plan: 'Update the greeting.\n\n## Acceptance criteria\n- Show the new greeting.'};
 
+test('preview setup without a build does not create a missing check or select build settings', async t => {
+  let selections = 0;
+  const {send, store, environment} = await fixture(t, {
+    'server.cjs': "require('node:http').createServer((_, res) => res.end('Ready')).listen(process.env.PORT, '127.0.0.1');",
+    'workbench-capabilities.json': JSON.stringify({schema_version:1,
+      previews:[{label:'Fixture', argv:['node','server.cjs'], cwd:'.', url:'http://127.0.0.1:{port}', mode:'web'}]})
+  }, {invoke: async ({prompt}) => {
+    if (prompt.startsWith('Choose execution settings')) { selections++; return {text:'{"stages":{}}'}; }
+    return {text:JSON.stringify({message:'Setting up the preview.', proposal:{kind:'project-setup', title:'Set up preview'}})};
+  }});
+  const reply = (await send({message:'Set up the live preview.'})).messages.at(-1);
+  assert.equal(selections, 0);
+  assert.match(reply.text, /preview responded/i);
+  assert.doesNotMatch(reply.text, /build will add/i);
+  assert.equal((await store.effectiveConfig()).checks.length, 0);
+  assert.equal((await environment.dispatch('GET', 'design/app-process')).state, 'running');
+});
+
 test('sending a saved proposal prepares its check and starts the detected preview', async t => {
   let calls = 0, selections = 0, frontendCheck, backendCheck;
   const {send, store, coordinator, git, environment, repository} = await fixture(t, {
@@ -99,9 +117,10 @@ test('sending a saved proposal prepares its check and starts the detected previe
 });
 
 test('a project without checks receives a required after-build smoke test in the plan', async t => {
-  let interrupted = false, supervised = 0;
+  let interrupted = false, supervised = 0, refreshed;
   const {send, store, coordinator, git} = await fixture(t, {'greeting.txt': 'Before'}, {
     superviseFailures: true,
+    refreshPreviewAfterBuild: async ({revision}) => { refreshed = revision; },
     invoke: async ({stage, prompt, cwd}) => {
       if (prompt.startsWith('Supervise this stopped Branch Review build')) {
         supervised++;
@@ -116,8 +135,16 @@ test('a project without checks receives a required after-build smoke test in the
         interrupted = true;
         throw Error('Temporary connection interruption');
       }
-      if (stage === 'plan') return {text: JSON.stringify({plan: ['Update the greeting and add a smoke test.']})};
-      if (stage === 'plan_review') return {text: JSON.stringify({verdict: 'pass', reason: 'The plan covers both requirements.'})};
+      if (stage === 'plan') return {text: JSON.stringify({plan: 'Update the greeting and add a smoke test.', question:'', suggestions:[]})};
+      if (stage === 'plan_review') {
+        assert.match(prompt, /Do not require their future results or implemented changes to pass the plan audit/);
+        const context = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1).split('\n')[0]);
+        assert.deepEqual(context.configuredChecks[0].argv, ['node', '--test', 'test/branch-review-smoke.cjs']);
+        assert.deepEqual(context.configuredChecks[0].phases, ['after']);
+        assert.equal(context.checks, undefined);
+        assert.equal(context.receiptStatus, undefined);
+        return {text: JSON.stringify({verdict: 'pass', reason: 'The plan covers both requirements.'})};
+      }
       if (stage === 'build') {
         await writeFile(path.join(cwd, 'greeting.txt'), 'After');
         await mkdir(path.join(cwd, 'test'));
@@ -143,12 +170,15 @@ test('a project without checks receives a required after-build smoke test in the
   await post('build', {revision, mode: 'task', automaticRouting: true, decisions: {scope_confirmed: 'confirmed', code_changes: 'allow_scoped',
     migrations: 'deny', dependencies: 'deny', engine_integration: 'confirmed'}});
   let build;
-  for (let attempt = 0; attempt < 400; attempt++) {
+  const deadline = Date.now() + 5 * 60_000;
+  while (Date.now() < deadline) {
     build = (await coordinator.dispatch('design')).builds.at(-1);
     if (build.status === 'review' || build.attention) break;
     await delay(150);
   }
   assert.equal(build.status, 'review', build.error);
+  for (let attempt = 0; attempt < 50 && !refreshed; attempt++) await delay(100);
+  assert.equal(refreshed, await git('rev-parse', 'HEAD'));
   assert.equal(supervised, 1);
   assert.equal(build.attempts.at(-1).automaticRecovery?.kind, 'supervisor');
   assert.equal(build.attempts[0].task, build.attempts.at(-1).task);

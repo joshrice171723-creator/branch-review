@@ -400,8 +400,20 @@ function designPanel(initialState) {
         }
         if (draftDiffers(editing) && !await change("draft", {...editing, revision: baseRevision}, {reset: true, onError})) return;
         const readinessRoute = launchForm.automaticRouting ? "design/readiness?automaticRouting=1" : "design/readiness";
-        const preflight = await api(readinessRoute);
-        const blockers = preflight.items.filter(item => item.status === "blocked" && !["plan", "review"].includes(item.id));
+        let preflight = await api(readinessRoute);
+        let blockers = preflight.items.filter(item => item.status === "blocked" && !["plan", "review"].includes(item.id));
+        if (blockers.length === 1 && blockers[0].id === "checks") {
+          const profile = await api("profile");
+          if (!profile.checks?.some(check => check.required || check.benchmark)) {
+            showPlanStartStatus("Preparing project checks…");
+            await api("design/prepare-build", {});
+            const preparedProfile = await api("profile");
+            data = {...data, checks: preparedProfile.checks};
+            projectState.profile_applied = true;
+            preflight = await api(readinessRoute);
+            blockers = preflight.items.filter(item => item.status === "blocked" && !["plan", "review"].includes(item.id));
+          }
+        }
         if (blockers.length) {
           showPlanStartStatus(blockers.map(item => item.message).join(" "));
           return;
@@ -467,8 +479,16 @@ function designPanel(initialState) {
       updateActions();
     }
     updateActions();
+    const currentBuild = state.builds.at(-1);
+    const corrections = currentBuild?.revision === state.revision ?
+      (currentBuild.groups?.[currentBuild.index]?.findings || []).filter(finding => finding.text) : [];
+    const correctionNotice = corrections.length ? element("div", "review-corrections",
+      element("strong", "", "Review corrections"),
+      element("p", "", "If a correction conflicts with the original plan, follow the correction. Apply later corrections when requests conflict."),
+      element("ul", "", ...corrections.map(finding => element("li", "", finding.text)))) : null;
     const result = box("Plan", field("Title", title),
-      element("div", "plan-reading-tools", element("strong", "", "Plan and acceptance criteria"), toggle),
+      ...(correctionNotice ? [correctionNotice] : []),
+      element("div", "plan-reading-tools", element("strong", "", corrections.length ? "Original plan and acceptance criteria" : "Plan and acceptance criteria"), toggle),
       rendered, draft, summary,
       agreement, checkbox("Let Coordinator choose models, thinking level, and tools", launchForm.automaticRouting, value => {
         launchForm.automaticRouting = value;
@@ -729,7 +749,7 @@ function designPanel(initialState) {
     viewport.hidden = true;
     mount.append(previewStatus, automaticControls, viewport);
     let process, checked, source, timer, pending = false, version = 0;
-    let pageAddress = "", baseAddress = "";
+    let pageAddress = "", baseAddress = "", displayedStart;
     const publishView = () => {
       const frame = viewport.querySelector("iframe");
       if (mount.isConnected) projectConversation.setPreview?.(frame ? {frame, address: pageAddress} : null);
@@ -785,8 +805,16 @@ function designPanel(initialState) {
         previewStatus.textContent = "Choose the project's preview address.";
         selected = null;
       }
-      if (source === selected?.url) return;
+      if (source === selected?.url) {
+        if (source && process?.startedAt && displayedStart !== process.startedAt) {
+          displayedStart = process.startedAt;
+          const frame = viewport.querySelector("iframe");
+          if (frame) frame.src = frame.src;
+        }
+        return;
+      }
       source = selected?.url;
+      displayedStart = process?.startedAt;
       baseAddress = source;
       loadPage(source || "");
       showPages(source);
@@ -876,7 +904,9 @@ function designPanel(initialState) {
     }
     function follow() {
       clearTimeout(timer);
-      if (mount.isConnected && (live() || process?.settings?.mode === "web")) timer = setTimeout(refresh, 2500);
+      if (mount.isConnected && (live() || process?.settings?.mode === "web" || projectConversation?.isWorking?.())) {
+        timer = setTimeout(refresh, 2500);
+      }
     }
     async function refresh() {
       if (!mount.isConnected || pending) return;
@@ -889,6 +919,7 @@ function designPanel(initialState) {
       }
       follow();
     }
+    projectConversation.refreshPreview = () => { if (mount.isConnected && !pending) void refresh(); };
     async function startAutomatic(options = {}) {
       if (pending || !mount.isConnected) return;
       pending = true;
@@ -1489,7 +1520,10 @@ function designPanel(initialState) {
       const label = {ready: "Continue the build", review: "Review checked work", failed: resumeLabel,
         cancelled: resumeLabel, question: build.attempts.at(-1)?.step === "evidence" ? "Review the evidence request" :
           "Answer the build question"}[build.status] || "View the current build";
-      next = [label, () => goBuild()];
+      const group = build.groups?.[build.index];
+      const reviewed = build.status === "review" && group?.sha && build.attempts.findLast(attempt =>
+        attempt.outcome === "completed" && group.slices.includes(attempt.slice));
+      next = [label, reviewed?.task ? () => openReview(reviewed.task) : () => goBuild()];
     } else if (state.question || state.plannerRetry) next = ["Resolve the planning decision", () => projectConversation.open()];
     else if (localDraft.plan) next = ["Save the local draft", focus("plan-save")];
     else if (!state.plan.trim()) next = ["Draft a plan", () => projectConversation.open()];

@@ -81,7 +81,36 @@ function checkpointRow(entry, previous, source) {
   };
 }
 
-async function inspectRun(root, requested) {
+function runSection(result, {section, offset = 0, limit = 5} = {}) {
+  if (!section || !result.run) return result;
+  const run = result.run;
+  const clip = (value, max) => string(value).replace(/[\x00-\x1f]/g, ' ').slice(0, max);
+  const entries = run[section].slice(offset, offset + limit).map(row => {
+    let truncated = false;
+    const text = (value, max) => {
+      const clean = string(value).replace(/[\x00-\x1f]/g, ' ');
+      if (clean.length > max) truncated = true;
+      return clean.slice(0, max);
+    };
+    const entry = {
+      stage:text(row.stage,100), source:text(row.source,300), actor:text(row.actor,100),
+      time:text(row.time,64), verdict:text(row.verdict || row.previousResult?.verdict,100),
+      finding:text(row.finding || row.previousResult?.finding,600),
+      ...(section === 'transitions' ? {fromStage:text(row.fromStage,100), assignedTo:text(row.assignedTo,100)} : {})
+    };
+    if (truncated) entry.textTruncated = true;
+    return entry;
+  });
+  const total = run[section].length;
+  return {active:result.active, warnings:result.warnings.slice(0,3).map(warning=>clip(warning,300)),
+    warningCount:result.warnings.length, run:{id:run.id, stage:clip(run.stage,100),
+      blocker:clip(run.blocker,600), section, offset, total,
+      nextOffset:offset + entries.length < total ? offset + entries.length : null, entries},
+    details:'Entries summarize the original records named by source.'};
+}
+
+async function inspectRun(root, requested, options = {}) {
+  root = await fs.realpath(root);
   const index = await listRuns(root);
   const id = requested || index.active || index.ids[0];
   if (!id) return {...index, run: null};
@@ -141,7 +170,7 @@ async function inspectRun(root, requested) {
     if (["paused", "stopped", "blocked"].includes(run.stage)) run.blocker = string(lifecycle.reason);
   }
   run.stage ||= run.events.at(-1)?.stage || "";
-  return {...index, run};
+  return runSection({...index, run}, options);
 }
 
 export {inspectRun, runIdPattern};

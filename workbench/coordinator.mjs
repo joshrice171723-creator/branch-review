@@ -16,7 +16,7 @@ import {coordinatorTools, openStageMcp, selectStageTools} from './mcp.mjs';
 const checklist = ['Inspect the commit diff', 'Check the included scope', 'Review the recorded project checks'];
 
 export async function createCoordinator({
-  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe, stageToolCall, prepareBuild, saveQualityDraft, superviseFailures, prepareBrowserRecovery,
+  repository, store, git, review, push, projectEvidence, qualityDraft, validateQuality, providerOptions, providerProbe, stageToolCall, prepareBuild, saveQualityDraft, superviseFailures, prepareBrowserRecovery, refreshPreviewAfterBuild,
   invoke = runProvider, image = generateMockup, runtimeHealth
 }) {
   const root = await realpath(repository);
@@ -165,7 +165,7 @@ export async function createCoordinator({
     return objectReply((await agent({profile, folder: '.harness/loops/' + attempt.task,
       stage: 'plan', prompt, signal, coordinatorDiagnosis: true, autoAgent: coordinatorModel, purpose: 'Coordinator recovery'})).text);
   });
-  const builds = createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders, supervise, prepareBrowserRecovery,
+  const builds = createBuilds({prepareWorkflow, files, git, store, design, audit, review, push, checkProviders, supervise, prepareBrowserRecovery, refreshPreviewAfterBuild,
     signal: conversation.signal});
   const idle = () => !pending && !builds.busy() && runtimeHealth.idle();
   const health = runtimeHealth ? await createHealthReviewer({...runtimeHealth, workspace:root, idle}) : null;
@@ -278,7 +278,8 @@ export async function createCoordinator({
   }
   return {dispatch, diagnosePreview, reportOperation: signal => health?.report({id: signal.id, workspace: signal.workspace && root, title: signal.title, issue: signal.error,
     request: signal.evidence || signal.title, nextAction: signal.nextAction, regression: operationRegression(signal.id, signal.readPath)}),
-    busy: () => pending > 0 || builds.busy() || Boolean(health?.busy()), close: () => {
+    busy: () => pending > 0 || builds.busy() || Boolean(health?.busy()),
+    busyForProjectSetup: () => builds.busy(), close: () => {
     void health?.close();
     conversation.abort(new Error('Branch Review closed.'));
     return builds.close();

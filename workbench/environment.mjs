@@ -3,7 +3,7 @@ import path from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {redact} from '../jobs.mjs';
 import {discoverCapabilities, readInstruction} from './environment/discovery.mjs';
-import {atomicJson, boundedText, plainPath, stableId} from './environment/paths.mjs';
+import {atomicJson, boundedText, gitRead, plainPath, stableId} from './environment/paths.mjs';
 import {PreviewProcess, previewAddress, programAvailable} from './environment/preview.mjs';
 
 const kitKind = 'branch-review-workbench-profile';
@@ -123,8 +123,8 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     return {id: active, status: summary?.lifecycle?.status || 'active'};
   }
 
-  async function assertIdle(action) {
-    if (await isActive?.() || (await activeTask())?.status === 'active') {
+  async function assertIdle(action, {coordinator = false} = {}) {
+    if (await isActive?.({coordinator}) || (await activeTask())?.status === 'active') {
       throw Error('Finish or pause the active task before ' + action + '.');
     }
   }
@@ -174,9 +174,9 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     };
   }
 
-  function prepare(input = {}) {
+  function prepare(input = {}, context = {}) {
     return write(async () => {
-      await assertIdle('preparing this workspace');
+      await assertIdle('preparing this workspace', context);
       let profile = input.profile ? await profileFromInput(await repo(), input.profile) :
         await store?.getProfile?.() || await defaultProfile?.();
       const newChecks = input.checks ?? (input.discoverChecks !== false && !profile?.checks?.length
@@ -396,10 +396,12 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     }
   }
 
-  function prepareBuild({checkId, previewId, acceptanceChecks = []} = {}) {
+  function prepareBuild({checkId, previewId, acceptanceChecks = [], forBuild = true} = {}) {
     return write(async () => {
       const active = await activeTask();
-      if (active?.status === 'active') throw Error('An active build owns the project settings. Use Coordinator to recover that build.');
+      if (await isActive?.({coordinator:true}) || active?.status === 'active') {
+        throw Error('An active build owns the project settings. Use Coordinator to recover that build.');
+      }
       const root = await repo();
       let profile = await store.getProfile();
       const config = await store.effectiveConfig();
@@ -415,10 +417,14 @@ export function createEnvironment({repository, store, local, projectId, defaultP
           const [evidence] = await store.configuredCheckReadiness({checks: [checkDefinition(candidate)]});
           if (evidence.status === 'ready') { discovered = candidate; break; }
         }
-        const required = discovered ? checkDefinition(discovered) : smokeCheck;
-        const checks = profile.checks.filter(row => row.name !== required.name);
-        await store.setProfile({...profile, checks: [...checks, required]});
-        profile = await store.getProfile();
+        const required = discovered ? checkDefinition(discovered) : forBuild ? smokeCheck : null;
+        if (required) {
+          const checks = profile.checks.filter(row => row.name !== required.name);
+          await store.setProfile({...profile, checks: [...checks, required]});
+          profile = await store.getProfile();
+        } else if (!await store.profileApplied()) {
+          await store.setProfile(profile);
+        }
       } else if (!await store.profileApplied()) {
         await store.setProfile(profile);
       }
@@ -438,7 +444,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         if (additions.length) await store.setProfile({...profile, checks: [...profile.checks, ...additions]});
       }
       const effective = await store.effectiveConfig();
-      const smoke = !effective.quality_revision && effective.checks.some(row => row.name === smokeCheck.name &&
+      const smoke = forBuild && !effective.quality_revision && effective.checks.some(row => row.name === smokeCheck.name &&
         row.argv.join(' ') === smokeCheck.argv.join(' ')) &&
         !await plainPath(root, smokePath).catch(missing) ? smokePath : '';
       let checks = await store.configuredCheckReadiness(effective);
@@ -462,6 +468,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
       case 'GET environment': return inspect();
       case 'POST prepare':
       case 'POST workbench-prepare': return prepare(payload);
+      case 'POST design/prepare-build': return prepareBuild({forBuild:false});
       case 'POST cleanup/preview':
       case 'GET cleanup/preview': return cleanupPreview();
       case 'POST cleanup': return cleanup(payload);
@@ -499,6 +506,12 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     }
   }
 
+  function rememberRenderObservation(state, result) {
+    const key = state.url + '|' + state.startedAt;
+    const failures = result.passed ? 0 : (renderObservation?.key === key ? renderObservation.failures || 0 : 0) + 1;
+    renderObservation = {key, result, failures, nextAt: Date.now() + (result.passed ? 60000 : 2500)};
+  }
+
   async function observePreview() {
     const app = await getPreview();
     const state = await app.status();
@@ -507,6 +520,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
     if (!state.wanted || state.settings?.mode !== 'web') return [];
     let error = '';
     if (state.state === 'exited') error = state.message || 'The project preview stopped before it was ready.';
+    else if (state.state === 'stopped') return [];
     else if (state.state === 'external') error = 'Another process is using the managed preview address.';
     else if (state.state === 'starting') {
       if (Date.now() - state.startedAt < 60000) return [];
@@ -519,9 +533,9 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         else if (verifyPreview) {
           const key = state.url + '|' + state.startedAt;
           if (renderObservation?.key !== key || Date.now() >= renderObservation.nextAt) {
-            renderObservation = {key, nextAt: Date.now() + 60000,
-              result: await verifyPreview(state.url, {embedOrigin: origin})};
+            rememberRenderObservation(state, await verifyPreview(state.url, {embedOrigin: origin}));
           }
+          if (!renderObservation.result.passed && renderObservation.failures < 2) return [];
           if (!renderObservation.result.passed) error = renderObservation.result.detail;
         }
       } catch (failure) { error = failure.message; }
@@ -555,7 +569,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
           if (response.ok) {
             if (!verifyPreview) return {passed: false, detail: 'The preview responds. Browser rendering still needs verification.'};
             const rendered = await verifyPreview(state.url, {signal, embedOrigin: origin});
-            renderObservation = {key: state.url + '|' + state.startedAt, nextAt: Date.now() + 60000, result: rendered};
+            rememberRenderObservation(state, rendered);
             return rendered;
           }
           detail = 'The project preview returned HTTP ' + response.status + '.';
@@ -571,6 +585,16 @@ export function createEnvironment({repository, store, local, projectId, defaultP
   }
 
   return {inspect, prepare, prepareBuild, observePreview, verifyCurrentPreview,
+    refreshAfterBuild: ({revision, signal} = {}) => write(async () => {
+      const app = await getPreview();
+      const current = await app.status();
+      if (!revision || !current.owned || !current.wanted || current.stoppedByUser ||
+          current.settings?.mode !== 'web' || current.revision === revision ||
+          (await gitRead(await repo(), 'rev-parse', 'HEAD')).trim() !== revision) return current;
+      await app.stop({preserveIntent: true});
+      if (automaticPreviewStopped || signal?.aborted) return app.status();
+      return startPreview(app, {preferredUrl: current.url, signal});
+    }),
     async browserPreview() {
       const process = await (await getPreview()).status();
       return {url: process.url || await savedPreview?.(), revision: process.revision, source: process.source, owned: process.owned};
@@ -606,7 +630,7 @@ export function createEnvironment({repository, store, local, projectId, defaultP
         if (!verifyPreview) return {passed: false, detail: 'The preview responds. Browser rendering still needs verification.'};
         const rendered = await verifyPreview(result.url, {signal: stop, embedOrigin: origin});
         const current = await app.status();
-        renderObservation = {key: current.url + '|' + current.startedAt, nextAt: Date.now() + 60000, result: rendered};
+        rememberRenderObservation(current, rendered);
         return rendered;
       } catch (error) {
         if (automaticPreviewStopped) return {cancelled: true, passed: false, detail: 'The managed preview was stopped by the user.'};

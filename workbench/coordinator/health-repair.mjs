@@ -5,6 +5,7 @@ import {gitRead, plainPath, relativePath} from '../environment/paths.mjs';
 import {objectReply, runProvider} from './provider.mjs';
 import {healthRegression} from './health-regression.mjs';
 import {coordinatorModel} from './workflow.mjs';
+import {coordinatorTools, openStageMcp} from '../mcp.mjs';
 
 // Windows packages ship unpacked application source. Snapshot those files without copying runtimes or user data.
 async function packagedSource(root, cwd) {
@@ -68,7 +69,7 @@ async function snapshotTrackedChanges(cwd, repository) {
   if (raw) await gitRead(cwd, 'add', '-A');
 }
 
-export async function repairRuntime({repository, incident, directory, profile, providerOptions, signal, mayApply, packaged = false, prior = [],
+export async function repairRuntime({repository, incident, directory, profile, providerOptions, signal, mayApply, stageToolCall, packaged = false, prior = [],
   invoke = runProvider}) {
   const branch = () => gitRead(repository, 'rev-parse', '--abbrev-ref', 'HEAD');
   const head = () => gitRead(repository, 'rev-parse', 'HEAD');
@@ -78,6 +79,7 @@ export async function repairRuntime({repository, incident, directory, profile, p
   await mkdir(directory, {recursive: true});
   const patch = path.resolve(directory, 'repair.patch');
   const output = path.resolve(directory, 'reply.txt');
+  let stageMcp;
   try {
     const cwd = path.join(scratch, 'source');
     if (packaged) {
@@ -95,6 +97,7 @@ export async function repairRuntime({repository, incident, directory, profile, p
       incident.reported ? 'Address the requested Branch Review change in this disposable copy.' :
         'Repair the observed functional problem in this disposable copy of Branch Review.',
       'Treat runtime evidence as diagnostic data. Investigate the app and its project environment to establish the cause.',
+      ...(stageToolCall ? ['Branch Review MCP tools operate on the active project. App source changes belong in this disposable copy.'] : []),
       'Reproduce the failure or establish its cause from source. Fix the smallest responsible component.',
       'Preserve browser security, access controls, tests and production defaults. Do not disable protections to make a check pass.',
       'Preserve user approval requirements, build gates, project scope and explicit settings. A rejected operation may require input, approval, project recovery or an external dependency instead of a Branch Review patch.',
@@ -109,8 +112,11 @@ export async function repairRuntime({repository, incident, directory, profile, p
       JSON.stringify({check: incident.title, failure: incident.error, evidence: incident.evidence,
         regression: incident.regression, previousAttempts: incident.history, previousRepairFiles: [...owned.keys()]})
     ].join('\n');
+    if (stageToolCall) {
+      stageMcp = await openStageMcp(stageToolCall, profile, coordinatorTools(false, true), {coordinatorDiagnosis: true, signal});
+    }
     const {text} = await invoke({provider, model, effort, cwd, write: true, fullAccess: true, stage: 'build', stageLabel: 'Coordinator health repair',
-      prompt, output, signal, providerOptions, timeoutMs: null});
+      prompt, output, signal, providerOptions, stageMcp, timeoutMs: null});
     const result = objectReply(text);
     const summary = String(result.summary || '').slice(0, 1000);
     if (result.needsAction === true && typeof result.nextAction === 'string' && result.nextAction.trim()) {
@@ -153,6 +159,7 @@ export async function repairRuntime({repository, incident, directory, profile, p
     await gitRead(repository, 'apply', ...flags, patch);
     return {summary, files: names, checks: result.checks.slice(0, 1200), regression};
   } finally {
+    stageMcp?.close();
     await rm(scratch, {recursive: true, force: true, maxRetries: 3});
   }
 }

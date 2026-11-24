@@ -60,9 +60,9 @@ export async function probeProvider(provider,override,{liveMuse=true}={}){
     }catch{return {provider,status:'sign-in',version,path:file,message:`Run ${provider==='claude'?'claude auth login':'codex login'} in your terminal, complete sign-in, then test the connection again.`};}
   }catch{return {provider,status:'unavailable',message:`Could not run ${providerNames[provider]}. Check its executable path and installation.`};}
 }
-export async function codexConnections(file,cwd){
+export async function codexConnections(file,cwd,{signal}={}){
   const launch=launchCommand(file,['--disable','plugins','--disable','apps','mcp','list','--json']);
-  const result=await exec(launch.file,launch.args,{cwd,windowsHide:true,timeout:15000,maxBuffer:1000000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
+  const result=await exec(launch.file,launch.args,{cwd,signal,windowsHide:true,timeout:15000,maxBuffer:1000000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
   const rows=JSON.parse(result.stdout);if(!Array.isArray(rows))throw Error('Could not inspect Codex connector configuration.');
   return rows.map(row=>row.name).filter(name=>typeof name==='string');
 }

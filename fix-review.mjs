@@ -65,7 +65,21 @@ export function focusRetest(record,previous,files,requestedPath){
 }
 
 export function prepareRetest(record){
-  if(!record.fixComparison || record.retestVersion===4 || record.delivery || record.approval)return;
+  if(!record.fixComparison || record.delivery || record.approval)return;
+  if(record.retestVersion===4){
+    // Correct the old fallback only when the saved value still matches its generated text.
+    for(const item of record.manifest.scenarios){
+      if(!Object.hasOwn(record.retestOriginals || {},item.id) || record.retestOriginals[item.id]?.expected)continue;
+      const findings=record.issues.filter(issue=>issue.scenario===item.id && issue.status==='needs-retest' && issue.expected);
+      const oldExpected=findings.map(issue=>issue.actual || issue.expected).join('\n');
+      const expected=findings.map(issue=>issue.expected).join('\n');
+      if(expected && item.expected===oldExpected && item.expected!==expected){
+        item.expected=expected;
+        for(const key of Object.keys(record.checks || {}))if(key.startsWith(item.id+':'))delete record.checks[key];
+      }
+    }
+    return;
+  }
   record.requestHistory ||= [];
   // A later request for the same item replaces earlier revision requests, not findings from the same revision.
   const latest=new Map();
@@ -93,7 +107,7 @@ export function prepareRetest(record){
       if(destinations.length===1){item.path=destinations[0];delete item.originalPath;}
       item.title='Verify reported fix on '+item.path;
       item.description=findings.map(issue=>issue.actual).filter(Boolean).join('\n');
-      item.expected=record.retestOriginals[item.id].expected || findings.map(issue=>issue.actual || issue.expected).join('\n');
+      item.expected=record.retestOriginals[item.id].expected || findings.map(issue=>issue.expected).join('\n');
       item.instructions='Open the reported area in both previews. Complete any sign-in or sandbox entry shown first. Compare the reported problem before and after the fix, then check the expectations below.';
       item.focus='';
       item.steps=['The page matches the expected result above.'];

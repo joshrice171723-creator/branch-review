@@ -64,7 +64,7 @@ async function verifyProjectSelection({intent, repository, loaded, diagnostics, 
   return true;
 }
 
-async function firstProject(detectProject, diagnostics) {
+async function firstProject(detectProject, diagnostics, home, signal) {
   const {probeProvider}=await import(pathToFileURL(path.join(path.dirname(__dirname),'providers.mjs')).href);
   const welcome=new BrowserWindow({title:'Branch Review',width:1000,height:720,minWidth:600,minHeight:500,backgroundColor:'#f6f7f4',webPreferences:{preload:path.join(__dirname,'welcome-preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}});
   welcomeWindow=welcome;welcome.setMenuBarVisibility(false);welcome.webContents.setWindowOpenHandler(()=>({action:'deny'}));
@@ -116,8 +116,14 @@ async function firstProject(detectProject, diagnostics) {
       let chosen;if(found){if(!foundProject || found!==foundProject || !await availableRepository(foundProject,exec))throw projectInputError('That project is no longer available. Ask the agent to find it again.', 'Browse for a folder');chosen={repository:foundProject,projectInfo:await detectProject(foundProject)};}else chosen=await chooseRepository({dialog,window:welcome,exec,detectProject});if(!chosen)return;
       const trust=await dialog.showMessageBox(welcome,{buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'The agent may use your project instructions to set up a preview. Only open projects you trust.'});
       if(trust.response!==0)return;
-      let suggestedRecipe=null;
-      if(chosen.projectInfo.needsSetup && readyProviders.has(provider)){try{const {validateRecipe}=await import(pathToFileURL(path.join(path.dirname(__dirname),'project-settings.mjs')).href);const suggestion=await suggestPreviewRecipe(provider,chosen.repository);if(suggestion)suggestedRecipe=validateRecipe(suggestion);}catch{}}
+      const suggestedRecipe = chosen.projectInfo.needsSetup && readyProviders.has(provider) ? (async () => {
+        const {reviewRecipe}=await import(pathToFileURL(path.join(path.dirname(__dirname),'project-settings.mjs')).href);
+        if (await reviewRecipe(home, chosen.repository)) return null;
+        return suggestPreviewRecipe(provider, chosen.repository, '', undefined, {signal});
+      })().catch(error => {
+        if (!signal.aborted) console.error('Could not suggest project preview setup:', error.message);
+        return null;
+      }) : null;
       welcome.hide();finish({...chosen,provider,suggestedRecipe});return true;
     });
     welcome.loadFile(path.join(__dirname,'welcome.html')).catch(error=>{ipcMain.removeHandler('welcome:choose');ipcMain.removeHandler('welcome:probe');ipcMain.removeHandler('welcome:chat');ipcMain.removeHandler('welcome:help');ipcMain.removeHandler('welcome:git');reject(error);});
@@ -125,6 +131,8 @@ async function firstProject(detectProject, diagnostics) {
 }
 async function launch() {
   const root = path.dirname(__dirname);
+  const previewSuggestion = new AbortController();
+  let pendingPreviewSetup;
   const diagnostics = require('./runtime-diagnostics.cjs').createRuntimeDiagnostics();
   diagnostics.repository = root;
   diagnostics.packaged = app.isPackaged;
@@ -145,10 +153,21 @@ async function launch() {
     if(choice.response!==0){app.quit();return;}
   }
   if(!previousRepository || unavailable){
-    const chosen=previousRepository ? await chooseRepository({dialog,exec,detectProject}) : await firstProject(detectProject,diagnostics);
+    const chosen=previousRepository ? await chooseRepository({dialog,exec,detectProject}) : await firstProject(detectProject,diagnostics,home,previewSuggestion.signal);
     if(!chosen){app.quit();return;}
     const {repository}=chosen;
-    if(chosen.suggestedRecipe){const {readRecipe,saveRecipe}=await import(pathToFileURL(path.join(root,'project-settings.mjs')).href);if(!await readRecipe(home))await saveRecipe(home,chosen.suggestedRecipe);}
+    if (chosen.suggestedRecipe) {
+      const suggestionHome = home;
+      pendingPreviewSetup = chosen.suggestedRecipe.then(async recipe => {
+        if (!recipe || previewSuggestion.signal.aborted) return null;
+        const {reviewRecipe, saveSuggestedRecipe} = await import(pathToFileURL(path.join(root,'project-settings.mjs')).href);
+        if (previewSuggestion.signal.aborted || await reviewRecipe(suggestionHome, repository)) return null;
+        return saveSuggestedRecipe(suggestionHome, recipe);
+      }).catch(error => {
+        if (!previewSuggestion.signal.aborted) console.error('Could not save project preview setup:', error.message);
+        return null;
+      });
+    }
     if(!previousRepository && chosen.provider){const file=path.join(home,'agent-settings.json'),saved=JSON.parse(await readFile(file,'utf8').catch(error=>{if(error.code==='ENOENT')return '{}';throw error;}));await writeFile(file,JSON.stringify({...saved,provider:chosen.provider}));}
     if(previousRepository){const trust=await dialog.showMessageBox({buttons:['Open trusted project','Cancel'],cancelId:1,message:'Previews run this project’s code.',detail:'Branch Review creates isolated checkouts and installs locked web dependencies with install scripts disabled.'});if(trust.response!==0){app.quit();return;}}
     if(unavailable){
@@ -164,8 +183,8 @@ async function launch() {
   process.env.BRANCH_REVIEW_DESKTOP_REPOSITORY=savedConfig.repository;
   settings.projects={...settings.projects,[path.resolve(savedConfig.repository).toLowerCase()]:home};
   const {startServer} = await import(pathToFileURL(path.join(root, 'server.mjs')).href);
-  const {origin, port, beginDesktopExit} = await startServer({allowPortFallback:app.isPackaged || hasPortOverride,
-    preferredPort:settings.controllerPort, desktop:true, diagnostics});
+  const {origin, port, beginDesktopExit, finishDesktopExit} = await startServer({allowPortFallback:app.isPackaged || hasPortOverride,
+    preferredPort:settings.controllerPort, desktop:true, diagnostics, previewSetup:pendingPreviewSetup});
   if (app.isPackaged && !hasPortOverride) settings.controllerPort=port;
   await writeDesktopSettings(settingsPath, JSON.stringify({...settings,home}));
   function allowWorkspaceFullscreen(contents, permission, isMainFrame, url) {
@@ -418,13 +437,14 @@ async function launch() {
       throw error;
     }
     delete process.env.BRANCH_REVIEW_HOME;
-    try { app.relaunch(); }
+    try { await finishDesktopExit(); app.relaunch(); }
     catch (error) {
       await writeDesktopSettings(settingsPath, JSON.stringify({...settings,home}));
       process.env.BRANCH_REVIEW_HOME=home;
       resume();
       throw error;
     }
+    previewSuggestion.abort();
     closing = true; app.exit(0);
   }, undefined, projectSelectionIdentity);
   projectHandler(diagnostics, trusted, 'review:capture', 'Capture workspace', async (event,rect) => {
@@ -499,6 +519,7 @@ async function launch() {
         await writeDesktopSettings(settingsPath, JSON.stringify({...settings, home,
           ...(restart && {restartIntent:{repository:savedConfig.repository,identity:'review:restart',requestedAt:Date.now()}}),
           window: {...window.getNormalBounds(), maximized: window.isMaximized()}}));
+        await finishDesktopExit();
         if (restart) app.relaunch();
       } catch (error) {
         resume();
@@ -507,6 +528,7 @@ async function launch() {
         await dialog.showMessageBox(window, {message: restart ? 'Could not restart Branch Review.' : 'Could not save window settings.', detail: error.message});
         return;
       }
+      previewSuggestion.abort();
       closing = true;
       app.exit(0);
     } finally {

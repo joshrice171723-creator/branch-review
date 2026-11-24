@@ -5,6 +5,7 @@ exports.createRuntimeDiagnostics = function () {
   const events = new Map();
   let window, origin;
   let unresponsive = false;
+  const networkSuspended = error => /\bERR_NETWORK_IO_SUSPENDED\b/.test(error || '');
   const appUrl = value => {
     const url = URL.parse(value);
     return url?.origin === origin ? url : null;
@@ -36,7 +37,7 @@ exports.createRuntimeDiagnostics = function () {
       target.on('responsive', () => { unresponsive = false; });
       contents.on('console-message', event => {
         const url = appUrl(event.frame?.url);
-        if (event.level === 'error' && url) {
+        if (event.level === 'error' && url && !networkSuspended(event.message)) {
           // Chromium also logs our handled API responses to the console. Their server actions already have owners.
           if (appUrl(event.sourceId)?.pathname.startsWith('/api/') &&
               /^Failed to load resource: the server responded with a status of 4\d\d\b/.test(event.message)) return;
@@ -45,7 +46,7 @@ exports.createRuntimeDiagnostics = function () {
       });
       contents.on('did-fail-load', (_event, code, message, value) => {
         const url = appUrl(value);
-        if (url && code !== -3) record('load:' + url.pathname, 'Page load ' + url.pathname, message);
+        if (url && code !== -3 && !networkSuspended(message)) record('load:' + url.pathname, 'Page load ' + url.pathname, message);
       });
       contents.on('did-start-navigation', details => {
         const url = appUrl(details?.url);
@@ -71,7 +72,7 @@ exports.createRuntimeDiagnostics = function () {
         } else if (details.statusCode < 400) request(details, '');
       });
       contents.session.webRequest.onErrorOccurred(filter, details => {
-        if (details.error !== 'net::ERR_ABORTED') request(details, details.error);
+        if (details.error !== 'net::ERR_ABORTED' && !networkSuspended(details.error)) request(details, details.error);
       });
     },
     rendererUnavailable() {

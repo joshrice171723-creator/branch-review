@@ -9,10 +9,11 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import {createEnvironment} from '../workbench/environment.mjs';
 import {PreviewProcess} from '../workbench/environment/preview.mjs';
+import {createWorkspace} from '../workbench/workspace.mjs';
 
 const execute = promisify(execFile);
 
-async function fixture(t, files = {}) {
+async function fixture(t, files = {}, options = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), 'branch-review-environment-'));
   const repository = path.join(base, 'project');
   const local = path.join(base, 'local');
@@ -32,13 +33,98 @@ async function fixture(t, files = {}) {
     setProfile: async value => { profile = structuredClone(value); },
     config: async () => ({checks: []})
   };
-  const environment = createEnvironment({repository, local, store, projectId: 'fixture'});
+  const environment = createEnvironment({repository, local, store, projectId: 'fixture', ...options});
   t.after(async () => {
     await environment.close();
     await rm(base, {recursive: true, force: true});
   });
   return {repository, local, environment, store};
 }
+
+test('Coordinator setup ignores its own conversation but respects an active build', async t => {
+  const {environment, store} = await fixture(t, {}, {
+    isActive: ({coordinator} = {}) => !coordinator
+  });
+  await assert.rejects(environment.prepare(), /active task/);
+  assert.equal((await environment.prepare({}, {coordinator:true})).prepared, true);
+  store.listRuns = async () => ({active:'running', runs:[{id:'running', lifecycle:{status:'active'}}]});
+  await assert.rejects(environment.prepare({}, {coordinator:true}), /active task/);
+});
+
+test('project MCP configures, starts, and stops the managed preview', async t => {
+  const {repository, local} = await fixture(t, {'server.mjs':
+    "import http from 'node:http'; http.createServer((_, res) => res.end('MCP preview')).listen(process.env.PORT, '127.0.0.1');"});
+  const git = async (...args) => (await execute('git', args, {cwd:repository, windowsHide:true})).stdout.trim();
+  const workspace = await createWorkspace({repository, local, git, origin:'http://127.0.0.1:4310', token:'test',
+    providerOptions: async () => ({})});
+  t.after(() => workspace.close());
+  const call = async (name, args = {}) => {
+    const response = await workspace.mcp({jsonrpc:'2.0', id:1, method:'tools/call', params:{name, arguments:args}}, true);
+    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
+    return response.result.structuredContent;
+  };
+  await call('configure_project_preview', {mode:'web', cwd:'.', argv:['node','server.mjs'], url:'http://127.0.0.1:{port}'});
+  await call('start_project_preview');
+  const started = await until(async () => {
+    const state = await workspace.dispatch('GET', 'design/app-process');
+    return state.state === 'running' && state;
+  });
+  assert.equal(await fetch(started.url).then(response => response.text()), 'MCP preview');
+  await call('stop_project_preview');
+  assert.equal((await workspace.dispatch('GET', 'design/app-process')).state, 'stopped');
+});
+
+test('preview health retries a failed render and treats a clean shutdown as a pause', async t => {
+  let checks = 0;
+  const verifyPreview = async () => ({passed:++checks > 2, detail:'The page was blank.'});
+  const {repository, local, environment, store} = await fixture(t, {'server.mjs':
+    "import http from 'node:http'; http.createServer((_, res) => res.end('Ready')).listen(process.env.PORT, '127.0.0.1');"}, {verifyPreview});
+  await environment.dispatch('POST', 'design/app-process/setup', {mode:'web', argv:['node','server.mjs'], url:'http://127.0.0.1:{port}'});
+  await environment.dispatch('POST', 'design/app-process/start');
+  await until(async () => (await environment.dispatch('GET', 'design/app-process')).state === 'running');
+  assert.deepEqual(await environment.observePreview(), []);
+  await delay(2600);
+  assert.match((await environment.observePreview())[0].error, /blank/);
+  await delay(2600);
+  assert.equal((await environment.observePreview())[0].error, '');
+  await environment.close();
+  const restored = createEnvironment({repository, local, store, projectId:'fixture', verifyPreview});
+  t.after(() => restored.close());
+  const saved = await restored.dispatch('GET', 'design/app-process');
+  assert.equal(saved.state, 'stopped');
+  assert.equal(saved.wanted, true);
+  assert.deepEqual(await restored.observePreview(), []);
+  await restored.dispatch('POST', 'design/app-process/auto');
+  await until(async () => (await restored.dispatch('GET', 'design/app-process')).state === 'running');
+  await restored.dispatch('POST', 'design/app-process/stop');
+});
+
+test('a completed build refreshes its owned preview and respects a user stop', async t => {
+  const {repository, environment} = await fixture(t, {
+    'server.cjs': "const http = require('node:http'), fs = require('node:fs'); const greeting = fs.readFileSync('greeting.txt', 'utf8'); http.createServer((_, res) => res.end(greeting)).listen(process.env.PORT, '127.0.0.1');",
+    'greeting.txt': 'Before'
+  });
+  await environment.dispatch('POST', 'design/app-process/setup', {mode:'web', argv:['node','server.cjs'], url:'http://127.0.0.1:{port}'});
+  await environment.dispatch('POST', 'design/app-process/start');
+  const before = await until(async () => {
+    const value = await environment.dispatch('GET', 'design/app-process');
+    return value.state === 'running' && value;
+  });
+  assert.equal(await fetch(before.url).then(response => response.text()), 'Before');
+  await writeFile(path.join(repository, 'greeting.txt'), 'After');
+  await execute('git', ['add', 'greeting.txt'], {cwd:repository});
+  await execute('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'Update greeting'], {cwd:repository});
+  const revision = (await execute('git', ['rev-parse', 'HEAD'], {cwd:repository})).stdout.trim();
+  await environment.refreshAfterBuild({revision});
+  const after = await until(async () => {
+    const value = await environment.dispatch('GET', 'design/app-process');
+    return value.state === 'running' && value.revision === revision && value;
+  });
+  assert.equal(await fetch(after.url).then(response => response.text()), 'After');
+  await environment.dispatch('POST', 'design/app-process/stop');
+  await environment.refreshAfterBuild({revision});
+  assert.equal((await environment.dispatch('GET', 'design/app-process')).state, 'stopped');
+});
 
 test('discovers tracked project commands and includes bounded instructions in a portable profile', async t => {
   const {repository, environment, store} = await fixture(t, {

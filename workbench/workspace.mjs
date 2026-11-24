@@ -16,7 +16,7 @@ import {repairRuntime} from './coordinator/health-repair.mjs';
 
 const environmentRoutes = new Set([
   'environment','project-capabilities','project-instruction','design/preview',
-  'design/app-process','design/app-process/setup','design/app-process/start','design/app-process/stop','design/app-process/auto',
+  'design/app-process','design/app-process/setup','design/app-process/start','design/app-process/stop','design/app-process/auto','design/prepare-build',
   'prepare','cleanup/preview','cleanup','attachments','profile/import','profile/export','profile/parse',
   'capabilities','preview','preview/setup','preview/start','preview/stop'
 ]);
@@ -44,7 +44,7 @@ export async function recoverProjectPreview({incident, signal, history = [], env
   return {passed: false, detail: diagnosis.summary || restored.detail, ...(needsUser && {nextAction})};
 }
 
-export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair}) {
+export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair,configureReviewPreviews}) {
   const quality = await createQuality({repository});
   const tasks = await createStore(repository,{qualityPin:quality.pin,qualityCheck:quality.taskCheck,
     browserPreview: () => environment.browserPreview(), browserArtifacts: local && path.join(local, 'browser-checks')});
@@ -53,13 +53,15 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     defaultProfile:()=>WorkbenchProfile.initial(presetDocuments),
     savedPreview:async()=> (await coordinator.dispatch('design')).preview,
     selectedAgent,
-    isActive:()=>coordinator?.busy?.() || false,
+    isActive:({coordinator: fromCoordinator} = {}) => fromCoordinator ?
+      coordinator?.busyForProjectSetup?.() || false : coordinator?.busy?.() || false,
     verifyPreview: diagnostics?.verifyPreview?.bind(diagnostics)
   });
   const readEnvironment = (route,params=new URLSearchParams()) => environment.dispatch('GET',route,{},params);
   coordinator = await createCoordinator({
     repository,store:tasks,git,review,push,providerOptions,
     stageToolCall:call, superviseFailures:true, prepareBuild: environment.prepareBuild, prepareBrowserRecovery: environment.prepareBrowserRecovery,
+    refreshPreviewAfterBuild: environment.refreshAfterBuild,
     runtimeHealth: diagnostics && !process.env.BRANCH_REVIEW_PREVIEW_PARENT && {
       directory: diagnostics.healthDirectory,
       observe: () => observeWorkspace(diagnostics, environment.observePreview),
@@ -68,7 +70,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
       idle: canRepair,
       repair: async (incident, directory, signal, mayApply, prior) => repairRuntime({
         repository: diagnostics.repository,
-        incident, directory, signal, mayApply, prior, packaged: diagnostics.packaged,
+        incident, directory, signal, mayApply, prior, stageToolCall: call, packaged: diagnostics.packaged,
         profile: await tasks.getProfile(), providerOptions: await providerOptions()
       }),
       restartRequired: row => diagnostics.notifyRestartRequired(row)
@@ -87,9 +89,9 @@ export async function createWorkspace({repository,local,git,origin,token,review,
       upgradeAvailable:false,managed:true};
   }
 
-  async function prepare() {
+  async function prepare(context = {}) {
     await tasks.initialize();
-    return environment.dispatch('POST','prepare',{},new URLSearchParams());
+    return environment.prepare({}, context);
   }
 
   async function bootstrap() {
@@ -107,18 +109,23 @@ export async function createWorkspace({repository,local,git,origin,token,review,
   const qualityCall = (method,operation,data={},params=new URLSearchParams()) =>
     quality.dispatch(method,operation,data,params);
 
-  async function call(name,values,{signal} = {}) {
+  async function call(name,values,{signal, coordinator: fromCoordinator = false} = {}) {
     if (name.startsWith('quality_')) return quality.mcp(name,values);
     switch(name) {
       case 'find_local_projects': return {projects:await discovery.findLocalProjects(values.query)};
       case 'get_profile': return tasks.getProfile();
-      case 'inspect_run': return inspectRun(repository,values.runId);
+      case 'inspect_run': return inspectRun(repository,values.runId,values);
       case 'project_capabilities': return readEnvironment('project-capabilities');
       case 'inspect_environment': return readEnvironment('environment');
-      case 'prepare_environment': return prepare();
+      case 'prepare_environment': return prepare({coordinator: fromCoordinator});
+      case 'configure_project_preview': return environment.dispatch('POST','design/app-process/setup',values,new URLSearchParams());
       case 'start_project_preview': return environment.dispatch('POST','design/app-process/auto',
         {...values,retry:true,signal},new URLSearchParams());
       case 'restart_project_preview': return environment.recoverPreview({signal, previewId:values.id});
+      case 'stop_project_preview': return environment.dispatch('POST','design/app-process/stop',{},new URLSearchParams());
+      case 'configure_review_previews':
+        if (!configureReviewPreviews) throw Error('Review preview setup is unavailable.');
+        return configureReviewPreviews(values);
       case 'preview_cleanup': return environment.dispatch('POST','cleanup/preview',{},new URLSearchParams());
       case 'clean_environment': return environment.dispatch('POST','cleanup',values,new URLSearchParams());
       case 'set_repair_budget':
@@ -174,6 +181,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     mcp:(message,verified)=>workspaceMcp(message,{call,getProfile:()=>tasks.getProfile(),verified}),
     busy:()=>coordinator.busy?.() || false,
     suspendRecovery:()=>coordinator.suspendRecovery(),
+    prepareExit:()=>environment.close(),
     close:()=>{coordinator.close?.();void environment.close();void quality.dispose();}
   };
 }

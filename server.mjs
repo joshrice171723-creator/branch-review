@@ -24,7 +24,7 @@ import {publishedAction,publishedComplete} from './published-review.mjs';
 import { Delivery } from './delivery.mjs';
 import { publish, target } from './publish.mjs';
 import {providerId,probeProvider} from './providers.mjs';
-import {readRecipe,reviewRecipe,saveRecipe} from './project-settings.mjs';
+import {readRecipe,reviewRecipe,saveRecipe,saveSuggestedRecipe} from './project-settings.mjs';
 import {browserQaResult} from './browser-qa.mjs';
 import {readDelivery,saveDelivery,deployProject,createReviewPr} from './project-delivery.mjs';
 import { MuseQa } from './muse-qa.mjs';
@@ -34,7 +34,7 @@ import { previewHealth } from './health.mjs';
 import {groupedBranches,consolidateFixBranches,reviewRoot,focusRetest,mergeFixPlan,carryUnchangedChecks,frontendOnly,colorFixPlan,appearanceFixPlan} from './fix-review.mjs';
 
 const token = randomBytes(32).toString('hex');
-let busy = false, preparedFix=null;
+let busy = false, preparedFix=null, pendingPreviewSetup;
 let displayDefaultBranch=await defaultBranch().catch(()=>null);
 const store = new ReviewStore(local);
 const qaRunning=()=>store.records.some(record=>record.browserQa?.some(run=>run.status==='running'));
@@ -96,7 +96,17 @@ async function readyFix(ref,priorId){
 async function startCandidate(ref, previousReviewId, expectedCommit, workbenchRun=null) {
   delete state.previewVersion;
   if(project.error)throw Error(project.error);
-  if(project.needsSetup && !await reviewRecipe(local,repo))throw Error('Set up preview commands in More tools → Workspace before opening a review.');
+  if (project.needsSetup && !await reviewRecipe(local,repo)) {
+    if (pendingPreviewSetup) {
+      progress('Checking project preview setup');
+      await pendingPreviewSetup;
+    }
+    if (!await reviewRecipe(local,repo)) {
+      const error = Error('Set up isolated review previews in Settings → Workspace before opening a review.');
+      error.recoveryOwner = 'user-input';
+      throw error;
+    }
+  }
   if(!workbenchRun) previousReviewId ||= store.records.findLast(record=>record.identity.ref===ref)?.id;
   const checking=workbenchRun?Promise.resolve(null):readyFix(ref,previousReviewId);
   const sourceCheck=expectedCommit?git('rev-parse',ref).then(sha=>{if(sha!==expectedCommit)throw Error('Choose an unchanged, committed fix job before retesting.');}):Promise.resolve();
@@ -211,6 +221,12 @@ async function active(id, checkFresh = false) {
 function json(res,status,data) { res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(data)); }
 async function body(req) { let buffer=''; for await(const chunk of req) { buffer += chunk; if(Buffer.byteLength(buffer)>16_000_000) throw new Error('Request too large'); } return JSON.parse(buffer || '{}'); }
 const diagnostics=()=>setupChecks({git,run,defaultBranch,project,recipe:()=>reviewRecipe(local,repo),agent:selectedAgent(),probe:probeProvider,npm:npmEntry});
+async function configureReviewPreviews(data) {
+  if (qaRunning()) throw Error('Stop browser QA before changing project setup.');
+  if (jobs.rows.some(job => job.status === 'running')) throw Error('Wait for the running review or job before changing setup.');
+  if (state.original || state.changed) throw Error('Stop previews before changing project setup. Your reviews remain saved.');
+  return saveRecipe(local, data);
+}
 async function mutate(endpoint, data) {
   if (endpoint === '/api/workbench-repair') return createRepair(repo,data,git);
   if (endpoint === '/api/workbench-push') {
@@ -291,14 +307,11 @@ async function mutate(endpoint, data) {
     const agent=selectedAgent(),connection=await probeProvider(agent.provider,agent.executable);if(connection.status!=='ready')throw Error(connection.message);
     const {suggestPreviewRecipe}=await import('./desktop/welcome-agent.cjs');
     const recipe=await suggestPreviewRecipe(agent.provider,repo,data.description,agent.executable);
-    if(!recipe)return {configured:false};
-    if(!await readRecipe(local))await saveRecipe(local,recipe);
-    return {configured:true};
+    if(recipe && !await reviewRecipe(local,repo))await saveSuggestedRecipe(local,recipe);
+    return {configured:Boolean(await reviewRecipe(local,repo))};
   }
   if(endpoint==='/api/project-settings'){
-    if(jobs.rows.some(job=>job.status==='running'))throw Error('Wait for running jobs before changing setup.');
-    if(state.original || state.changed)throw Error('Stop previews before changing project setup. Your reviews remain saved.');
-    return saveRecipe(local,data);
+    return configureReviewPreviews(data);
   }
   if(['/api/start','/api/stop','/api/retest','/api/candidate','/api/reset-data','/api/ship','/api/publish','/api/project-deploy','/api/pull-request','/api/project-delivery'].includes(endpoint) && jobs.rows.some(job=>job.status==='running'))throw new Error('Wait for the running review job before changing environments or delivering code.');
   if(endpoint==='/api/project-delivery')return saveDelivery(local,data);
@@ -509,7 +522,7 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagn
       const identity = JSON.stringify([repo, req.method, url.pathname, url.search, data]);
       const title = url.pathname.replace(/^\/api\/(?:workspace\/)?/, '').replace(/[/-]+/g,' ');
       observe = async error => {
-        if (error?.recoveryOwner === 'project-preview' || ['OPERATION_CANCELLED','USER_CANCELLED'].includes(error?.code)) return;
+        if (['project-preview','user-input'].includes(error?.recoveryOwner) || ['OPERATION_CANCELLED','USER_CANCELLED'].includes(error?.code)) return;
         try {
           await diagnostics.operation(title.charAt(0).toUpperCase() + title.slice(1), identity, error,
             req.method + ' ' + url.pathname, req.method === 'GET' && !url.search ? url.pathname : undefined, repo);
@@ -701,7 +714,8 @@ async function bindLoopback(server, port, allowFallback) {
   return server.address().port;
 }
 
-export async function startServer({allowPortFallback=false,preferredPort,desktop=false,diagnostics} = {}) {
+export async function startServer({allowPortFallback=false,preferredPort,desktop=false,diagnostics,previewSetup} = {}) {
+  pendingPreviewSetup = previewSetup;
   const controllerFallback = allowPortFallback && !localOrigin.hasPortOverride;
   const requestedPort = controllerFallback && localOrigin.isControllerPort(preferredPort) ? preferredPort : localOrigin.port;
   let context, workspace, desktopExiting = false, pendingWrites = 0;
@@ -719,6 +733,12 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
     const origin = `http://${host}`;
     setReviewPreviewOrigin(origin);
     workspace = await createWorkspace({repository:repo,local,git,origin,token,selectedAgent,
+      configureReviewPreviews: async data => {
+        if (busy) throw Error('Wait for the running review or job before changing setup.');
+        busy = true;
+        try { return await configureReviewPreviews(data); }
+        finally { busy = false; }
+      },
       diagnostics, canRepair:()=>!desktopExiting && !pendingWrites && !busy && !qaRunning() &&
         !jobs.rows.some(job => job.status === 'running'),
       providerOptions:()=>Object.fromEntries(Object.entries(agentSettings.executables || {}).map(([provider,executable])=>[provider,{executable}])),
@@ -776,7 +796,11 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
         resumeRecovery();
       };
     }
-    return {origin,port,...(desktop && {beginDesktopExit})};
+    async function finishDesktopExit() {
+      if (!desktopExiting) throw Error('Prepare to leave this project first.');
+      await workspace.prepareExit();
+    }
+    return {origin,port,...(desktop && {beginDesktopExit,finishDesktopExit})};
   } catch (error) {
     for (const listener of listeners) if (listener.listening) listener.close();
     workspace?.close();

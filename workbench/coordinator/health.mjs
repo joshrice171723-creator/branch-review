@@ -8,6 +8,10 @@ import {healthRegression} from './health-regression.mjs';
 const maxAttempts = 5;
 const clean = value => redact(String(value || '')).slice(0, 2000);
 const evidenceText = value => redact(String(value || ''));
+const legacyComparisonActions = new Map([
+  ['Fetch origin and set its default branch before reviewing this repository.', 'Configure the origin remote and fetch its default branch.'],
+  ['This is the first commit. Choose another comparison baseline.', 'Choose another branch or comparison baseline.']
+]);
 
 export async function createHealthReviewer({directory, workspace, observe, repair, recoverProject, verifyRegression, restartRequired, idle, interval = 3000,
   clock = Date.now, start = true}) {
@@ -36,6 +40,14 @@ export async function createHealthReviewer({directory, workspace, observe, repai
   for (const row of currentRows()) {
     try { row.regression = healthRegression(row.regression); }
     catch { row.regression = null; }
+    const comparisonAction = row.title === 'Comparison' && !row.files && legacyComparisonActions.get(row.error);
+    if (comparisonAction && ['detected', 'repairing', 'retrying', 'attention'].includes(row.state)) {
+      row.state = 'attention';
+      row.note = row.error;
+      row.nextAction = comparisonAction;
+      finishAttempt(row, 'needs-action', row.note);
+      continue;
+    }
     if (row.state === 'repairing') failed(row, 'Branch Review closed before the attempt finished.');
     if (row.owner === 'project' && row.state === 'attention' && row.attempts < maxAttempts &&
         /(?:ask|request|tell).*coordinator|coordinator.*(?:ask|request|tell)/i.test(row.nextAction || '')) {

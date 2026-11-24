@@ -159,9 +159,11 @@ export async function runProvider(options) {
           const exitCode = Number.isInteger(item.exit_code) ? item.exit_code : undefined;
           const failed = Boolean(item.error) || item.status === 'failed' || (exitCode !== undefined && exitCode !== 0);
           const milliseconds = start === undefined ? undefined : Date.now() - start;
-          onTool?.({name, status: failed ? 'failed' : 'completed', milliseconds, exitCode});
+          const detail = failed && item.type === 'mcp_tool_call' && typeof item.error?.message === 'string'
+            ? redact(item.error.message).slice(0, 500) : undefined;
+          onTool?.({name, status: failed ? 'failed' : 'completed', milliseconds, exitCode, ...(detail && {detail})});
           await report?.(name + (failed ? ' failed' : ' completed') + (milliseconds === undefined ? '' :
-            ' · ' + (milliseconds / 1000).toFixed(1) + ' s'));
+            ' · ' + (milliseconds / 1000).toFixed(1) + ' s') + (detail ? ': ' + detail : ''));
         }
       }
     }
@@ -200,9 +202,10 @@ export async function runProvider(options) {
   }
 }
 
-export function auditSchema(stage, withCriteria) {
+export function auditSchema(stage, criteria) {
   const fields = {
-    verdict: {type: 'string', enum: ['pass', 'replan', 'needs_evidence', ...(stage === 'plan_review' ? [] : ['repair', 'run_check'])]},
+    verdict: {type: 'string', enum: stage === 'plan_review' ? ['pass', 'replan', 'needs_method'] :
+      ['pass', 'replan', 'needs_evidence', 'repair', 'run_check']},
     check: {type: ['string', 'null'], description: 'Pinned after-build check name for run_check, or null.'},
     reason: {type: 'string'},
     scope: {anyOf: [{type: 'null'}, {type: 'object', properties: {
@@ -212,9 +215,9 @@ export function auditSchema(stage, withCriteria) {
       observed: {type: 'string'}
     }, required: ['basis', 'requirement', 'before', 'observed'], additionalProperties: false}]}
   };
-  if (withCriteria) {
+  if (criteria) {
     fields.criteria = {type: 'array', items: {type: 'object', properties: {
-      id: {type: 'string'},
+      id: {type: 'string', ...(Array.isArray(criteria) ? {enum: criteria.map(item => item.id)} : {})},
       verdict: {type: 'string', enum: ['pass', 'fail', 'not_applicable', 'unverified']},
       reason: {type: 'string'},
       evidence: {type: 'array', items: {type: 'string'}}

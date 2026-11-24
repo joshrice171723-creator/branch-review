@@ -1,6 +1,6 @@
 import path from 'node:path';
-import {createHash} from 'node:crypto';
-import {readFile,writeFile,rename,lstat} from 'node:fs/promises';
+import {createHash,randomUUID} from 'node:crypto';
+import {readFile,writeFile,rename,lstat,link,unlink} from 'node:fs/promises';
 
 export function validateRecipe(value){
   if(!value || typeof value!=='object' || Array.isArray(value))throw Error('Enter project settings as an object.');
@@ -46,7 +46,30 @@ export async function reviewRecipe(local, directory) {
 }
 export async function saveRecipe(local,value){
   const recipe=validateRecipe(value),file=path.join(local,'project-settings.json');
-  await writeFile(file+'.tmp',JSON.stringify(recipe,null,2));await rename(file+'.tmp',file);return recipe;
+  const temporary=path.join(local,'project-settings.'+randomUUID()+'.tmp');
+  try {
+    await writeFile(temporary,JSON.stringify(recipe,null,2),{flag:'wx'});
+    await rename(temporary,file);
+    return recipe;
+  } finally {
+    await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error;});
+  }
+}
+
+export async function saveSuggestedRecipe(local, value) {
+  const recipe = validateRecipe(value);
+  const file = path.join(local, 'project-settings.json');
+  const temporary = path.join(local, 'project-settings.' + randomUUID() + '.tmp');
+  try {
+    await writeFile(temporary, JSON.stringify(recipe, null, 2), {flag: 'wx'});
+    await link(temporary, file);
+    return recipe;
+  } catch (error) {
+    if (error.code === 'EEXIST') return null;
+    throw error;
+  } finally {
+    await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  }
 }
 
 export function previewComposeName(namespace, side) {

@@ -1,12 +1,12 @@
 import {digest} from '../reviews.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,mkdir} from 'node:fs/promises';
+import {mkdtemp,writeFile,mkdir,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {validateRecipe,saveRecipe,expandRecipe,previewComposeName,previewComposeStop} from '../project-settings.mjs';
+import {validateRecipe,readRecipe,saveRecipe,saveSuggestedRecipe,expandRecipe,previewComposeName,previewComposeStop} from '../project-settings.mjs';
 import {WebPreviews} from '../web-project.mjs';
 import {browserChecks,beginBrowserQa,browserQaResult} from '../browser-qa.mjs';
 import {validateDelivery,saveDelivery,deployProject} from '../project-delivery.mjs';
@@ -17,6 +17,17 @@ test('custom project recipes validate commands and isolate substitutions',()=>{
   const expanded=expandRecipe(recipe,{port:1234,side:'original',commit:'abc',data:'/private',root:'/repo'});
   assert.equal(expanded.start.at(-1),'1234');assert.equal(expanded.env.DB,'test_original_abc');assert.equal(expanded.env.DATA,'/private');
   for(const value of [{start:'python server.py'},{start:['node'],directory:'../outside'},{start:['node'],readyPath:'//outside'},{start:['node'],env:{BAD:1}}])assert.throws(()=>validateRecipe(value));
+});
+
+test('a preview suggestion never replaces manually saved settings', async t => {
+  const local = await mkdtemp(path.join(os.tmpdir(), 'review-suggestion-'));
+  t.after(() => rm(local, {recursive:true, force:true}));
+  const manual = {start:['node', 'manual.mjs']};
+  const suggestion = {start:['node', 'suggested.mjs']};
+  await Promise.all([saveRecipe(local, manual), saveSuggestedRecipe(local, suggestion)]);
+  assert.deepEqual((await readRecipe(local)).start, manual.start);
+  assert.equal(await saveSuggestedRecipe(local, suggestion), null);
+  assert.deepEqual((await readRecipe(local)).start, manual.start);
 });
 
 test('Compose project names stay isolated across workspace and review slots', () => {

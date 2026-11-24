@@ -1,11 +1,64 @@
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import test from 'node:test';
 import {runInNewContext} from 'node:vm';
 import path from 'node:path';
+import os from 'node:os';
+import {setTimeout as delay} from 'node:timers/promises';
+import welcomeAgent from '../desktop/welcome-agent.cjs';
 
 const script=await readFile(new URL('../desktop/welcome.js',import.meta.url),'utf8');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('canceling optional preview discovery stops its CLI process tree',async t=>{
+  const folder=await mkdtemp(path.join(os.tmpdir(),'branch-review-suggestion-'));
+  const marker=path.join(folder,'processes.json'), cli=path.join(folder,'fake-codex.cjs');
+  const controller=new AbortController();
+  t.after(async()=>{controller.abort();await rm(folder,{recursive:true,force:true,maxRetries:3});});
+  await writeFile(cli, `
+    const fs = require('node:fs');
+    const {spawn} = require('node:child_process');
+    if (process.argv.includes('mcp')) { console.log('[]'); process.exit(0); }
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio:'ignore'});
+    fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify([process.pid, child.pid]));
+    setInterval(() => {}, 1000);
+  `);
+  const pending=welcomeAgent.suggestPreviewRecipe('codex',folder,'',cli,{signal:controller.signal});
+  let processes;
+  for(let attempt=0;attempt<100 && !processes;attempt++){
+    processes=await readFile(marker,'utf8').then(JSON.parse,()=>null);
+    if(!processes)await delay(100);
+  }
+  assert.ok(processes,'The fixture CLI did not start.');
+  controller.abort(Error('Suggestion cancelled.'));
+  await assert.rejects(pending,/Suggestion cancelled/);
+  const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
+  for(let attempt=0;attempt<50 && processes.some(alive);attempt++)await delay(100);
+  assert.ok(processes.every(pid=>!alive(pid)),'The cancelled CLI left a process running.');
+});
+
+test('canceling preview discovery also stops a pending connector scan',async t=>{
+  const folder=await mkdtemp(path.join(os.tmpdir(),'branch-review-scan-'));
+  const marker=path.join(folder,'process.json'), cli=path.join(folder,'fake-codex.cjs');
+  const controller=new AbortController();
+  t.after(async()=>{controller.abort();await rm(folder,{recursive:true,force:true,maxRetries:3});});
+  await writeFile(cli, `
+    require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));
+    setInterval(() => {}, 1000);
+  `);
+  const pending=welcomeAgent.suggestPreviewRecipe('codex',folder,'',cli,{signal:controller.signal});
+  let pid;
+  for(let attempt=0;attempt<100 && !pid;attempt++){
+    pid=await readFile(marker,'utf8').then(Number,()=>null);
+    if(!pid)await delay(100);
+  }
+  assert.ok(pid,'The connector scan did not start.');
+  controller.abort(Error('Suggestion cancelled.'));
+  await assert.rejects(pending,/Suggestion cancelled/);
+  const alive=()=>{try{process.kill(pid,0);return true;}catch{return false;}};
+  for(let attempt=0;attempt<50 && alive();attempt++)await delay(100);
+  assert.equal(alive(),false);
+});
 
 function screen(git,probe,chat){
   const nodes=new Map(), openings=[];

@@ -75,3 +75,16 @@ test('Windows recovery removes only absent processes belonging to the exact chec
   assert.equal(existsSync(path.join(directory,'web.pid')),true);
   assert.equal(existsSync(path.join(directory,'worker.pid')),true);
 });
+
+test('local comparisons work without a remote and missing main requests project setup', async () => {
+  git('update-ref', '-d', 'refs/remotes/origin/main');
+  try {
+    const local = await comparison('refs/heads/intake-controls', 'parent');
+    assert.equal(local.base, base);
+    assert.equal(local.main, null);
+    await assert.rejects(comparison('refs/heads/intake-controls', 'main'), error =>
+      error.code === 'MISSING_DEFAULT_BRANCH' && error.recoveryOwner === 'user-input');
+  } finally {
+    git('update-ref', 'refs/remotes/origin/main', base);
+  }
+});

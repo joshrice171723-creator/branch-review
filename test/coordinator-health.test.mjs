@@ -148,6 +148,8 @@ test('observes host requests during use and excludes the loaded project', async 
   complete({...request, initiatorOrigin: project});
   fail({...request, url: project + '/example', initiatorOrigin: origin, error: 'Connection failed'});
   contents.emit('console-message', {level: 'error', frame: {url: project}, message: 'Project error'});
+  fail({...request, initiatorOrigin: origin, error: 'net::ERR_NETWORK_IO_SUSPENDED'});
+  contents.emit('console-message', {level:'error', frame:{url:origin}, message:'Failed to load resource: net::ERR_NETWORK_IO_SUSPENDED'});
   assert.deepEqual((await monitor.observations()).filter(row => row.error), []);
 
   complete({...request, initiatorOrigin: origin});
@@ -292,6 +294,47 @@ test('repairs shipped host source without a Git checkout at the installation', a
   assert.deepEqual(result.files, ['host.mjs']);
   assert.equal((await readFile(file,'utf8')).trim(), 'export default true;');
   await assert.rejects(readFile(path.join(repository,'.git','HEAD')), {code:'ENOENT'});
+});
+
+test('app repair can call active project MCP tools and closes the connection', async t => {
+  const repository = await temp(t), directory = await temp(t);
+  await gitRead(repository, 'init', '-b', 'main');
+  await writeFile(path.join(repository, 'app.mjs'), 'export default true;\n');
+  await gitRead(repository, 'add', '.');
+  await gitRead(repository, '-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','fixture');
+  let url;
+  const result = await repairRuntime({repository, directory, incident:{owner:'host',error:'fixture error'},
+    profile:{active:'fast',profiles:{fast:{stages:{build:{provider:'Codex'}}}}},
+    signal:new AbortController().signal, mayApply:() => true,
+    stageToolCall:async name => ({project:'fixture', tool:name}),
+    invoke:async ({stageMcp}) => {
+      url = stageMcp.url;
+      const response = await fetch(url, {method:'POST', body:JSON.stringify({jsonrpc:'2.0',id:1,
+        method:'tools/call',params:{name:'project_capabilities',arguments:{}}})}).then(reply => reply.json());
+      assert.deepEqual(response.result.structuredContent, {project:'fixture',tool:'project_capabilities'});
+      return {text:JSON.stringify({needsAction:true,summary:'Fixture checked.',nextAction:'Choose a project.'})};
+    }});
+  assert.equal(result.needsAction, true);
+  await assert.rejects(fetch(url, {method:'POST'}));
+});
+
+test('a saved missing-remote comparison does not restart app repair', async t => {
+  const directory = await temp(t);
+  await writeFile(path.join(directory, 'incidents.json'), JSON.stringify([{
+    id:'old-comparison', key:'host/operation:old', owner:'host', title:'Comparison',
+    error:'Fetch origin and set its default branch before reviewing this repository.',
+    state:'repairing', reported:true, attempts:1, observations:2,
+    history:[{number:1,outcome:'running'}]
+  }]));
+  let repairs = 0;
+  const reviewer = await createHealthReviewer({directory, start:false, observe:() => [], idle:() => true,
+    repair:async () => { repairs++; }});
+  t.after(() => reviewer.close());
+  await reviewer.tick();
+  const [incident] = reviewer.status().incidents;
+  assert.equal(incident.state, 'attention');
+  assert.match(incident.nextAction, /origin remote/);
+  assert.equal(repairs, 0);
 });
 
 test('deduplicates an unfamiliar operation and preserves its exact verification after restart', async t => {

@@ -439,12 +439,13 @@ function connectProjectConversation(initial) {
     if (busy) return;
     busy = send.disabled = true;
     showContext();
+    projectConversation.refreshPreview?.();
     status.textContent = label;
     try {
       await action();
       status.textContent = "";
     } catch (error) { status.textContent = error.message; }
-    finally { busy = send.disabled = false; showContext(); }
+    finally { busy = send.disabled = false; showContext(); projectConversation.refreshPreview?.(); }
   }
   async function submit(action, body, submitted) {
     if (busy) return;
@@ -622,7 +623,7 @@ function connectProjectConversation(initial) {
   const initialSlice = initial?.roadmap?.flatMap(row => row.slices.map(item => [item.id, row.title + " / " + item.title]))
     .find(row => row[0] === stored.slice);
   if (initialSlice) slice = {section: "slice", id: initialSlice[0], label: initialSlice[1]};
-  return {open, update, buildDecision: showBuildDecision, current: () => state, context: showContext,
+  return {open, update, buildDecision: showBuildDecision, current: () => state, context: showContext, isWorking: () => busy,
     setPreview(value) { livePreview = value; showContext(); },
     capturePreview(options) {
       mockupSource.value = "screen";
