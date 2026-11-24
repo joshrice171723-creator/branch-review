@@ -355,7 +355,8 @@ export function createEnvironment({repository, store, local, projectId, defaultP
             }
           }
           if (!waitForReady && ++attempts >= 10) break;
-          if (waitForReady && Date.now() - lastProgress >= 60000) return {status, connectionError, stalled: true};
+          const composeStarting = signal && state.compose && state.state === 'starting';
+          if (waitForReady && !composeStarting && Date.now() - lastProgress >= 60000) return {status, connectionError, stalled: true};
           await delay(500, undefined, {signal});
           state = await app.status();
         }

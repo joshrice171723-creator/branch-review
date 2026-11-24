@@ -5,6 +5,7 @@ import {spawn,spawnSync} from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {setTimeout as delay} from 'node:timers/promises';
 
 const exists=file=>access(file).then(()=>true,()=>false);
 export function hotReloadable(kind,files){
@@ -57,19 +58,30 @@ export class WebPreviews{
   }
   async stop(side){
     const entry=this.running.get(side);if(!entry)return;
-    for(const child of entry.children || [entry.child])if(child.pid && child.exitCode===null){
-      if(process.platform==='win32')await this.run('taskkill',['/PID',String(child.pid),'/T','/F']).catch(error=>{if(child.exitCode===null)throw error;});
-      else child.kill();
-    }
-    for(const stop of entry.composeStops || []) await this.run(stop.file,stop.args,{cwd:entry.cwd,env:entry.env});
-    this.running.delete(side);
+    entry.stopping ??= (async()=>{
+      const failures=[];
+      for(const child of entry.children || [entry.child])if(child.pid && child.exitCode===null && !child.signalCode){
+        try{
+          if(process.platform==='win32')await this.run('taskkill',['/PID',String(child.pid),'/T','/F']);
+          else child.kill();
+        }catch(error){if(child.exitCode===null && !child.signalCode)failures.push(error);}
+      }
+      for(const stop of entry.composeStops || []){
+        try{await this.run(stop.file,stop.args,{cwd:entry.cwd,env:entry.env});}
+        catch(error){failures.push(error);}
+      }
+      if(failures.length)throw Error(failures.map(error=>error.message).join('\n'));
+      this.running.delete(side);
+    })().finally(()=>{entry.stopping=null;});
+    await entry.stopping;
   }
   async healthy(side,sha){
     const entry=this.running.get(side);
-    if(!entry || entry.sha!==sha || (entry.children || [entry.child]).some(child=>child.exitCode!==null || child.signalCode))return false;
+    if(!entry || entry.stopping || entry.sha!==sha || (entry.children || [entry.child]).some(child=>child.exitCode!==null || child.signalCode))return false;
     return fetch(`http://127.0.0.1:${entry.port}${entry.readyPath || '/'}`,{signal:AbortSignal.timeout(2000)}).then(r=>r.ok,()=>false);
   }
-  async prepare(side,sha,cwd,checkout){
+  async prepare(side,sha,cwd,checkout,signal){
+    signal?.throwIfAborted();
     if(await this.healthy(side,sha))return this.running.get(side).preview;
     const running=this.running.get(side);
     if(running && path.resolve(running.preview.directory)===path.resolve(cwd) && hotReloadable(running.preview.kind,[]) && !await reviewRecipe(this.local,cwd) && await this.healthy(side,running.sha)){
@@ -81,19 +93,21 @@ export class WebPreviews{
       }
     }
     await this.stop(side);await checkout();
+    signal?.throwIfAborted();
     const project=await detectProject(cwd);
     if(project.kind==='meta-clinic')throw Error('This branch changed project type. Reopen the repository.');
     const recipe=await reviewRecipe(this.local,cwd) || await this.recipeFallback?.();
-    if(recipe)return this.custom(side,sha,cwd,recipe);
-    if(project.kind==='static')return this.custom(side,sha,cwd,validateRecipe({start:['branch-review-static','{root}','{port}']}));
+    if(recipe)return this.custom(side,sha,cwd,recipe,signal);
+    if(project.kind==='static')return this.custom(side,sha,cwd,validateRecipe({start:['branch-review-static','{root}','{port}']}),signal);
     if(project.needsSetup)throw Error('Set up this project in More tools → Workspace. Enter its setup and start commands.');
     const lock=await readFile(path.join(cwd,'package-lock.json'),'utf8'),key=side+'-dependencies';
     this[key] ||= await readFile(path.join(this.local,key+'.lock'),'utf8').catch(()=>null);
     if(this[key]!==lock || !await exists(path.join(cwd,'node_modules',project.kind))){
       this.progress(`${side} · installing locked npm dependencies (install scripts disabled)`);
-      await this.run(process.execPath,[await npmEntry(),'ci','--ignore-scripts','--no-audit','--no-fund'],{cwd,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
+      await this.run(process.execPath,[await npmEntry(),'ci','--ignore-scripts','--no-audit','--no-fund'],{cwd,signal,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
       this[key]=lock;await writeFile(path.join(this.local,key+'.lock'),lock);
     }
+    signal?.throwIfAborted();
     const port=await freePort(),entry=path.join(cwd,'node_modules',project.kind,project.kind==='vite'?'bin/vite.js':'dist/bin/next');
     const args=project.kind==='vite'?[entry,'--host','127.0.0.1','--port',String(port),'--strictPort']:[entry,'dev','--hostname','127.0.0.1','--port',String(port)];
     const child=spawn(process.execPath,args,{cwd,windowsHide:true,shell:false,env:{...process.env,ELECTRON_RUN_AS_NODE:'1',PORT:String(port)},stdio:['ignore','pipe','pipe']});
@@ -105,13 +119,13 @@ export class WebPreviews{
       while(Date.now()<deadline){
         if(failure || child.exitCode!==null)throw failure || Error(output || 'Preview process exited.');
         if(await this.healthy(side,sha))return preview;
-        await new Promise(resolve=>setTimeout(resolve,300));
+        await delay(300,undefined,{signal});
       }
       throw Error('Preview did not become ready within two minutes. '+output);
     }catch(error){await this.stop(side);throw error;}
     finally{await writeFile(path.join(this.local,side+'.log'),output);}
   }
-  async custom(side,sha,root,recipe){
+  async custom(side,sha,root,recipe,signal){
     const port=await freePort(),data=path.join(this.local,'preview-data',side,sha);
     await mkdir(data,{recursive:true});
     const cwd=await realpath(path.resolve(root,recipe.directory)),base=await realpath(root);
@@ -122,34 +136,57 @@ export class WebPreviews{
         ...(!Object.hasOwn(config.env,'PREVIEW_PARENT_PORT') && {PREVIEW_PARENT_PORT:new URL(this.parentOrigin).port || '80'})})};
     const launch=async args=>{
       const command=await projectCommand(args,env);
-      return (await isolateComposeImages({command,cwd,env,directory:path.join(this.local,'preview-data',side)})).command;
+      return (await isolateComposeImages({command,cwd,env,directory:path.join(this.local,'preview-data',side),signal})).command;
     };
     const stamp=JSON.stringify({sha,recipe});
     this[side+'-setup'] ||= await readFile(path.join(this.local,side+'-setup.json'),'utf8').catch(()=>null);
-    if(this[side+'-setup']!==stamp){for(const args of config.setup){this.progress(`${side} · ${args[0]} setup`);const command=await launch(args);await this.run(command.file,command.args,{cwd,env});}this[side+'-setup']=stamp;await writeFile(path.join(this.local,side+'-setup.json'),stamp);}
-    let output='',failure;const children=[];
+    let output='',failure,starting=true;const children=[];
     const preview={side,sha,web:port,runtime:side,directory:root,kind:'custom',scenario:{public:true,path:'/'}};
-    const composeStops=[];
-    for(const command of [config.start,...config.services.map(service=>service.args)]) {
+    const composeStops=new Map();
+    for(const command of [config.start,...config.services.map(service=>service.args),...config.setup]) {
       const stop=previewComposeStop(command);
-      if(stop) composeStops.push(await projectCommand(stop,env));
+      if(stop) composeStops.set(JSON.stringify(stop),await projectCommand(stop,env));
     }
-    this.running.set(side,{children,sha,port,preview,readyPath:config.readyPath,composeStops,cwd,env});
+    this.running.set(side,{children,sha,port,preview,readyPath:config.readyPath,composeStops:[...composeStops.values()],cwd,env});
     try{
+      if(this[side+'-setup']!==stamp){
+        for(const args of config.setup){
+          this.progress(`${side} · ${args[0]} setup`);
+          const command=await launch(args);
+          await this.run(command.file,command.args,{cwd,env,signal});
+        }
+        this[side+'-setup']=stamp;
+        await writeFile(path.join(this.local,side+'-setup.json'),stamp);
+      }
+      let lastProgress=0;
       for(const service of [...config.services,{name:'preview',args:config.start}]){
         const command=await launch(service.args);
+        signal?.throwIfAborted();
         const child=spawn(command.file,command.args,{cwd,env,windowsHide:true,shell:false,stdio:['ignore','pipe','pipe']});children.push(child);
-        const capture=chunk=>{output=(output+`[${service.name}] `+chunk).slice(-12000);};child.stdout.on('data',capture);child.stderr.on('data',capture);child.on('error',error=>{failure=error;});
+        const capture=chunk=>{
+          output=(output+`[${service.name}] `+chunk).slice(-12000);
+          if(!starting || Date.now()-lastProgress<5000)return;
+          const line=String(chunk).split(/[\r\n]+/).map(line=>line.trim()).filter(Boolean).at(-1);
+          if(line){lastProgress=Date.now();this.progress(`${side} · ${line.slice(0,240)}`);}
+        };
+        child.stdout.on('data',capture);child.stderr.on('data',capture);child.on('error',error=>{failure=error;});
       }
       this.progress(`${side} · waiting for ${config.readyPath}`);
-      const deadline=Date.now()+120000;
+      // Compose owns startup of its dependencies. Keep waiting for HTTP or a
+      // Compose failure while the user can cancel the review.
+      const deadline=signal && previewComposeStop(config.start)?Infinity:Date.now()+120000;
       while(Date.now()<deadline){
-        if(failure || children.some(child=>child.exitCode!==null))throw failure || Error(output || 'A preview service stopped.');
+        signal?.throwIfAborted();
+        if(failure || children.some(child=>child.exitCode!==null || child.signalCode))throw failure || Error(output || 'A preview service stopped.');
         if(await this.healthy(side,sha))return preview;
-        await new Promise(resolve=>setTimeout(resolve,300));
+        await delay(500,undefined,{signal});
       }
       throw Error('Preview did not become ready within two minutes. '+output);
-    }catch(error){await this.stop(side);throw error;}
-    finally{await writeFile(path.join(this.local,side+'.log'),output);}
+    }catch(error){
+      await this.stop(side).catch(cleanup=>{error.message+=`\nCould not stop ${side}: ${cleanup.message}`;});
+      if(!signal?.aborted)error.recoveryOwner='project-preview';
+      throw error;
+    }
+    finally{starting=false;await writeFile(path.join(this.local,side+'.log'),output);}
   }
 }

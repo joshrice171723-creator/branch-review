@@ -199,6 +199,31 @@ async function until(callback) {
   throw Error('The preview did not reach the expected state.');
 }
 
+test('waits for an HTTP response before showing a managed preview as running', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branch-review-ready-'));
+  const app = new PreviewProcess(root, root, async () => root);
+  t.after(async () => {
+    await app.close();
+    await rm(root, {recursive:true, force:true});
+  });
+  await writeFile(path.join(root, 'server.cjs'), `
+    const http = require('node:http');
+    let ready = false;
+    http.createServer((req, res) => {
+      res.statusCode = ready ? 200 : 503;
+      res.end(ready ? 'ready' : 'starting');
+    }).listen(process.env.PORT, '127.0.0.1', () => {
+      console.log('listening');
+      setTimeout(() => { ready = true; }, 1500);
+    });
+  `);
+  await app.setup({mode:'web', argv:['node','server.cjs'], url:'http://127.0.0.1:{port}'});
+  await app.start();
+  await until(async () => (await app.status()).log.includes('listening'));
+  assert.equal((await app.status()).state, 'starting');
+  await until(async () => (await app.status()).state === 'running');
+});
+
 test('passes the workspace origin and its port to a managed web preview', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'branch-review-parent-'));
   const parent = 'http://127.0.0.1:43719';

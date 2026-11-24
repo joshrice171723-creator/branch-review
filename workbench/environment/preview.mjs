@@ -57,6 +57,16 @@ async function listening(url) {
   })))).includes(true);
 }
 
+async function responding(url) {
+  try {
+    const response = await fetch(url, {redirect: 'manual', signal: AbortSignal.timeout(2000)});
+    await response.body?.cancel();
+    return response.status >= 200 && response.status < 400;
+  } catch {
+    return false;
+  }
+}
+
 async function executableOnPath(name, env) {
   const suffixes = process.platform === 'win32' && !path.extname(name) ? ['.exe', '.com', ''] : [''];
   for (const directory of (env.PATH || env.Path || '').split(path.delimiter).filter(Boolean)) {
@@ -197,11 +207,13 @@ export class PreviewProcess {
     await this.inspectServices();
     const owned = this.children.some(({live}) => live);
     let state = this.exitCode != null || this.failure || this.wanted && !owned && !this.suspended ? 'exited' : 'stopped';
-    if (!this.failure && (mode === 'external' || url && await listening(url))) state = owned ? 'running' : 'external';
+    const ready = url && (owned ? await responding(url) : await listening(url));
+    if (!this.failure && (mode === 'external' || ready)) state = owned ? 'running' : 'external';
     else if (!this.failure && owned) state = mode === 'desktop' ? 'running' : 'starting';
     else if (!this.failure && this.starting) state = 'starting';
     return {settings, state, owned, wanted: this.wanted === true, stoppedByUser: this.stoppedByUser === true,
       url, revision: owned ? this.launchCommit : undefined, source: owned ? this.launchSource : undefined,
+      compose: this.children.some(item => item.live && item.compose),
       log: this.log, startedAt: this.startedAt, exitCode: this.exitCode, message: this.failure || ''};
   }
 
@@ -215,7 +227,21 @@ export class PreviewProcess {
         });
         const output = stdout.trim();
         const rows = !output ? [] : output.startsWith('[') ? JSON.parse(output) : output.split(/\r?\n/).map(line => JSON.parse(line));
-        const failed = rows.find(row => row.Health === 'unhealthy' || row.State === 'exited' && Number(row.ExitCode) !== 0);
+        let failed = rows.find(row => row.Health === 'unhealthy' && row.State === 'running');
+        if (!failed) {
+          // Compose may list a stopped container from an earlier launch while
+          // rebuilding. Only report exits from the current launch.
+          for (const row of rows.filter(row => row.State === 'exited' && Number(row.ExitCode) !== 0 && row.ID)) {
+            const result = await execute(item.command.file, ['inspect', '--format', '{{.State.StartedAt}}', row.ID], {
+              cwd: item.cwd, env: item.env, windowsHide: true, timeout: 5000
+            });
+            const started = Date.parse(result.stdout.trim());
+            if (Number.isFinite(started) && started >= this.startedAt) {
+              failed = row;
+              break;
+            }
+          }
+        }
         if (failed) {
           this.failure = 'Preview service ' + (failed.Service || failed.Name || 'setup') +
             (failed.Health === 'unhealthy' ? ' is unhealthy.' : ' exited with code ' + failed.ExitCode + '.');

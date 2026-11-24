@@ -483,6 +483,9 @@ async function poll() {
     if (previousBusy && !currentState.busy && currentState.status === "ready" && !currentState.error) error("");
     if(openingSelection && currentState.record && currentState.status==='ready' && !currentState.busy){openingSelection=null;branchVisibility=false;try{sessionStorage.removeItem('branch-review:opening');localStorage.setItem('branch-review:branches-visible','false');}catch{}}
     token = currentState.token;
+    const build = currentState.appBuild;
+    $('app-build').textContent = build?.revision ? build.revision + (build.dirty ? ' + local edits' : '') : build?.version ? 'v' + build.version : '';
+    $('app-build').title = build?.revision ? 'Branch Review source loaded at startup' : 'Branch Review version';
     previews.preload(currentState.preparedReview);
     $('project-name').textContent=$('preview-project-name').textContent=currentState.project?.name || 'Project';
     branchVisibilityUI();
@@ -534,10 +537,11 @@ async function poll() {
     const preparing = ["preparing", "stopping"].includes(currentState.status);
     $("empty").hidden = previewReady || preparing;
     $("loading").hidden = !preparing;
+    $('cancel-preview-startup').hidden = !currentState.canCancelStartup || currentState.status!=='preparing';
     $("frames").hidden = !previewReady;
     $("phase").textContent = currentState.phase;
     $('loading-label').textContent=currentState.status==='stopping'?'STOPPING PREVIEWS':'PREPARING YOUR WORKSPACE';
-    $('loading-description').textContent=currentState.status==='stopping'?'Saved reviews and preview databases will be kept.':'Checklist and previews prepare together. The two most recent branch previews stay available for reuse.';
+    $('loading-description').textContent=currentState.status==='stopping'?'Saved reviews and preview databases will be kept.':'The checklist and both project versions are preparing. A first launch can take longer.';
     $('diagnostic-log').textContent=currentState.log.map(entry=>`${entry.at} ${entry.message}`).join('\n')+(currentState.error?`\n${currentState.error}`:'');
     $("progress").textContent =
       currentState.log.map((entry) => entry.message).join("\n") +
@@ -641,6 +645,10 @@ $("stop").onclick = async () => {
   } catch (e) {
     error(e.message);
   }
+};
+$('cancel-preview-startup').onclick = async () => {
+  try { await api('/api/stop', {}); await poll(); }
+  catch (e) { error(e.message); }
 };
 $("refresh").onclick = async () => {
   try {

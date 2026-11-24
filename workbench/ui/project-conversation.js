@@ -82,6 +82,15 @@ function connectProjectConversation(initial) {
   const referenceStatus = byId("mockup-reference-status");
   const capture = byId("capture-mockup-reference");
   let reference, referencePage, livePreview, changeScreenshot;
+  window.addEventListener("message", event => {
+    const preview = livePreview;
+    if (!preview?.frame.isConnected || event.source !== preview.frame.contentWindow ||
+        event.origin !== new URL(preview.address).origin || event.data?.type !== "review:context" ||
+        typeof event.data.location !== "string" || !event.data.location.startsWith("/")) return;
+    const page = new URL(event.data.location, preview.address);
+    if (page.origin !== event.origin) return;
+    preview.page = page.pathname;
+  });
   const changeAttachment = byId("change-screenshot");
   function showChangeScreenshot() {
     changeAttachment.hidden = !changeScreenshot;
@@ -145,7 +154,7 @@ function connectProjectConversation(initial) {
     if (view === "quality") return {view, ...quality};
     if (view === "stages") return {view, section: "stages", id: selected, label: roleById(selected)?.name};
     if (view === "workflow") return {view, tab: layoutSetting("tab") || "Plan", ...slice,
-      ...(livePreview?.frame.isConnected ? {projectPage: new URL(livePreview.address).pathname} : {})};
+      ...(livePreview?.frame.isConnected ? {projectPage: livePreview.page || new URL(livePreview.address).pathname} : {})};
     return {view};
   }
   function showContext() {
@@ -338,9 +347,9 @@ function connectProjectConversation(initial) {
     const sourceIsCurrent = () => frame?.isConnected && (fullscreenViewport
       ? panelRoot.fullscreenElement === fullscreenViewport && frame.parentElement === fullscreenViewport
       : livePreview === view);
-    const desktopCapture = fullscreenViewport && window.desktop?.capture;
+    const desktopCapture = project && window.desktop?.capture;
     if (project && (!sourceIsCurrent() || (!desktopCapture && !globalThis.CropTarget?.fromElement))) {
-      referenceStatus.textContent = "Load the project preview in Chrome, or upload a screenshot.";
+      referenceStatus.textContent = "Load Project view, or upload a screenshot.";
       if (openDrawer) open();
       return false;
     }
@@ -356,8 +365,11 @@ function connectProjectConversation(initial) {
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         if (!sourceIsCurrent()) return false;
         const bounds = frame.getBoundingClientRect();
-        const x = Math.ceil(bounds.left), y = Math.ceil(bounds.top);
-        const rect = {x, y, width: Math.floor(bounds.right) - x, height: Math.floor(bounds.bottom) - y};
+        const x = Math.max(0, Math.ceil(bounds.left)), y = Math.max(0, Math.ceil(bounds.top));
+        const right = Math.min(window.innerWidth, Math.floor(bounds.right));
+        const bottom = Math.min(window.innerHeight, Math.floor(bounds.bottom));
+        const rect = {x, y, width: right - x, height: bottom - y};
+        if (rect.width < 1 || rect.height < 1) throw Error("Move the project view into the window before capturing.");
         source = new Image();
         source.src = await desktopCapture(rect);
         await source.decode();
@@ -377,7 +389,7 @@ function connectProjectConversation(initial) {
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       }
       if (project && !sourceIsCurrent()) return false;
-      const saved = setReference(source, target, project ? new URL(frame.src).pathname : "");
+      const saved = setReference(source, target, project ? view?.page || new URL(frame.src).pathname : "");
       if (saved && sendToChange) {
         changeScreenshot = {image: reference, page: referencePage};
         showChangeScreenshot();

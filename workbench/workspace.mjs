@@ -44,7 +44,7 @@ export async function recoverProjectPreview({incident, signal, history = [], env
   return {passed: false, detail: diagnosis.summary || restored.detail, ...(needsUser && {nextAction})};
 }
 
-export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair,configureReviewPreviews}) {
+export async function createWorkspace({repository,local,git,origin,token,review,push,providerOptions,selectedAgent,diagnostics,canRepair,configureReviewPreviews,projectKind}) {
   const quality = await createQuality({repository});
   const tasks = await createStore(repository,{qualityPin:quality.pin,qualityCheck:quality.taskCheck,
     browserPreview: () => environment.browserPreview(), browserArtifacts: local && path.join(local, 'browser-checks')});
@@ -100,7 +100,7 @@ export async function createWorkspace({repository,local,git,origin,token,review,
     ]);
     const selected = runs.runs.find(row=>row.id===runs.active);
     const active = selected ? {...selected,status:selected.lifecycle.status} : null;
-    return {project:{path:repository,label:repository.split(/[\\/]/).filter(Boolean).at(-1),exists:true},
+    return {project:{path:repository,label:repository.split(/[\\/]/).filter(Boolean).at(-1),exists:true,kind:projectKind},
       installed:true,profile_applied:profileApplied,profile,config,
       questions:questions?.questions ?? questions ?? [],active_task:active ?? null,
       design_layout:design.layout || {},design,csrf_token:token,host_links:[{name:'Branch Review',url:origin}]};

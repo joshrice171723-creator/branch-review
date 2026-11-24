@@ -10,7 +10,7 @@
     <header class="topbar">
       <a class="brand" href="/" aria-label="Branch Review home"
         ><span class="mark">⑂</span> Branch Review
-        <span class="edition">LOCAL / 01</span></a
+        <span class="edition" id="app-build"></span></a
       >
       <div class="project">
         <span class="dot"></span> <span id="project-name">Project</span> <button id="choose-repository" class="project-switch" hidden>Projects</button>
@@ -150,6 +150,7 @@
               each version.
             </p>
             <pre id="progress"></pre>
+            <button id="cancel-preview-startup" class="quiet" hidden>Cancel startup</button>
           </div>
           <div id="frames" hidden></div>
         </div>

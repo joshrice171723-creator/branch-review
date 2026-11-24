@@ -1180,10 +1180,6 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
           const owner = await lifecycle(await selected(other, home));
           assert(!['active', 'unverified'].includes(owner.status), 'Another task owns this workspace.');
         }
-        if (reviewTarget.prepareBrowserRecovery && await needsBrowserPreview(id)) {
-          const preview = await reviewTarget.prepareBrowserRecovery({taskId:id, waitForReady:true, signal});
-          if (preview.state !== 'ready') throw Error(preview.message);
-        }
       }
       const settings = await configurationFor(run);
       const configured = await validateChecks(settings);
@@ -1209,6 +1205,7 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
       const current = reuse && await sourceSnapshot(await resolvedRoot, run.task);
       if (reuse) current.diff_sha256 = changeFingerprint(run.task.initial_snapshot.files, current.files);
       const contractHash = contract && fingerprint(contract);
+      let browserReady = false;
       for (const check of checks) {
         signal?.throwIfAborted();
         const receipt = reuse && (await checkResults(run, check.name, phase)).at(-1);
@@ -1217,6 +1214,14 @@ export function createStore(repository, {engineRoot = path.join(supportRoot, 'en
           results.push({...receipt, reused:true});
           await report('Reused the passing result for ' + check.name + '.');
         } else {
+          if (!browserReady && reviewTarget?.prepareBrowserRecovery && browserPreview && !run.task.quality && !check.benchmark) {
+            const cwd = await projectCwd(await resolvedRoot, check.cwd, true);
+            if ((await playwrightCheck(check.argv, cwd))?.managedUrl) {
+              const preview = await reviewTarget.prepareBrowserRecovery({taskId:id, waitForReady:true, signal});
+              if (preview.state !== 'ready') throw Error(preview.message);
+              browserReady = true;
+            }
+          }
           const rerunReason = issues.join(' ') || (receipt ? 'The previous result did not pass.' : '');
           await report('Started ' + check.name + (rerunReason ? '. ' + rerunReason : '.'));
           const result = await measure(check.name, () => runPinnedCheck(run, check, phase, contract, signal));

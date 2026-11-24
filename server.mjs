@@ -15,7 +15,8 @@ import { readFile, writeFile, access, rename, stat, mkdir, open, unlink } from '
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario, project, webHealthy, defaultBranch, setReviewPreviewOrigin } from './adapter.mjs';
+import { branches, comparison, git, run, root, local, repo, previewRoot, toolchain, slots, state, progress, startReview, stopReview, restoreReview, prepare, resetScenario, project, webHealthy, defaultBranch, setReviewPreviewOrigin, cancelReviewStartup, stopWebReviewPreviews, stopWebPreview } from './adapter.mjs';
+import {createProjectView} from './project-view.mjs';
 import { previewProxy, expiredPreviewCookies } from './proxy.mjs';
 import { ReviewStore, scenarioRecipe, digest } from './reviews.mjs';
 import { loadPlan, candidateComparison, PlanStore, branchUpdate, branchRelationships, retestAdvice, prepareTogether } from './plans.mjs';
@@ -498,7 +499,7 @@ actions.add('/api/release-key-text');actions.add('/api/new-change');actions.add(
 for(const endpoint of ['/api/version-preview','/api/version-latest','/api/version-restore','/api/fix-apply'])actions.add(endpoint);
 longActions.add('/api/version-restore');
 longActions.add('/api/project-deploy');longActions.add('/api/pull-request');
-async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagnostics}) {
+async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagnostics,projectView,appBuild}) {
   let observe;
   const waitForOperation = async message => {
     if (observe) {
@@ -510,7 +511,8 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagn
   try {
     if(req.headers.host!==host) return json(res,403,{error:'Invalid host'});
     // Loopback cookies cross ports; retire old revisions before their headers grow too large.
-    const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed]);
+    const expired=expiredPreviewCookies(req.headers.cookie,[state.original,state.changed,preparedFix?.changed,
+      projectView.preview('original'), projectView.preview('changed'), projectView.preview('standby')]);
     if(expired.length)res.setHeader('Set-Cookie',expired);
     const url=new URL(req.url,origin);
     const trustedClient = req.headers['x-review-token'] === token ||
@@ -550,6 +552,12 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagn
       if (req.method==='POST' && (!verified || req.headers.origin!==origin))
         return json(res,403,{error:'Reload Branch Review before continuing.'});
       const data=req.method==='POST'?await body(req):{};
+      if (route === 'design/base-preview') {
+        if (req.method === 'GET') return json(res,200,await projectView.status());
+        if (data.action === 'start') return json(res,200,await projectView.start());
+        if (data.action === 'stop') return json(res,200,await projectView.stop());
+        throw Error('Choose start or stop for Project view.');
+      }
       if (req.method === 'POST' && route === 'design/review-outcome' && data.opened) {
         const record = state.recordId && store.get(state.recordId);
         if (busy || state.status !== 'ready' || record?.identity.workbenchRun !== data.runId ||
@@ -601,7 +609,7 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagn
     if (req.method === 'GET' && url.pathname === '/api/workbench-handoff') {
       return json(res, 200, await readHandoff(repo, url.searchParams.get('run')));
     }
-    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,workspaceBusy:workspace.busy(),qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await reviewRecipe(local,repo).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
+    if(req.method==='GET' && url.pathname==='/api/state') return json(res,200,{...state,appBuild,preparedReview:preparedFix && state.recordId===preparedFix.priorId?{priorId:preparedFix.priorId,changed:preparedFix.changed,item:preparedFix.item}:null,busy,workspaceBusy:workspace.busy(),qaReviews:qaReviews(store.records),qaRunning:qaRunning(),jobActivity:jobs.rows.map(({id,reviewId,status,kind,phase,error,startedAt,resultCommit,requestText,committedFiles})=>({id,reviewId,status,kind,phase,error,startedAt,resultCommit,committedFiles,requestSummary:requestText?.startsWith("Requested change:\n")?requestText.slice(18).split("\n\n")[0].slice(0,600):null})),jobsRunning:jobs.rows.some(job=>job.status==='running'),token,repository:repo,project,previewNeedsSetup:!!(project.needsSetup && !await reviewRecipe(local,repo).catch(()=>null)),agent:selectedAgent(),defaultBranch:displayDefaultBranch,record:state.recordId?store.get(state.recordId):null,publishTarget:project.kind==='meta-clinic'?target:null,projectDelivery:project.kind==='meta-clinic'?null:await readDelivery(local).then(config=>({configured:Boolean(config),targetUrl:config?.targetUrl ?? null})),releaseConfigured:project.kind==='meta-clinic' && await access(path.join(local,'release.json')).then(()=>true,()=>false)});
     if(req.method==='GET' && url.pathname==='/api/branches') return json(res,200,await consolidateFixBranches(groupedBranches(await branches(),jobs.rows,store.records),git));
     if(req.method==='GET' && url.pathname==='/api/qa-review')return json(res,200,store.get(url.searchParams.get('id')));
     if(req.method==='GET' && url.pathname==='/api/history') return json(res,200,store.summary());
@@ -642,6 +650,12 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagn
     if(req.method==='POST' && actions.has(url.pathname)) {
       if(req.headers.origin!==origin || req.headers['x-review-token']!==token) return json(res,403,{error:'Reload Branch Review before continuing.'});
       beginAction();
+      if(url.pathname==='/api/stop' && cancelReviewStartup()){
+        req.resume();
+        state.status='stopping';
+        progress('Cancelling review startup');
+        return json(res,202,{accepted:true});
+      }
       if(url.pathname==='/api/workbench-open' || url.pathname==='/api/workbench-prepare') {
         const result = url.pathname==='/api/workbench-open' ? await workspace.open() : await workspace.prepare();
         await observe?.();
@@ -666,11 +680,19 @@ async function handleRequest(req,res,{origin,host,workspace,previewOrigins,diagn
       state.error=null;
       const operation=async()=>{
         try {
+          if (url.pathname === '/api/start' && data.workbenchRun && project.kind !== 'meta-clinic') {
+            const preview = await workspace.dispatch('GET','design/app-process',{},new URLSearchParams());
+            if (preview.owned || preview.state === 'starting') {
+              progress('Stopping the Workbench check preview before opening the review');
+              await workspace.dispatch('POST','design/app-process/stop',{},new URLSearchParams());
+            }
+          }
           const result = url.pathname==='/api/workbench-export' ? await workspace.exportHandoff(data.runId) :
             await mutate(url.pathname,data);
           await observe?.();
           return result;
         } catch(error) {
+          if(error.code==='OPERATION_CANCELLED')return;
           if (data.workbenchRun && ['/api/start','/api/retest'].includes(url.pathname)) {
             await workspace.dispatch('POST','design/review-outcome',
               {runId:data.workbenchRun,opened:false,error:error.message}).catch(() => {});
@@ -728,11 +750,15 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
   });
   const listeners = [server];
   try {
+    const revision = await run('git',['rev-parse','--short=12','HEAD'],{cwd:root}).catch(()=>'');
+    const dirty = revision && Boolean(await run('git',['status','--porcelain','--untracked-files=normal'],{cwd:root}).catch(()=>''));
+    const version = JSON.parse(await readFile(path.join(root,'package.json'),'utf8')).version;
+    const appBuild = {version, revision:revision || null, dirty:Boolean(dirty)};
     const port = await bindLoopback(server,requestedPort,controllerFallback);
     const host = `127.0.0.1:${port}`;
     const origin = `http://${host}`;
     setReviewPreviewOrigin(origin);
-    workspace = await createWorkspace({repository:repo,local,git,origin,token,selectedAgent,
+    workspace = await createWorkspace({repository:repo,local,git,origin,token,selectedAgent,projectKind:project.kind,
       configureReviewPreviews: async data => {
         if (busy) throw Error('Wait for the running review or job before changing setup.');
         busy = true;
@@ -750,12 +776,40 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
         finally {busy=false;}
       }
     });
+    const projectView = createProjectView({
+      getTarget:async () => {
+        if (project.kind === 'meta-clinic') return null;
+        const design = await workspace.dispatch('GET','design',{},new URLSearchParams());
+        const build = design.builds?.at(-1);
+        if (!build || build.retired || build.status === 'retired' ||
+            build.revision !== design.approved || build.revision !== design.revision ||
+            build.branch !== design.branch) return null;
+        const sha = build.groups?.[build.index]?.base || build.base;
+        return /^[a-f0-9]{40}$/.test(sha || '') ? {sha} : null;
+      },
+      getReview:() => state, getProgress:() => state.phase, prepare, stopPreview:stopWebPreview, healthy:webHealthy, slots,
+      stopWorkspace:async () => {
+        const preview = await workspace.dispatch('GET','design/app-process',{},new URLSearchParams());
+        if (preview.owned || preview.state === 'starting') {
+          await workspace.dispatch('POST','design/app-process/stop',{},new URLSearchParams());
+        }
+      },
+      acquire:() => {
+        if (busy || workspace.busy() || jobs.rows.some(job=>job.status==='running')) {
+          throw Error('Wait for the current operation before starting Project view.');
+        }
+        busy = true;
+      },
+      release:() => { busy = false; }
+    });
     const previewOrigins = [];
     for (const [runtime,slot] of Object.entries(slots)) {
       const proxy = previewProxy('changed',slot,()=>{
         const preview=[state.original,state.changed].find(preview=>(preview?.runtime || preview?.side)===runtime);
         if(preview)return {...state,changed:preview};
         if(preparedFix?.changed.runtime===runtime)return {status:'ready',changed:preparedFix.changed,manifest:preparedFix.combined.plan};
+        const base = projectView.preview(runtime);
+        if(base)return {status:'ready',changed:base};
         return {status:'idle'};
       },origin);
       listeners.push(proxy);
@@ -775,7 +829,7 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
       state.status='error';state.error=error.message;
       await diagnostics?.operation?.('Restore the review workspace',repo,error);
     });
-    context = {origin,host,workspace,previewOrigins,diagnostics};
+    context = {origin,host,workspace,previewOrigins,diagnostics,projectView,appBuild};
     process.once('exit',()=>workspace.close());
     let checkingMuse=false;
     setInterval(async()=>{
@@ -799,6 +853,7 @@ export async function startServer({allowPortFallback=false,preferredPort,desktop
     async function finishDesktopExit() {
       if (!desktopExiting) throw Error('Prepare to leave this project first.');
       await workspace.prepareExit();
+      await stopWebReviewPreviews();
     }
     return {origin,port,...(desktop && {beginDesktopExit,finishDesktopExit})};
   } catch (error) {

@@ -779,6 +779,7 @@ dialog::backdrop {background:#152c2b80}
 #item-queue {min-height:80px}
 .branches {overflow-y:auto}
 .topbar .edition,.project .divider {display:none}
+.topbar #app-build {display:inline; font-size:10px; letter-spacing:0; white-space:nowrap}
 .rail-heading {padding:18px 18px 10px}
 .rail-heading .eyebrow,.rail-footer,.shortcut-hint,.scope-note {display:none}
 .rail-heading h1 {font-size:20px}

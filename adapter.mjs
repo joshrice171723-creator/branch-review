@@ -247,7 +247,8 @@ export async function clearDeadPidRecords(cwd) {
   }
   return removed;
 }
-export async function prepare(side, sha, files=state.comparison.files) {
+export async function prepare(side, sha, files=state.comparison.files, signal) {
+  signal?.throwIfAborted();
   const cwd = path.join(previewRoot, side);
   await assertOwner();
   if (!(await exists(cwd))) await git("worktree", "add", "--detach", cwd, sha);
@@ -271,7 +272,7 @@ export async function prepare(side, sha, files=state.comparison.files) {
   const current = await run("git", ["rev-parse", "HEAD"], { cwd });
   if(project.kind!=='meta-clinic'){
     if(project.error)throw Error(project.error);
-    return webPreviews.prepare(side,sha,cwd,()=>run('git',['checkout','--detach',sha],{cwd}));
+    return webPreviews.prepare(side,sha,cwd,()=>run('git',['checkout','--detach',sha],{cwd}),signal);
   }
   await clearDeadPidRecords(cwd);
   if(await recoverPreviewPorts(cwd,slots[side])){
@@ -352,6 +353,19 @@ export async function resetScenario(side){
   const line=output.split('\n').find(line=>line.startsWith('BRANCH_REVIEW='));if(!line)throw new Error('Scenario reset did not return a destination.');
   preview.scenario=JSON.parse(line.slice('BRANCH_REVIEW='.length));return preview.scenario;
 }
+let reviewStartup;
+export function cancelReviewStartup() {
+  if(!reviewStartup || reviewStartup.signal.aborted)return false;
+  reviewStartup.abort(Object.assign(Error('Review startup cancelled.'),{code:'OPERATION_CANCELLED'}));
+  return true;
+}
+export async function stopWebReviewPreviews() {
+  if(project.kind==='meta-clinic')return;
+  await Promise.all(Object.keys(slots).map(side=>webPreviews.stop(side)));
+}
+export async function stopWebPreview(side) {
+  if(project.kind!=='meta-clinic')await webPreviews.stop(side);
+}
 export async function startReview(ref, baseline, baselineCommit, preparedReview) {
   const previousRuntime=state.changed?.runtime || 'changed';
   state.status = "preparing";
@@ -380,8 +394,31 @@ export async function startReview(ref, baseline, baselineCommit, preparedReview)
     }
     if(state.prepared?.sha===changedSha && state.prepared.recipe===scenarioRecipe(selected.files))runtime=state.prepared.runtime;
     if(runtime===originalRuntime)runtime=['changed','standby','original'].find(candidate=>candidate!==originalRuntime);
-    const prepared=await Promise.allSettled([prepare(originalRuntime,selected.base,selected.files),prepare(runtime,changedSha,selected.files)]);
-    const failed=prepared.find(result=>result.status==='rejected');if(failed)throw failed.reason;
+    let prepared;
+    if(project.kind==='meta-clinic'){
+      prepared=await Promise.allSettled([prepare(originalRuntime,selected.base,selected.files),prepare(runtime,changedSha,selected.files)]);
+      const failed=prepared.find(result=>result.status==='rejected');if(failed)throw failed.reason;
+    }else{
+      const controller=new AbortController();
+      reviewStartup=controller;
+      state.canCancelStartup=true;
+      const start=async (side,sha)=>{
+        try{return await prepare(side,sha,selected.files,controller.signal);}
+        catch(error){controller.abort(error);throw error;}
+      };
+      try{
+        await Promise.all(Object.keys(slots).filter(side=>side!==originalRuntime && side!==runtime).map(side=>webPreviews.stop(side)));
+        prepared=await Promise.allSettled([start(originalRuntime,selected.base),start(runtime,changedSha)]);
+        controller.signal.throwIfAborted();
+      }catch(error){
+        state.canCancelStartup=false;
+        await stopWebReviewPreviews().catch(cleanup=>{error.message+=`\nCould not stop previews: ${cleanup.message}`;});
+        throw error;
+      }finally{
+        reviewStartup=null;
+        state.canCancelStartup=false;
+      }
+    }
     state.original={...prepared[0].value,side:'original',proxy:slots[originalRuntime].proxy};
     state.changed = {...prepared[1].value,side:'changed',proxy:slots[runtime].proxy};
     state.status = preparedReview?.deferReady?'preview-ready':'ready';
@@ -400,9 +437,11 @@ export async function startReview(ref, baseline, baselineCommit, preparedReview)
       ),
     );
   } catch (error) {
-    state.status = "error";
-    state.error = error.message;
-    progress("Preview preparation needs attention");
+    const cancelled=error.code==='OPERATION_CANCELLED';
+    state.status = cancelled ? 'idle' : 'error';
+    state.error = cancelled ? null : error.message;
+    progress(cancelled ? 'Review startup cancelled' : 'Preview preparation needs attention');
+    if(preparedReview)throw error;
   }
 }
 export async function stopReview() {

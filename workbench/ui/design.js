@@ -692,13 +692,25 @@ function designPanel(initialState) {
   }
   function preview(inPlan = false) {
     const mount = element("div", "preview-frame");
+    const build = state.builds?.at(-1);
+    const baseline = build && !build.retired && build.status !== "retired" &&
+      build.revision === state.approved && build.revision === state.revision && build.branch === state.branch &&
+      (build.groups?.[build.index]?.base || build.base);
+    const useBaseline = embedded && projectState.project.kind && /^[a-f0-9]{40}$/.test(baseline || "") &&
+      projectState.project.kind !== "meta-clinic";
+    const baseProcess = result => ({
+      settings:{mode:"web", url:result.url || "http://127.0.0.1:{port}/", argv:[], cwd:"."},
+      state:result.state || "stopped", owned:["starting","running"].includes(result.state),
+      url:result.url || "", revision:result.revision, startedAt:result.startedAt, shared:result.shared,
+      message:result.message || "", log:""
+    });
     const address = input(previewDraft.address ?? state.preview ?? "", "App address", value => { previewDraft.address = value; });
     address.dataset.designFocus = "preview";
     address.placeholder = "http://localhost:3000";
     const save = button("Save app address", async () => {
       if (await change("settings", {preview: address.value.trim(), branch: state.branch})) await checkAddress();
     });
-    const open = element("a", "button", "Open app preview");
+    const open = element("a", "button", "Open project view");
     open.target = "_blank";
     open.rel = "noopener";
     open.hidden = true;
@@ -745,7 +757,7 @@ function designPanel(initialState) {
     const tools = element("div", "project-preview-toolbar", pages,
       element("div", "actions", refreshView, captureView, fullScreen));
     tools.setAttribute("role", "group");
-    tools.setAttribute("aria-label", "Project preview controls");
+    tools.setAttribute("aria-label", "Project view controls");
     viewport.hidden = true;
     mount.append(previewStatus, automaticControls, viewport);
     let process, checked, source, timer, pending = false, version = 0;
@@ -759,7 +771,7 @@ function designPanel(initialState) {
       viewport.replaceChildren(tools, fullTools);
       if (url) {
         const frame = element("iframe");
-        frame.title = projectState.project.label + " app preview";
+        frame.title = projectState.project.label + " project view";
         frame.setAttribute("sandbox", "allow-forms allow-scripts allow-same-origin");
         frame.src = url;
         viewport.append(frame);
@@ -775,7 +787,7 @@ function designPanel(initialState) {
         if (!mount.isConnected || baseAddress !== url) return;
         const paths = [...new Set((routes || []).filter(row => row.method === "GET" &&
           /^\/(?!\/)[^:*{}()?#\\]*$/.test(row.path)).map(row => row.path))].slice(0, 150);
-        if (paths.length) pages.replaceChildren(field("Project page", select("", [["", "Preview start page"],
+        if (paths.length) pages.replaceChildren(field("Project page", select("", [["", "Start page"],
           ...paths.map(path => [path, path])], path => {
           loadPage(path ? new URL(path, url).href : url);
           return true;
@@ -800,7 +812,9 @@ function designPanel(initialState) {
       const target = selected?.url || selected?.address;
       open.hidden = !target;
       if (target) open.href = target;
-      previewStatus.textContent = selected?.status || (!target ? "Set up a preview to load this project's app." : "");
+      previewStatus.textContent = selected?.status || (useBaseline && ready && process?.revision ?
+        "Original · " + process.revision.slice(0, 12) + (process.shared ? " · Shared with Branch Review" : "") :
+        !target ? "Set up a preview to load this project's app." : "");
       if (selected?.url && new URL(selected.url).origin === location.origin) {
         previewStatus.textContent = "Choose the project's preview address.";
         selected = null;
@@ -820,6 +834,7 @@ function designPanel(initialState) {
       showPages(source);
     }
     async function checkAddress() {
+      if (useBaseline) return;
       try { checked = await api("design/preview"); }
       catch (error) { checked = {status: error.message}; }
       embed();
@@ -898,7 +913,9 @@ function designPanel(initialState) {
           });
           automaticControls.append(field("Project app", appPicker));
         } else if (!source && ["exited", "stopped"].includes(next.state)) {
-          automaticControls.append(button("Start project preview", () => startAutomatic({retry: true})));
+          automaticControls.append(button("Start project view", () => startAutomatic({retry: true})));
+        } else if (useBaseline && ["starting", "running"].includes(next.state) && !next.shared) {
+          automaticControls.append(button("Stop project view", () => run("stop")));
         }
       }
     }
@@ -913,7 +930,7 @@ function designPanel(initialState) {
       if (!document.hidden) {
         const observed = version;
         try {
-          const next = await api("design/app-process");
+          const next = useBaseline ? baseProcess(await api("design/base-preview")) : await api("design/app-process");
           if (!pending && observed === version && mount.isConnected) showProcess(next);
         } catch (error) { processStatus.textContent = error.message; }
       }
@@ -925,9 +942,15 @@ function designPanel(initialState) {
       pending = true;
       version++;
       controls();
-      previewStatus.textContent = "Preparing project preview…";
-      try { showProcess(await api("design/app-process/auto", options)); }
-      catch (error) { previewStatus.textContent = error.message; }
+      previewStatus.textContent = "Preparing project view…";
+      try {
+        const result = useBaseline ? baseProcess(await api("design/base-preview", {action:"start"})) :
+          await api("design/app-process/auto", options);
+        showProcess(result);
+      } catch (error) {
+        if (useBaseline) showProcess(baseProcess({state:"stopped", revision:baseline, message:error.message}));
+        else previewStatus.textContent = error.message;
+      }
       finally { pending = false; controls(); follow(); }
     }
     async function run(action) {
@@ -937,6 +960,10 @@ function designPanel(initialState) {
       const focused = document.activeElement;
       controls();
       try {
+        if (useBaseline) {
+          showProcess(baseProcess(await api("design/base-preview", {action})));
+          return;
+        }
         if (action === "start") {
           const argv = [program.value.trim(), ...(args.value ? args.value.split("\n") : [])];
           const url = previewMode.value === "web" ? address.value.trim() : "";
@@ -958,6 +985,7 @@ function designPanel(initialState) {
     }
     const reload = button("Refresh preview", () => { checkAddress(); refresh(); });
     queueMicrotask(async () => {
+      if (useBaseline) { await startAutomatic(); return; }
       await checkAddress();
       if (inPlan && !checked?.url) await startAutomatic();
       else await refresh();
@@ -966,9 +994,9 @@ function designPanel(initialState) {
       field("Arguments (one literal argument per line)", args), field("Working directory", cwd),
       element("div", "actions", start, stop), processStatus, details);
     const addressControls = element("div", "design-stack", field("App address", address), element("div", "actions", save, reload, open));
-    if (inPlan) return box("Live project preview", mount,
-      element("details", "", element("summary", "", "Preview settings"), addressControls, setup));
-    return element("div", "design-stack", box("Project app preview", addressControls, mount), setup);
+    if (inPlan) return box("Project view", mount,
+      ...(useBaseline ? [] : [element("details", "", element("summary", "", "Project view settings"), addressControls, setup)]));
+    return element("div", "design-stack", box("Project view", addressControls, mount), setup);
   }
   function review(build, group, index, continueBuild) {
     const target = {build: build.id, group: index, sha: group.sha, slices: group.slices};
@@ -1567,7 +1595,7 @@ function designPanel(initialState) {
     const selection = focusKey && Number.isInteger(focus.selectionStart) ? [focus.selectionStart, focus.selectionEnd] : null;
     runControls = null;
     tabs.replaceChildren(...names.map(name => {
-      const node = button(name, () => openTab(name));
+      const node = button(name === "Preview" ? "Project view" : name, () => openTab(name));
       node.dataset.designTab = name;
       node.setAttribute("aria-pressed", String(name === tab));
       return node;
